@@ -1,0 +1,139 @@
+import type { betterAuth, BetterAuthPlugin, SocialProviders, User, Session } from "better-auth";
+
+// Re-export Better Auth plugin types so consumers can extend without importing better-auth directly
+export type { BetterAuthPlugin, SocialProviders, User, Session };
+
+/**
+ * Password strength rules for email/password authentication.
+ */
+export interface PasswordRules {
+  /** Minimum password length. Defaults to 8. */
+  minLength?: number;
+  /** Maximum password length. Defaults to 128. */
+  maxLength?: number;
+}
+
+/**
+ * Configuration for the auth package, passed to `createAuth()`.
+ *
+ * Wraps Better Auth's options with a Prisma-native interface.
+ */
+export interface AuthConfig {
+  /**
+   * Your Prisma client instance. Used as the database adapter.
+   * The consumer is responsible for providing a configured PrismaClient.
+   */
+  prisma: unknown;
+
+  /**
+   * The database provider type. Must match your Prisma datasource provider.
+   */
+  database: "postgresql" | "mysql" | "sqlite";
+
+  /**
+   * Session expiration duration in seconds.
+   * @default 604800 (7 days)
+   */
+  sessionDuration?: number;
+
+  /**
+   * Password validation rules for email/password auth.
+   */
+  passwordRules?: PasswordRules;
+
+  /**
+   * Social OAuth provider configuration.
+   *
+   * Uses record-style config matching Better Auth's format:
+   * @example
+   * ```ts
+   * socialProviders: {
+   *   google: { clientId: "...", clientSecret: "..." },
+   *   github: { clientId: "...", clientSecret: "..." },
+   * }
+   * ```
+   */
+  socialProviders?: SocialProviders;
+
+  /**
+   * Override for the BETTER_AUTH_SECRET environment variable.
+   * If not set, Better Auth reads from process.env.BETTER_AUTH_SECRET.
+   */
+  secret?: string;
+
+  /**
+   * Override for the BETTER_AUTH_URL environment variable.
+   * If not set, Better Auth reads from process.env.BETTER_AUTH_URL.
+   */
+  baseURL?: string;
+
+  /**
+   * Callback invoked when a password reset email should be sent.
+   * @param data - The user, the reset URL, and the raw token.
+   */
+  sendResetPasswordEmail?: (data: {
+    user: User;
+    url: string;
+    token: string;
+  }) => Promise<void>;
+
+  /**
+   * Lifecycle callbacks for auth events.
+   */
+  callbacks?: {
+    /**
+     * Called after a user signs in successfully.
+     * @param user - The authenticated user.
+     */
+    onSignIn?: (user: User) => Promise<void>;
+    /**
+     * Called after a user signs out.
+     * @param userId - The ID of the user who signed out.
+     */
+    onSignOut?: (userId: string) => Promise<void>;
+  };
+}
+
+/**
+ * The configured auth instance returned by `createAuth()`.
+ *
+ * Preserves Better Auth's full generic type information so consumers
+ * can access the complete typed API (e.g. `auth.api`, `auth.$Infer`).
+ */
+export type AuthInstance = ReturnType<typeof betterAuth>;
+
+/**
+ * Session data returned from session lookups.
+ *
+ * Combines Better Auth's Session and User models with an explicit expiry field.
+ */
+export interface SessionData {
+  /** The authenticated user. */
+  user: User;
+  /** The session record from the database. */
+  session: Session;
+  /** ISO timestamp string at which this session expires. */
+  expiresAt: string;
+}
+
+/**
+ * Configuration for the Next.js middleware that protects routes.
+ *
+ * v0.1 supports pattern-based route matching only.
+ */
+export interface MiddlewareConfig {
+  /**
+   * Array of route path patterns to protect.
+   * Unauthenticated requests to these paths are redirected to `signInPath`.
+   *
+   * Supports string prefixes or RegExp patterns.
+   * @example ["/dashboard", "/settings", /^\/admin/]
+   */
+  protectedRoutes: Array<string | RegExp>;
+
+  /**
+   * The path to redirect unauthenticated users to.
+   * @default "/sign-in"
+   */
+  signInPath?: string;
+}
