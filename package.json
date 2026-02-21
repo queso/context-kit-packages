@@ -1,0 +1,10 @@
+{
+  "name": "context-kit-packages",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "build": "bun --filter './packages/*' build",
+    "typecheck": "bun --filter './packages/*' typecheck",
+    "test": "bun --filter './packages/*' test"
+  }
+}

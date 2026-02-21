@@ -1,5 +1,29 @@
-import { describe, test, expect, mock } from "bun:test";
+import { describe, test, expect, mock, beforeAll } from "bun:test";
 import type { AuthInstance, SessionData } from "../types";
+
+// Mock next/server before any middleware import so that the module is
+// resolved without needing Next.js installed as a dependency. The stubs
+// replicate the surface area that createAuthMiddleware uses.
+beforeAll(() => {
+  mock.module("next/server", () => {
+    class MockNextResponse extends Response {
+      static next() {
+        return new MockNextResponse(null, { status: 200 });
+      }
+
+      static redirect(url: string, status: number) {
+        return new MockNextResponse(null, {
+          status,
+          headers: { location: url },
+        });
+      }
+    }
+
+    return {
+      NextResponse: MockNextResponse,
+    };
+  });
+});
 
 // Factory: create a mock AuthInstance whose getSession resolves to a given value
 function createMockAuth(
@@ -48,11 +72,43 @@ describe("createAuthMiddleware", () => {
     });
 
     const request = new Request("http://localhost:3000/dashboard");
-    const response = await middleware(request);
+    const response = await middleware(request as never);
 
     expect(response.status).toBe(302);
     const location = response.headers.get("location");
     expect(location).toContain("/sign-in");
+  });
+
+  test("includes callbackUrl in redirect to sign-in", async () => {
+    const { createAuthMiddleware } = await import("../middleware");
+    const auth = createMockAuth(null);
+    const middleware = createAuthMiddleware(auth, {
+      protectedRoutes: ["/dashboard"],
+    });
+
+    const request = new Request("http://localhost:3000/dashboard");
+    const response = await middleware(request as never);
+
+    expect(response.status).toBe(302);
+    const location = response.headers.get("location");
+    expect(location).toContain("callbackUrl=%2Fdashboard");
+  });
+
+  test("includes callbackUrl in redirect when using custom signInPath", async () => {
+    const { createAuthMiddleware } = await import("../middleware");
+    const auth = createMockAuth(null);
+    const middleware = createAuthMiddleware(auth, {
+      protectedRoutes: ["/settings"],
+      signInPath: "/login",
+    });
+
+    const request = new Request("http://localhost:3000/settings");
+    const response = await middleware(request as never);
+
+    expect(response.status).toBe(302);
+    const location = response.headers.get("location");
+    expect(location).toContain("/login");
+    expect(location).toContain("callbackUrl=%2Fsettings");
   });
 
   test("returns 401 for unauthenticated API request to protected route", async () => {
@@ -63,7 +119,7 @@ describe("createAuthMiddleware", () => {
     });
 
     const request = new Request("http://localhost:3000/api/data");
-    const response = await middleware(request);
+    const response = await middleware(request as never);
 
     expect(response.status).toBe(401);
   });
@@ -78,9 +134,9 @@ describe("createAuthMiddleware", () => {
     const request = new Request("http://localhost:3000/dashboard", {
       headers: { cookie: "better-auth.session_token=mock-token" },
     });
-    const response = await middleware(request);
+    const response = await middleware(request as never);
 
-    // Should pass through (200 OK, not a redirect)
+    // NextResponse.next() passes through (200, not a redirect)
     expect(response.status).toBe(200);
   });
 
@@ -92,7 +148,7 @@ describe("createAuthMiddleware", () => {
     });
 
     const request = new Request("http://localhost:3000/about");
-    const response = await middleware(request);
+    const response = await middleware(request as never);
 
     // Unprotected route should pass through without checking session
     expect(response.status).toBe(200);
@@ -107,7 +163,7 @@ describe("createAuthMiddleware", () => {
     });
 
     const request = new Request("http://localhost:3000/dashboard");
-    const response = await middleware(request);
+    const response = await middleware(request as never);
 
     expect(response.status).toBe(302);
     const location = response.headers.get("location");
@@ -123,15 +179,40 @@ describe("createAuthMiddleware", () => {
 
     // All protected routes should trigger protection
     const dashboardReq = new Request("http://localhost:3000/dashboard");
-    const dashboardRes = await middleware(dashboardReq);
+    const dashboardRes = await middleware(dashboardReq as never);
     expect(dashboardRes.status).toBe(302);
 
     const settingsReq = new Request("http://localhost:3000/settings");
-    const settingsRes = await middleware(settingsReq);
+    const settingsRes = await middleware(settingsReq as never);
     expect(settingsRes.status).toBe(302);
 
     const apiReq = new Request("http://localhost:3000/api/private");
-    const apiRes = await middleware(apiReq);
+    const apiRes = await middleware(apiReq as never);
     expect(apiRes.status).toBe(401);
+  });
+
+  test("matches RegExp patterns in protectedRoutes", async () => {
+    const { createAuthMiddleware } = await import("../middleware");
+    const auth = createMockAuth(null);
+    const middleware = createAuthMiddleware(auth, {
+      // Protect any path under /admin or /org/*/settings
+      protectedRoutes: [/^\/admin/, /^\/org\/[^/]+\/settings/],
+    });
+
+    // Paths matching the RegExp patterns should be protected
+    const adminReq = new Request("http://localhost:3000/admin/users");
+    const adminRes = await middleware(adminReq as never);
+    expect(adminRes.status).toBe(302);
+
+    const orgSettingsReq = new Request(
+      "http://localhost:3000/org/acme/settings"
+    );
+    const orgSettingsRes = await middleware(orgSettingsReq as never);
+    expect(orgSettingsRes.status).toBe(302);
+
+    // A path that does not match any pattern should pass through
+    const publicReq = new Request("http://localhost:3000/pricing");
+    const publicRes = await middleware(publicReq as never);
+    expect(publicRes.status).toBe(200);
   });
 });

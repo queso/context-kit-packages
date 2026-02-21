@@ -1,5 +1,5 @@
-import { describe, test, expect, mock, beforeEach } from "bun:test";
-import type { AuthInstance, SessionData } from "../types";
+import { describe, test, expect, mock } from "bun:test";
+import type { AuthInstance } from "../types";
 
 // Mock next/headers before importing the module under test
 mock.module("next/headers", () => ({
@@ -9,9 +9,13 @@ mock.module("next/headers", () => ({
     ),
 }));
 
-// Factory: create a mock AuthInstance with a controllable getSession
+// Raw Better Auth response shape (before our transformation)
+type RawSessionResponse = { user: typeof fakeUser; session: typeof fakeSession } | null;
+
+// Factory: create a mock AuthInstance with a controllable getSession.
+// sessionResponse should be the raw Better Auth shape, NOT the transformed SessionData.
 function createMockAuth(
-  sessionResponse: SessionData | null = null
+  sessionResponse: RawSessionResponse = null
 ): AuthInstance {
   return {
     api: {
@@ -45,21 +49,45 @@ const fakeSession = {
   userAgent: null,
 };
 
-const fakeSessionData: SessionData = {
+// Raw Better Auth shape — expiresAt is a Date, not yet transformed to ISO string.
+const fakeRawSession = {
   user: fakeUser,
   session: fakeSession,
-  expiresAt: new Date(Date.now() + 86400 * 1000).toISOString(),
 };
 
 describe("getSession", () => {
   test("returns session data when a valid session exists", async () => {
     const { getSession } = await import("../session");
-    const auth = createMockAuth(fakeSessionData);
+    const auth = createMockAuth(fakeRawSession);
     const result = await getSession(auth);
     expect(result).not.toBeNull();
     expect(result!.user.id).toBe("user-1");
     expect(result!.session.id).toBe("session-1");
     expect(auth.api.getSession).toHaveBeenCalledTimes(1);
+  });
+
+  test("expiresAt is a string in the returned SessionData", async () => {
+    const { getSession } = await import("../session");
+    const auth = createMockAuth(fakeRawSession);
+    const result = await getSession(auth);
+    expect(result).not.toBeNull();
+    // The Date from fakeSession must have been converted to an ISO string
+    expect(typeof result!.expiresAt).toBe("string");
+    expect(result!.expiresAt).toBe(fakeSession.expiresAt.toISOString());
+  });
+
+  test("expiresAt handles a pre-serialized string without throwing", async () => {
+    // Simulates edge runtimes / JSON round-trips where expiresAt arrives as a string
+    const { getSession } = await import("../session");
+    const sessionWithStringDate = {
+      user: fakeUser,
+      session: { ...fakeSession, expiresAt: fakeSession.expiresAt.toISOString() as unknown as Date },
+    };
+    const auth = createMockAuth(sessionWithStringDate);
+    const result = await getSession(auth);
+    expect(result).not.toBeNull();
+    expect(typeof result!.expiresAt).toBe("string");
+    expect(result!.expiresAt).toBe(fakeSession.expiresAt.toISOString());
   });
 
   test("returns null when no session exists", async () => {
@@ -92,7 +120,7 @@ describe("getSession", () => {
 describe("getUser", () => {
   test("returns the user object when a session exists", async () => {
     const { getUser } = await import("../session");
-    const auth = createMockAuth(fakeSessionData);
+    const auth = createMockAuth(fakeRawSession);
     const user = await getUser(auth);
     expect(user).not.toBeNull();
     expect(user!.id).toBe("user-1");

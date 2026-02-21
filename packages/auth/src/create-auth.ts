@@ -46,10 +46,20 @@ export function createAuth(config: AuthConfig): AuthInstance {
   }
 
   const sessionDuration = config.sessionDuration ?? 604800; // 7 days
+  if (sessionDuration <= 0) {
+    throw new Error("sessionDuration must be a positive number of seconds.");
+  }
+
   const minPasswordLength = config.passwordRules?.minLength ?? 8;
   const maxPasswordLength = config.passwordRules?.maxLength ?? 128;
+  if (minPasswordLength > maxPasswordLength) {
+    throw new Error(
+      `passwordRules.minLength (${minPasswordLength}) cannot exceed maxLength (${maxPasswordLength}).`
+    );
+  }
 
   return betterAuth({
+    // PrismaClient types are generated per-schema, so we accept `unknown` and cast here.
     database: prismaAdapter(config.prisma as any, {
       provider: config.database,
     }),

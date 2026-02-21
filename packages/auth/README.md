@@ -166,8 +166,6 @@ The `createAuth` function accepts an `AuthConfig` object:
 | `passwordRules` | `PasswordRules` | No | `{ minLength: 8, maxLength: 128 }` | Password validation rules |
 | `socialProviders` | `SocialProviders` | No | -- | OAuth provider config (see below) |
 | `sendResetPasswordEmail` | `(data) => Promise<void>` | No | -- | Callback to send password reset emails |
-| `callbacks.onSignIn` | `(user) => Promise<void>` | No | -- | Called after successful sign-in |
-| `callbacks.onSignOut` | `(userId) => Promise<void>` | No | -- | Called after sign-out |
 
 ### Social Providers
 

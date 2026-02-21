@@ -29,10 +29,6 @@ describe("types are importable and structurally sound", () => {
         github: { clientId: "ghid", clientSecret: "ghsecret" },
       },
       sendResetPasswordEmail: async (_data) => {},
-      callbacks: {
-        onSignIn: async (_user) => {},
-        onSignOut: async (_userId) => {},
-      },
     };
     expect(config.sessionDuration).toBe(3600);
     expect(config.passwordRules?.minLength).toBe(12);

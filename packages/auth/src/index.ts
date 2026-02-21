@@ -6,7 +6,6 @@ export type {
   AuthConfig,
   AuthInstance,
   SessionData,
-  MiddlewareConfig,
   PasswordRules,
   // Better Auth re-exports
   BetterAuthPlugin,

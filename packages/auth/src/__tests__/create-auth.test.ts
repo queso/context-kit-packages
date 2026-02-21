@@ -1,37 +1,7 @@
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import type { AuthConfig } from "../types";
+import { describe, test, expect } from "bun:test";
+import { validConfig, setupEnvGuard } from "./helpers";
 
-// Minimal PrismaClient-shaped object for testing
-const mockPrisma = { $connect: () => Promise.resolve() };
-
-// Helper to build a minimal valid config
-function validConfig(overrides: Partial<AuthConfig> = {}): AuthConfig {
-  return {
-    prisma: mockPrisma,
-    database: "postgresql",
-    secret: "test-secret-at-least-32-chars-long!!",
-    baseURL: "http://localhost:3000",
-    ...overrides,
-  };
-}
-
-// Store original env vars and restore after each test
-let origSecret: string | undefined;
-let origURL: string | undefined;
-
-beforeEach(() => {
-  origSecret = process.env.BETTER_AUTH_SECRET;
-  origURL = process.env.BETTER_AUTH_URL;
-  delete process.env.BETTER_AUTH_SECRET;
-  delete process.env.BETTER_AUTH_URL;
-});
-
-afterEach(() => {
-  if (origSecret !== undefined) process.env.BETTER_AUTH_SECRET = origSecret;
-  else delete process.env.BETTER_AUTH_SECRET;
-  if (origURL !== undefined) process.env.BETTER_AUTH_URL = origURL;
-  else delete process.env.BETTER_AUTH_URL;
-});
+setupEnvGuard();
 
 describe("createAuth", () => {
   test("returns an auth instance for a valid config", async () => {

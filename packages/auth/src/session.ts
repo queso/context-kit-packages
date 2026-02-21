@@ -17,7 +17,10 @@ export async function getSession(
   return {
     user: result.user,
     session: result.session,
-    expiresAt: result.session.expiresAt.toISOString(),
+    expiresAt:
+      result.session.expiresAt instanceof Date
+        ? result.session.expiresAt.toISOString()
+        : String(result.session.expiresAt),
   };
 }
 

@@ -77,21 +77,6 @@ export interface AuthConfig {
     token: string;
   }) => Promise<void>;
 
-  /**
-   * Lifecycle callbacks for auth events.
-   */
-  callbacks?: {
-    /**
-     * Called after a user signs in successfully.
-     * @param user - The authenticated user.
-     */
-    onSignIn?: (user: User) => Promise<void>;
-    /**
-     * Called after a user signs out.
-     * @param userId - The ID of the user who signed out.
-     */
-    onSignOut?: (userId: string) => Promise<void>;
-  };
 }
 
 /**
