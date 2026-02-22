@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
 describe("barrel exports", () => {
   test("index module exports createAuth, toNextJsHandler, getSession, getUser", async () => {

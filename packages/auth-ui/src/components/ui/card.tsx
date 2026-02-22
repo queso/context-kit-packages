@@ -1,6 +1,6 @@
 "use client";
 
-import * as React from "react";
+import type * as React from "react";
 import { cn } from "../../lib/utils";
 
 export function Card({
@@ -11,7 +11,10 @@ export function Card({
   return (
     <div
       ref={ref}
-      className={cn("rounded-xl border bg-card text-card-foreground shadow", className)}
+      className={cn(
+        "rounded-xl border bg-card text-card-foreground shadow",
+        className
+      )}
       {...props}
     />
   );
@@ -24,7 +27,11 @@ export function CardHeader({
   ...props
 }: React.HTMLAttributes<HTMLDivElement> & { ref?: React.Ref<HTMLDivElement> }) {
   return (
-    <div ref={ref} className={cn("flex flex-col space-y-1.5 p-6", className)} {...props} />
+    <div
+      ref={ref}
+      className={cn("flex flex-col space-y-1.5 p-6", className)}
+      {...props}
+    />
   );
 }
 CardHeader.displayName = "CardHeader";
@@ -50,7 +57,11 @@ export function CardDescription({
   ...props
 }: React.HTMLAttributes<HTMLDivElement> & { ref?: React.Ref<HTMLDivElement> }) {
   return (
-    <div ref={ref} className={cn("text-sm text-muted-foreground", className)} {...props} />
+    <div
+      ref={ref}
+      className={cn("text-sm text-muted-foreground", className)}
+      {...props}
+    />
   );
 }
 CardDescription.displayName = "CardDescription";
@@ -70,7 +81,11 @@ export function CardFooter({
   ...props
 }: React.HTMLAttributes<HTMLDivElement> & { ref?: React.Ref<HTMLDivElement> }) {
   return (
-    <div ref={ref} className={cn("flex items-center p-6 pt-0", className)} {...props} />
+    <div
+      ref={ref}
+      className={cn("flex items-center p-6 pt-0", className)}
+      {...props}
+    />
   );
 }
 CardFooter.displayName = "CardFooter";

@@ -1,13 +1,17 @@
 "use client";
 
-import * as React from "react";
-import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "next/navigation";
-import { useAuthContext } from "./auth-provider";
+import * as React from "react";
+import { useForm } from "react-hook-form";
 import { useSession } from "../hooks/use-session";
-import { changePasswordSchema, type ChangePasswordFormValues, type PasswordRules } from "../lib/schemas";
+import {
+  type ChangePasswordFormValues,
+  changePasswordSchema,
+  type PasswordRules,
+} from "../lib/schemas";
 import { cn } from "../lib/utils";
+import { useAuthContext } from "./auth-provider";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
@@ -23,14 +27,20 @@ export type ChangePasswordProps = {
   passwordRules?: PasswordRules;
 };
 
-export function ChangePassword({ className, classNames, passwordRules }: ChangePasswordProps) {
+export function ChangePassword({
+  className,
+  classNames,
+  passwordRules,
+}: ChangePasswordProps) {
   const { client } = useAuthContext();
   const { data, isPending } = useSession();
   const router = useRouter();
 
   const user = data?.user;
 
-  const [successMessage, setSuccessMessage] = React.useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = React.useState<string | null>(
+    null
+  );
   const [serverError, setServerError] = React.useState<string | null>(null);
 
   const {

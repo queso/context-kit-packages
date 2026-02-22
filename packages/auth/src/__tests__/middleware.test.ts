@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, beforeAll } from "bun:test";
+import { beforeAll, describe, expect, mock, test } from "bun:test";
 import type { AuthInstance, SessionData } from "../types";
 
 // Mock next/server before any middleware import so that the module is

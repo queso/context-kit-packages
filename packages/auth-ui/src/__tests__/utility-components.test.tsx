@@ -1,8 +1,8 @@
-import { describe, test, expect, mock, beforeEach } from "bun:test";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { existsSync } from "fs";
 import { resolve } from "path";
-import React from "react";
+import type React from "react";
 
 const pkgRoot = resolve(import.meta.dir, "../..");
 
@@ -14,10 +14,17 @@ function fileExists(relativePath: string) {
 // Mock @context-kit/auth/client
 // ---------------------------------------------------------------------------
 
-const mockSignOut = mock(() => Promise.resolve({ data: { status: true }, error: null }));
+const mockSignOut = mock(() =>
+  Promise.resolve({ data: { status: true }, error: null })
+);
 const mockUseSession = mock(() => ({
   data: {
-    user: { id: "user-1", name: "Test User", email: "test@example.com", image: null },
+    user: {
+      id: "user-1",
+      name: "Test User",
+      email: "test@example.com",
+      image: null,
+    },
     session: { id: "session-1", userId: "user-1" },
   },
   isPending: false,
@@ -29,8 +36,12 @@ const mockAuthClient = {
   useSession: mockUseSession,
   signIn: mock(() => Promise.resolve({ data: null, error: null })),
   signUp: mock(() => Promise.resolve({ data: null, error: null })),
-  forgetPassword: mock(() => Promise.resolve({ data: { status: true }, error: null })),
-  resetPassword: mock(() => Promise.resolve({ data: { status: true }, error: null })),
+  forgetPassword: mock(() =>
+    Promise.resolve({ data: { status: true }, error: null })
+  ),
+  resetPassword: mock(() =>
+    Promise.resolve({ data: { status: true }, error: null })
+  ),
 };
 
 mock.module("@context-kit/auth/client", () => ({
@@ -61,7 +72,9 @@ mock.module("next/navigation", () => ({
 async function getWrapper() {
   const { AuthProvider } = await import("../components/auth-provider");
   return function Wrapper({ children }: { children: React.ReactNode }) {
-    return <AuthProvider baseURL="http://localhost:3000">{children}</AuthProvider>;
+    return (
+      <AuthProvider baseURL="http://localhost:3000">{children}</AuthProvider>
+    );
   };
 }
 
@@ -94,7 +107,12 @@ describe("UserButton rendering", () => {
   beforeEach(() => {
     mockUseSession.mockReturnValue({
       data: {
-        user: { id: "user-1", name: "Test User", email: "test@example.com", image: null },
+        user: {
+          id: "user-1",
+          name: "Test User",
+          email: "test@example.com",
+          image: null,
+        },
         session: { id: "session-1", userId: "user-1" },
       },
       isPending: false,
@@ -120,7 +138,12 @@ describe("UserButton rendering", () => {
   test("initials fallback uses first letter of name", async () => {
     mockUseSession.mockReturnValue({
       data: {
-        user: { id: "u2", name: "Alice Smith", email: "alice@example.com", image: null },
+        user: {
+          id: "u2",
+          name: "Alice Smith",
+          email: "alice@example.com",
+          image: null,
+        },
         session: { id: "s2", userId: "u2" },
       },
       isPending: false,
@@ -133,14 +156,22 @@ describe("UserButton rendering", () => {
   });
 
   test("renders without crashing when no session is active", async () => {
-    mockUseSession.mockReturnValue({ data: null, isPending: false, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: false,
+      error: null,
+    });
     const { UserButton } = await import("../components/user-button");
     const Wrapper = await getWrapper();
     expect(() => render(<UserButton />, { wrapper: Wrapper })).not.toThrow();
   });
 
   test("renders nothing or a placeholder gracefully when no session", async () => {
-    mockUseSession.mockReturnValue({ data: null, isPending: false, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: false,
+      error: null,
+    });
     const { UserButton } = await import("../components/user-button");
     const Wrapper = await getWrapper();
     const { container } = render(<UserButton />, { wrapper: Wrapper });
@@ -153,7 +184,12 @@ describe("UserButton dropdown menu", () => {
   beforeEach(() => {
     mockUseSession.mockReturnValue({
       data: {
-        user: { id: "user-1", name: "Test User", email: "test@example.com", image: null },
+        user: {
+          id: "user-1",
+          name: "Test User",
+          email: "test@example.com",
+          image: null,
+        },
         session: { id: "session-1", userId: "user-1" },
       },
       isPending: false,
@@ -173,8 +209,8 @@ describe("UserButton dropdown menu", () => {
       // Dropdown content should appear — check for user name, profile link, or sign out
       expect(
         screen.queryByText("Test User") !== null ||
-        screen.queryByText(/profile/i) !== null ||
-        screen.queryByText(/sign out/i) !== null
+          screen.queryByText(/profile/i) !== null ||
+          screen.queryByText(/sign out/i) !== null
       ).toBe(true);
     });
   });
@@ -214,10 +250,13 @@ describe("UserButton dropdown menu", () => {
       expect(screen.getByText(/^profile$/i)).toBeDefined();
     });
 
-    const profileLink = screen.queryByRole("link", { name: /^profile$/i }) ??
+    const profileLink =
+      screen.queryByRole("link", { name: /^profile$/i }) ??
       screen.queryByRole("menuitem", { name: /^profile$/i });
     if (profileLink) {
-      const href = profileLink.getAttribute("href") ?? profileLink.getAttribute("data-href");
+      const href =
+        profileLink.getAttribute("href") ??
+        profileLink.getAttribute("data-href");
       expect(href).toBe("/profile");
     }
   });
@@ -233,10 +272,13 @@ describe("UserButton dropdown menu", () => {
       expect(screen.getByText(/^profile$/i)).toBeDefined();
     });
 
-    const profileLink = screen.queryByRole("link", { name: /^profile$/i }) ??
+    const profileLink =
+      screen.queryByRole("link", { name: /^profile$/i }) ??
       screen.queryByRole("menuitem", { name: /^profile$/i });
     if (profileLink) {
-      const href = profileLink.getAttribute("href") ?? profileLink.getAttribute("data-href");
+      const href =
+        profileLink.getAttribute("href") ??
+        profileLink.getAttribute("data-href");
       expect(href).toBe("/settings/profile");
     }
   });
@@ -325,7 +367,12 @@ describe("UserButton className and classNames props", () => {
   beforeEach(() => {
     mockUseSession.mockReturnValue({
       data: {
-        user: { id: "user-1", name: "Test User", email: "test@example.com", image: null },
+        user: {
+          id: "user-1",
+          name: "Test User",
+          email: "test@example.com",
+          image: null,
+        },
         session: { id: "session-1", userId: "user-1" },
       },
       isPending: false,
@@ -336,10 +383,9 @@ describe("UserButton className and classNames props", () => {
   test("accepts className prop on root element", async () => {
     const { UserButton } = await import("../components/user-button");
     const Wrapper = await getWrapper();
-    const { container } = render(
-      <UserButton className="custom-user-btn" />,
-      { wrapper: Wrapper }
-    );
+    const { container } = render(<UserButton className="custom-user-btn" />, {
+      wrapper: Wrapper,
+    });
     expect(container.querySelector(".custom-user-btn")).toBeDefined();
   });
 
@@ -356,7 +402,9 @@ describe("UserButton className and classNames props", () => {
   test("accepts classNames.dropdown override", async () => {
     const { UserButton } = await import("../components/user-button");
     const Wrapper = await getWrapper();
-    render(<UserButton classNames={{ dropdown: "custom-dropdown" }} />, { wrapper: Wrapper });
+    render(<UserButton classNames={{ dropdown: "custom-dropdown" }} />, {
+      wrapper: Wrapper,
+    });
 
     fireEvent.click(screen.getByRole("button"));
 
@@ -368,7 +416,9 @@ describe("UserButton className and classNames props", () => {
   test("accepts classNames.menuItem override", async () => {
     const { UserButton } = await import("../components/user-button");
     const Wrapper = await getWrapper();
-    render(<UserButton classNames={{ menuItem: "custom-menu-item" }} />, { wrapper: Wrapper });
+    render(<UserButton classNames={{ menuItem: "custom-menu-item" }} />, {
+      wrapper: Wrapper,
+    });
 
     fireEvent.click(screen.getByRole("button"));
 
@@ -461,7 +511,11 @@ describe("AuthGuard — unauthenticated redirect", () => {
   });
 
   test("redirects to '/sign-in' by default when not authenticated", async () => {
-    mockUseSession.mockReturnValue({ data: null, isPending: false, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: false,
+      error: null,
+    });
     const { AuthGuard } = await import("../components/auth-guard");
     const Wrapper = await getWrapper();
     render(
@@ -479,7 +533,11 @@ describe("AuthGuard — unauthenticated redirect", () => {
   });
 
   test("signInPath prop customizes the redirect destination", async () => {
-    mockUseSession.mockReturnValue({ data: null, isPending: false, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: false,
+      error: null,
+    });
     const { AuthGuard } = await import("../components/auth-guard");
     const Wrapper = await getWrapper();
     render(
@@ -497,7 +555,11 @@ describe("AuthGuard — unauthenticated redirect", () => {
   });
 
   test("does not render children when not authenticated", async () => {
-    mockUseSession.mockReturnValue({ data: null, isPending: false, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: false,
+      error: null,
+    });
     const { AuthGuard } = await import("../components/auth-guard");
     const Wrapper = await getWrapper();
     render(
@@ -518,7 +580,11 @@ describe("AuthGuard — loading/pending state", () => {
   });
 
   test("shows loading indicator while session is pending", async () => {
-    mockUseSession.mockReturnValue({ data: null, isPending: true, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: true,
+      error: null,
+    });
     const { AuthGuard } = await import("../components/auth-guard");
     const Wrapper = await getWrapper();
     render(
@@ -533,14 +599,20 @@ describe("AuthGuard — loading/pending state", () => {
     // Loading indicator: spinner, text, or aria-busy element
     expect(
       screen.queryByText(/loading/i) !== null ||
-      document.querySelector("[aria-busy='true']") !== null ||
-      document.querySelector("[role='status']") !== null ||
-      document.querySelector(".animate-spin, [class*='spinner'], [class*='loading']") !== null
+        document.querySelector("[aria-busy='true']") !== null ||
+        document.querySelector("[role='status']") !== null ||
+        document.querySelector(
+          ".animate-spin, [class*='spinner'], [class*='loading']"
+        ) !== null
     ).toBe(true);
   });
 
   test("does NOT redirect while session is pending", async () => {
-    mockUseSession.mockReturnValue({ data: null, isPending: true, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: true,
+      error: null,
+    });
     const { AuthGuard } = await import("../components/auth-guard");
     const Wrapper = await getWrapper();
     render(
@@ -565,7 +637,11 @@ describe("AuthGuard — loading/pending state", () => {
   });
 
   test("does NOT render children while session is pending", async () => {
-    mockUseSession.mockReturnValue({ data: null, isPending: true, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: true,
+      error: null,
+    });
     const { AuthGuard } = await import("../components/auth-guard");
     const Wrapper = await getWrapper();
     render(
@@ -579,7 +655,11 @@ describe("AuthGuard — loading/pending state", () => {
   });
 
   test("loadingComponent prop overrides the default loading UI", async () => {
-    mockUseSession.mockReturnValue({ data: null, isPending: true, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: true,
+      error: null,
+    });
     const { AuthGuard } = await import("../components/auth-guard");
     const Wrapper = await getWrapper();
     render(
@@ -594,11 +674,17 @@ describe("AuthGuard — loading/pending state", () => {
   });
 
   test("loadingComponent replaces default spinner, not children", async () => {
-    mockUseSession.mockReturnValue({ data: null, isPending: true, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: true,
+      error: null,
+    });
     const { AuthGuard } = await import("../components/auth-guard");
     const Wrapper = await getWrapper();
     render(
-      <AuthGuard loadingComponent={<span data-testid="my-loader">Loading...</span>}>
+      <AuthGuard
+        loadingComponent={<span data-testid="my-loader">Loading...</span>}
+      >
         <div>protected</div>
       </AuthGuard>,
       { wrapper: Wrapper }
@@ -609,7 +695,11 @@ describe("AuthGuard — loading/pending state", () => {
   });
 
   test("transitions from loading to showing children when session resolves", async () => {
-    mockUseSession.mockReturnValue({ data: null, isPending: true, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: true,
+      error: null,
+    });
     const { AuthGuard } = await import("../components/auth-guard");
     const Wrapper = await getWrapper();
     const { rerender } = render(

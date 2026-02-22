@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, beforeEach } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { render, screen } from "@testing-library/react";
 import { existsSync } from "fs";
 import { resolve } from "path";
@@ -22,16 +22,29 @@ const mockUseSession = mock(() => ({
 
 const mockAuthClient = {
   signIn: {
-    email: mock(() => Promise.resolve({ data: { user: { id: "u1" } }, error: null })),
-    social: mock(() => Promise.resolve({ data: { url: "https://accounts.google.com" }, error: null })),
+    email: mock(() =>
+      Promise.resolve({ data: { user: { id: "u1" } }, error: null })
+    ),
+    social: mock(() =>
+      Promise.resolve({
+        data: { url: "https://accounts.google.com" },
+        error: null,
+      })
+    ),
   },
   signUp: {
-    email: mock(() => Promise.resolve({ data: { user: { id: "u1" } }, error: null })),
+    email: mock(() =>
+      Promise.resolve({ data: { user: { id: "u1" } }, error: null })
+    ),
   },
   signOut: mock(() => Promise.resolve({ data: { status: true }, error: null })),
   useSession: mockUseSession,
-  forgetPassword: mock(() => Promise.resolve({ data: { status: true }, error: null })),
-  resetPassword: mock(() => Promise.resolve({ data: { status: true }, error: null })),
+  forgetPassword: mock(() =>
+    Promise.resolve({ data: { status: true }, error: null })
+  ),
+  resetPassword: mock(() =>
+    Promise.resolve({ data: { status: true }, error: null })
+  ),
 };
 
 mock.module("@context-kit/auth/client", () => ({
@@ -70,27 +83,42 @@ mock.module("../components/pages/sign-up-page", () => ({
 
 mock.module("../components/pages/forgot-password-page", () => ({
   ForgotPasswordPage: (props: Record<string, unknown>) =>
-    React.createElement("div", { "data-testid": "forgot-password-page", ...props }),
+    React.createElement("div", {
+      "data-testid": "forgot-password-page",
+      ...props,
+    }),
 }));
 
 mock.module("../components/pages/reset-password-page", () => ({
   ResetPasswordPage: (props: Record<string, unknown>) =>
-    React.createElement("div", { "data-testid": "reset-password-page", ...props }),
+    React.createElement("div", {
+      "data-testid": "reset-password-page",
+      ...props,
+    }),
 }));
 
 mock.module("../components/pages/user-profile-page", () => ({
   UserProfilePage: (props: Record<string, unknown>) =>
-    React.createElement("div", { "data-testid": "user-profile-page", ...props }),
+    React.createElement("div", {
+      "data-testid": "user-profile-page",
+      ...props,
+    }),
 }));
 
 mock.module("../components/pages/change-password-page", () => ({
   ChangePasswordPage: (props: Record<string, unknown>) =>
-    React.createElement("div", { "data-testid": "change-password-page", ...props }),
+    React.createElement("div", {
+      "data-testid": "change-password-page",
+      ...props,
+    }),
 }));
 
 mock.module("../components/pages/session-management-page", () => ({
   SessionManagementPage: (props: Record<string, unknown>) =>
-    React.createElement("div", { "data-testid": "session-management-page", ...props }),
+    React.createElement("div", {
+      "data-testid": "session-management-page",
+      ...props,
+    }),
 }));
 
 // ---------------------------------------------------------------------------
@@ -100,7 +128,9 @@ mock.module("../components/pages/session-management-page", () => ({
 async function getWrapper() {
   const { AuthProvider } = await import("../components/auth-provider");
   return function Wrapper({ children }: { children: React.ReactNode }) {
-    return <AuthProvider baseURL="http://localhost:3000">{children}</AuthProvider>;
+    return (
+      <AuthProvider baseURL="http://localhost:3000">{children}</AuthProvider>
+    );
   };
 }
 
@@ -137,49 +167,63 @@ describe("AuthRouter — default path routing", () => {
   test('["sign-in"] renders SignInPage', async () => {
     const { AuthRouter } = await import("../components/auth-router");
     const Wrapper = await getWrapper();
-    render(<AuthRouter params={{ authPath: ["sign-in"] }} />, { wrapper: Wrapper });
+    render(<AuthRouter params={{ authPath: ["sign-in"] }} />, {
+      wrapper: Wrapper,
+    });
     expect(screen.getByTestId("sign-in-page")).toBeDefined();
   });
 
   test('["sign-up"] renders SignUpPage', async () => {
     const { AuthRouter } = await import("../components/auth-router");
     const Wrapper = await getWrapper();
-    render(<AuthRouter params={{ authPath: ["sign-up"] }} />, { wrapper: Wrapper });
+    render(<AuthRouter params={{ authPath: ["sign-up"] }} />, {
+      wrapper: Wrapper,
+    });
     expect(screen.getByTestId("sign-up-page")).toBeDefined();
   });
 
   test('["forgot-password"] renders ForgotPasswordPage', async () => {
     const { AuthRouter } = await import("../components/auth-router");
     const Wrapper = await getWrapper();
-    render(<AuthRouter params={{ authPath: ["forgot-password"] }} />, { wrapper: Wrapper });
+    render(<AuthRouter params={{ authPath: ["forgot-password"] }} />, {
+      wrapper: Wrapper,
+    });
     expect(screen.getByTestId("forgot-password-page")).toBeDefined();
   });
 
   test('["reset-password"] renders ResetPasswordPage', async () => {
     const { AuthRouter } = await import("../components/auth-router");
     const Wrapper = await getWrapper();
-    render(<AuthRouter params={{ authPath: ["reset-password"] }} />, { wrapper: Wrapper });
+    render(<AuthRouter params={{ authPath: ["reset-password"] }} />, {
+      wrapper: Wrapper,
+    });
     expect(screen.getByTestId("reset-password-page")).toBeDefined();
   });
 
   test('["profile"] renders UserProfilePage', async () => {
     const { AuthRouter } = await import("../components/auth-router");
     const Wrapper = await getWrapper();
-    render(<AuthRouter params={{ authPath: ["profile"] }} />, { wrapper: Wrapper });
+    render(<AuthRouter params={{ authPath: ["profile"] }} />, {
+      wrapper: Wrapper,
+    });
     expect(screen.getByTestId("user-profile-page")).toBeDefined();
   });
 
   test('["profile", "password"] renders ChangePasswordPage', async () => {
     const { AuthRouter } = await import("../components/auth-router");
     const Wrapper = await getWrapper();
-    render(<AuthRouter params={{ authPath: ["profile", "password"] }} />, { wrapper: Wrapper });
+    render(<AuthRouter params={{ authPath: ["profile", "password"] }} />, {
+      wrapper: Wrapper,
+    });
     expect(screen.getByTestId("change-password-page")).toBeDefined();
   });
 
   test('["profile", "sessions"] renders SessionManagementPage', async () => {
     const { AuthRouter } = await import("../components/auth-router");
     const Wrapper = await getWrapper();
-    render(<AuthRouter params={{ authPath: ["profile", "sessions"] }} />, { wrapper: Wrapper });
+    render(<AuthRouter params={{ authPath: ["profile", "sessions"] }} />, {
+      wrapper: Wrapper,
+    });
     expect(screen.getByTestId("session-management-page")).toBeDefined();
   });
 });
@@ -192,14 +236,18 @@ describe("AuthRouter — 404 handling", () => {
   test("unknown path shows 'Page not found'", async () => {
     const { AuthRouter } = await import("../components/auth-router");
     const Wrapper = await getWrapper();
-    render(<AuthRouter params={{ authPath: ["unknown-route"] }} />, { wrapper: Wrapper });
+    render(<AuthRouter params={{ authPath: ["unknown-route"] }} />, {
+      wrapper: Wrapper,
+    });
     expect(screen.getByText(/page not found/i)).toBeDefined();
   });
 
   test("unknown path renders a link to sign-in", async () => {
     const { AuthRouter } = await import("../components/auth-router");
     const Wrapper = await getWrapper();
-    render(<AuthRouter params={{ authPath: ["unknown-route"] }} />, { wrapper: Wrapper });
+    render(<AuthRouter params={{ authPath: ["unknown-route"] }} />, {
+      wrapper: Wrapper,
+    });
     const link = screen.getByRole("link");
     expect(link).toBeDefined();
     const href = link.getAttribute("href") ?? "";
@@ -209,7 +257,9 @@ describe("AuthRouter — 404 handling", () => {
   test("deeply unknown multi-segment path shows 'Page not found'", async () => {
     const { AuthRouter } = await import("../components/auth-router");
     const Wrapper = await getWrapper();
-    render(<AuthRouter params={{ authPath: ["profile", "nonexistent"] }} />, { wrapper: Wrapper });
+    render(<AuthRouter params={{ authPath: ["profile", "nonexistent"] }} />, {
+      wrapper: Wrapper,
+    });
     expect(screen.getByText(/page not found/i)).toBeDefined();
   });
 
@@ -368,7 +418,9 @@ describe("AuthRouter — multi-segment paths", () => {
   test('["profile", "password"] correctly navigates to ChangePasswordPage', async () => {
     const { AuthRouter } = await import("../components/auth-router");
     const Wrapper = await getWrapper();
-    render(<AuthRouter params={{ authPath: ["profile", "password"] }} />, { wrapper: Wrapper });
+    render(<AuthRouter params={{ authPath: ["profile", "password"] }} />, {
+      wrapper: Wrapper,
+    });
     expect(screen.getByTestId("change-password-page")).toBeDefined();
     expect(screen.queryByTestId("user-profile-page")).toBeNull();
   });
@@ -376,7 +428,9 @@ describe("AuthRouter — multi-segment paths", () => {
   test('["profile", "sessions"] correctly navigates to SessionManagementPage', async () => {
     const { AuthRouter } = await import("../components/auth-router");
     const Wrapper = await getWrapper();
-    render(<AuthRouter params={{ authPath: ["profile", "sessions"] }} />, { wrapper: Wrapper });
+    render(<AuthRouter params={{ authPath: ["profile", "sessions"] }} />, {
+      wrapper: Wrapper,
+    });
     expect(screen.getByTestId("session-management-page")).toBeDefined();
     expect(screen.queryByTestId("user-profile-page")).toBeNull();
   });
@@ -384,7 +438,9 @@ describe("AuthRouter — multi-segment paths", () => {
   test('["profile"] does not render ChangePasswordPage', async () => {
     const { AuthRouter } = await import("../components/auth-router");
     const Wrapper = await getWrapper();
-    render(<AuthRouter params={{ authPath: ["profile"] }} />, { wrapper: Wrapper });
+    render(<AuthRouter params={{ authPath: ["profile"] }} />, {
+      wrapper: Wrapper,
+    });
     expect(screen.queryByTestId("change-password-page")).toBeNull();
     expect(screen.getByTestId("user-profile-page")).toBeDefined();
   });
@@ -392,7 +448,9 @@ describe("AuthRouter — multi-segment paths", () => {
   test('["profile"] does not render SessionManagementPage', async () => {
     const { AuthRouter } = await import("../components/auth-router");
     const Wrapper = await getWrapper();
-    render(<AuthRouter params={{ authPath: ["profile"] }} />, { wrapper: Wrapper });
+    render(<AuthRouter params={{ authPath: ["profile"] }} />, {
+      wrapper: Wrapper,
+    });
     expect(screen.queryByTestId("session-management-page")).toBeNull();
     expect(screen.getByTestId("user-profile-page")).toBeDefined();
   });

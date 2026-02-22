@@ -1,13 +1,28 @@
 "use client";
 
-import * as React from "react";
+import type * as React from "react";
+import {
+  ChangePasswordPage,
+  type ChangePasswordPageProps,
+} from "./pages/change-password-page";
+import {
+  ForgotPasswordPage,
+  type ForgotPasswordPageProps,
+} from "./pages/forgot-password-page";
+import {
+  ResetPasswordPage,
+  type ResetPasswordPageProps,
+} from "./pages/reset-password-page";
+import {
+  SessionManagementPage,
+  type SessionManagementPageProps,
+} from "./pages/session-management-page";
 import { SignInPage, type SignInPageProps } from "./pages/sign-in-page";
 import { SignUpPage, type SignUpPageProps } from "./pages/sign-up-page";
-import { ForgotPasswordPage, type ForgotPasswordPageProps } from "./pages/forgot-password-page";
-import { ResetPasswordPage, type ResetPasswordPageProps } from "./pages/reset-password-page";
-import { UserProfilePage, type UserProfilePageProps } from "./pages/user-profile-page";
-import { ChangePasswordPage, type ChangePasswordPageProps } from "./pages/change-password-page";
-import { SessionManagementPage, type SessionManagementPageProps } from "./pages/session-management-page";
+import {
+  UserProfilePage,
+  type UserProfilePageProps,
+} from "./pages/user-profile-page";
 
 /**
  * Identifies which page component to render.
@@ -70,9 +85,8 @@ export function AuthRouter({
   sessionManagementProps,
 }: AuthRouterProps) {
   const mergedPathMap: PathMap = { ...DEFAULT_PATH_MAP, ...pathMap };
-  const pathSegment = params.authPath.length > 0
-    ? "/" + params.authPath.join("/")
-    : "";
+  const pathSegment =
+    params.authPath.length > 0 ? "/" + params.authPath.join("/") : "";
   const componentKey = mergedPathMap[pathSegment];
 
   const page = renderPage(componentKey, {
@@ -99,7 +113,7 @@ function renderPage(
     userProfileProps?: Omit<UserProfilePageProps, "className">;
     changePasswordProps?: Omit<ChangePasswordPageProps, "className">;
     sessionManagementProps?: Omit<SessionManagementPageProps, "className">;
-  },
+  }
 ): React.ReactElement {
   switch (componentKey) {
     case "signIn":

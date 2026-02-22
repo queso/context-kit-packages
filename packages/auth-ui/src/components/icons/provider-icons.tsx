@@ -1,6 +1,6 @@
 "use client";
 
-import * as React from "react";
+import type * as React from "react";
 
 export type IconProps = React.SVGAttributes<SVGElement> & {
   className?: string;
@@ -8,7 +8,12 @@ export type IconProps = React.SVGAttributes<SVGElement> & {
   height?: number | string;
 };
 
-export function GoogleIcon({ className, width = 20, height = 20, ...props }: IconProps) {
+export function GoogleIcon({
+  className,
+  width = 20,
+  height = 20,
+  ...props
+}: IconProps) {
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
@@ -39,7 +44,12 @@ export function GoogleIcon({ className, width = 20, height = 20, ...props }: Ico
 }
 GoogleIcon.displayName = "GoogleIcon";
 
-export function GitHubIcon({ className, width = 20, height = 20, ...props }: IconProps) {
+export function GitHubIcon({
+  className,
+  width = 20,
+  height = 20,
+  ...props
+}: IconProps) {
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
@@ -58,7 +68,12 @@ export function GitHubIcon({ className, width = 20, height = 20, ...props }: Ico
 }
 GitHubIcon.displayName = "GitHubIcon";
 
-export function AppleIcon({ className, width = 20, height = 20, ...props }: IconProps) {
+export function AppleIcon({
+  className,
+  width = 20,
+  height = 20,
+  ...props
+}: IconProps) {
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
@@ -77,7 +92,12 @@ export function AppleIcon({ className, width = 20, height = 20, ...props }: Icon
 }
 AppleIcon.displayName = "AppleIcon";
 
-export function MicrosoftIcon({ className, width = 20, height = 20, ...props }: IconProps) {
+export function MicrosoftIcon({
+  className,
+  width = 20,
+  height = 20,
+  ...props
+}: IconProps) {
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
@@ -96,7 +116,12 @@ export function MicrosoftIcon({ className, width = 20, height = 20, ...props }: 
 }
 MicrosoftIcon.displayName = "MicrosoftIcon";
 
-export function DiscordIcon({ className, width = 20, height = 20, ...props }: IconProps) {
+export function DiscordIcon({
+  className,
+  width = 20,
+  height = 20,
+  ...props
+}: IconProps) {
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
@@ -115,7 +140,12 @@ export function DiscordIcon({ className, width = 20, height = 20, ...props }: Ic
 }
 DiscordIcon.displayName = "DiscordIcon";
 
-export function XIcon({ className, width = 20, height = 20, ...props }: IconProps) {
+export function XIcon({
+  className,
+  width = 20,
+  height = 20,
+  ...props
+}: IconProps) {
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"

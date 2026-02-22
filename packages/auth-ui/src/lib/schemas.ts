@@ -5,7 +5,10 @@ import { z } from "zod";
 // ---------------------------------------------------------------------------
 
 export const forgotPasswordSchema = z.object({
-  email: z.string().min(1, "Email is required").email("Please enter a valid email address"),
+  email: z
+    .string()
+    .min(1, "Email is required")
+    .email("Please enter a valid email address"),
 });
 
 export type ForgotPasswordFormValues = z.infer<typeof forgotPasswordSchema>;
@@ -19,7 +22,10 @@ export type PasswordRules = {
   maxLength?: number;
 };
 
-export function resetPasswordSchema({ minLength = 8, maxLength = 128 }: PasswordRules = {}) {
+export function resetPasswordSchema({
+  minLength = 8,
+  maxLength = 128,
+}: PasswordRules = {}) {
   return z
     .object({
       password: z
@@ -44,7 +50,10 @@ export type ResetPasswordFormValues = {
 // ChangePassword schema (factory accepting password rules)
 // ---------------------------------------------------------------------------
 
-export function changePasswordSchema({ minLength = 8, maxLength = 128 }: PasswordRules = {}) {
+export function changePasswordSchema({
+  minLength = 8,
+  maxLength = 128,
+}: PasswordRules = {}) {
   return z
     .object({
       currentPassword: z.string().min(1, "Current password is required"),
@@ -76,7 +85,10 @@ export type ChangePasswordFormValues = {
 // ---------------------------------------------------------------------------
 
 export const signInSchema = z.object({
-  email: z.string().min(1, "Email is required").email("Please enter a valid email address"),
+  email: z
+    .string()
+    .min(1, "Email is required")
+    .email("Please enter a valid email address"),
   password: z.string().min(1, "Password is required"),
 });
 
@@ -86,11 +98,17 @@ export type SignInFormValues = z.infer<typeof signInSchema>;
 // SignUp schema (factory accepting password rules)
 // ---------------------------------------------------------------------------
 
-export function signUpSchema({ minLength = 8, maxLength = 128 }: PasswordRules = {}) {
+export function signUpSchema({
+  minLength = 8,
+  maxLength = 128,
+}: PasswordRules = {}) {
   return z
     .object({
       name: z.string().min(1, "Name is required"),
-      email: z.string().min(1, "Email is required").email("Please enter a valid email address"),
+      email: z
+        .string()
+        .min(1, "Email is required")
+        .email("Please enter a valid email address"),
       password: z
         .string()
         .min(1, "Password is required")

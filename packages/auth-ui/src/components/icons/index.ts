@@ -1,11 +1,11 @@
 import type React from "react";
 import type { IconProps } from "./provider-icons";
 import {
-  GoogleIcon,
-  GitHubIcon,
   AppleIcon,
-  MicrosoftIcon,
   DiscordIcon,
+  GitHubIcon,
+  GoogleIcon,
+  MicrosoftIcon,
   XIcon,
 } from "./provider-icons";
 

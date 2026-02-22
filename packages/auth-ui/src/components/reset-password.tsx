@@ -1,12 +1,16 @@
 "use client";
 
-import * as React from "react";
-import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useSearchParams } from "next/navigation";
-import { useAuthContext } from "./auth-provider";
-import { resetPasswordSchema, type PasswordRules, type ResetPasswordFormValues } from "../lib/schemas";
+import * as React from "react";
+import { useForm } from "react-hook-form";
+import {
+  type PasswordRules,
+  type ResetPasswordFormValues,
+  resetPasswordSchema,
+} from "../lib/schemas";
 import { cn } from "../lib/utils";
+import { useAuthContext } from "./auth-provider";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
@@ -23,7 +27,11 @@ export type ResetPasswordProps = {
   };
 };
 
-export function ResetPassword({ passwordRules, className, classNames }: ResetPasswordProps) {
+export function ResetPassword({
+  passwordRules,
+  className,
+  classNames,
+}: ResetPasswordProps) {
   const { client } = useAuthContext();
   const searchParams = useSearchParams();
   const token = searchParams.get("token");
@@ -33,8 +41,7 @@ export function ResetPassword({ passwordRules, className, classNames }: ResetPas
 
   const schema = React.useMemo(
     () => resetPasswordSchema(passwordRules ?? {}),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [passwordRules?.minLength, passwordRules?.maxLength]
+    [passwordRules]
   );
 
   const {

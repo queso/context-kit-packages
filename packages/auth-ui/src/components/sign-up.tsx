@@ -1,16 +1,20 @@
 "use client";
 
-import * as React from "react";
-import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "next/navigation";
-import { useAuthContext } from "./auth-provider";
-import { signUpSchema, type SignUpFormValues, type PasswordRules } from "../lib/schemas";
+import * as React from "react";
+import { useForm } from "react-hook-form";
+import {
+  type PasswordRules,
+  type SignUpFormValues,
+  signUpSchema,
+} from "../lib/schemas";
 import { cn } from "../lib/utils";
+import { useAuthContext } from "./auth-provider";
+import { SocialButton } from "./social-button";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
-import { SocialButton } from "./social-button";
 
 export type SignUpProps = {
   className?: string;
@@ -58,7 +62,9 @@ export function SignUp({
       });
 
       if (result?.error) {
-        setServerError("An account with that email already exists or is in use.");
+        setServerError(
+          "An account with that email already exists or is in use."
+        );
         return;
       }
 

@@ -8,7 +8,10 @@ export type ResetPasswordPageProps = ResetPasswordProps & {
   className?: string;
 };
 
-export function ResetPasswordPage({ className, ...props }: ResetPasswordPageProps) {
+export function ResetPasswordPage({
+  className,
+  ...props
+}: ResetPasswordPageProps) {
   return (
     <PageLayout className={className}>
       <ResetPassword {...props} />

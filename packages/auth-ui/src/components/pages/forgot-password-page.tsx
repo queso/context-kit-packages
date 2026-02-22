@@ -8,7 +8,10 @@ export type ForgotPasswordPageProps = ForgotPasswordProps & {
   className?: string;
 };
 
-export function ForgotPasswordPage({ className, ...props }: ForgotPasswordPageProps) {
+export function ForgotPasswordPage({
+  className,
+  ...props
+}: ForgotPasswordPageProps) {
   return (
     <PageLayout className={className}>
       <ForgotPassword {...props} />

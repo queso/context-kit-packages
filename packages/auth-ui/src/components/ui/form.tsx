@@ -3,14 +3,14 @@
 import * as React from "react";
 import {
   Controller,
-  FormProvider,
-  useFormContext,
   type ControllerProps,
   type FieldPath,
   type FieldValues,
+  FormProvider,
+  useFormContext,
 } from "react-hook-form";
-import { Label } from "./label";
 import { cn } from "../../lib/utils";
+import { Label } from "./label";
 
 export const Form = FormProvider;
 
@@ -21,7 +21,9 @@ type FormFieldContextValue<
   name: TName;
 };
 
-const FormFieldContext = React.createContext<FormFieldContextValue>({} as FormFieldContextValue);
+const FormFieldContext = React.createContext<FormFieldContextValue>(
+  {} as FormFieldContextValue
+);
 
 export function FormField<
   TFieldValues extends FieldValues = FieldValues,
@@ -61,7 +63,9 @@ type FormItemContextValue = {
   id: string;
 };
 
-const FormItemContext = React.createContext<FormItemContextValue>({} as FormItemContextValue);
+const FormItemContext = React.createContext<FormItemContextValue>(
+  {} as FormItemContextValue
+);
 
 export function FormItem({
   className,
@@ -101,14 +105,19 @@ FormLabel.displayName = "FormLabel";
 export function FormControl({
   ref,
   ...props
-}: React.ComponentPropsWithoutRef<"div"> & { ref?: React.Ref<HTMLDivElement> }) {
-  const { error, formItemId, formDescriptionId, formMessageId } = useFormField();
+}: React.ComponentPropsWithoutRef<"div"> & {
+  ref?: React.Ref<HTMLDivElement>;
+}) {
+  const { error, formItemId, formDescriptionId, formMessageId } =
+    useFormField();
 
   return (
     <div
       ref={ref}
       id={formItemId}
-      aria-describedby={!error ? formDescriptionId : `${formDescriptionId} ${formMessageId}`}
+      aria-describedby={
+        !error ? formDescriptionId : `${formDescriptionId} ${formMessageId}`
+      }
       aria-invalid={!!error}
       {...props}
     />
@@ -120,7 +129,9 @@ export function FormDescription({
   className,
   ref,
   ...props
-}: React.HTMLAttributes<HTMLParagraphElement> & { ref?: React.Ref<HTMLParagraphElement> }) {
+}: React.HTMLAttributes<HTMLParagraphElement> & {
+  ref?: React.Ref<HTMLParagraphElement>;
+}) {
   const { formDescriptionId } = useFormField();
 
   return (
@@ -139,7 +150,9 @@ export function FormMessage({
   children,
   ref,
   ...props
-}: React.HTMLAttributes<HTMLParagraphElement> & { ref?: React.Ref<HTMLParagraphElement> }) {
+}: React.HTMLAttributes<HTMLParagraphElement> & {
+  ref?: React.Ref<HTMLParagraphElement>;
+}) {
   const { error, formMessageId } = useFormField();
   const body = error ? String(error?.message) : children;
 

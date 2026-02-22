@@ -1,8 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { UserProfile, type UserProfileProps } from "../user-profile";
 import { AuthGuard } from "../auth-guard";
+import { UserProfile, type UserProfileProps } from "../user-profile";
 import { PageLayout } from "./page-layout";
 
 export type UserProfilePageProps = UserProfileProps & {

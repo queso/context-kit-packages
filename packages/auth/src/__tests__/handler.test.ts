@@ -1,5 +1,5 @@
-import { describe, test, expect } from "bun:test";
-import { validConfig, setupEnvGuard } from "./helpers";
+import { describe, expect, test } from "bun:test";
+import { setupEnvGuard, validConfig } from "./helpers";
 
 setupEnvGuard();
 
@@ -32,15 +32,18 @@ describe("toNextJsHandler", () => {
     const auth = createAuth(validConfig());
     const { POST } = toNextJsHandler(auth);
 
-    const request = new Request("http://localhost:3000/api/auth/sign-up/email", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email: "test@example.com",
-        password: "test-password-123",
-        name: "Test User",
-      }),
-    });
+    const request = new Request(
+      "http://localhost:3000/api/auth/sign-up/email",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: "test@example.com",
+          password: "test-password-123",
+          name: "Test User",
+        }),
+      }
+    );
     const response = await POST(request);
     expect(response).toBeInstanceOf(Response);
   });

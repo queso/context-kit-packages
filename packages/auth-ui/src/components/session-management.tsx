@@ -1,10 +1,10 @@
 "use client";
 
-import * as React from "react";
 import { useRouter } from "next/navigation";
-import { useAuthContext } from "./auth-provider";
+import * as React from "react";
 import { useSession } from "../hooks/use-session";
 import { cn } from "../lib/utils";
+import { useAuthContext } from "./auth-provider";
 import { Button } from "./ui/button";
 
 // ---------------------------------------------------------------------------
@@ -154,7 +154,10 @@ function ConfirmDialog({ open, onConfirm, onCancel }: ConfirmDialogProps) {
 // SessionManagement component
 // ---------------------------------------------------------------------------
 
-export function SessionManagement({ className, classNames }: SessionManagementProps) {
+export function SessionManagement({
+  className,
+  classNames,
+}: SessionManagementProps) {
   const { client } = useAuthContext();
   const { data: sessionData, isPending } = useSession();
   const router = useRouter();
@@ -163,7 +166,9 @@ export function SessionManagement({ className, classNames }: SessionManagementPr
   const currentSessionId = sessionData?.session?.id;
 
   const [sessions, setSessions] = React.useState<SessionData[] | null>(null);
-  const [loadingState, setLoadingState] = React.useState<"idle" | "loading" | "error">("loading");
+  const [loadingState, setLoadingState] = React.useState<
+    "idle" | "loading" | "error"
+  >("loading");
   const [revokingId, setRevokingId] = React.useState<string | null>(null);
   const [confirmDialogOpen, setConfirmDialogOpen] = React.useState(false);
 
@@ -212,7 +217,9 @@ export function SessionManagement({ className, classNames }: SessionManagementPr
   const handleRevokeNonCurrent = async (session: SessionData) => {
     setRevokingId(session.id);
     try {
-      await (client as Record<string, Function>).revokeSession({ token: session.token ?? session.id });
+      await (client as Record<string, Function>).revokeSession({
+        token: session.token ?? session.id,
+      });
       setSessions((prev) => prev?.filter((s) => s.id !== session.id) ?? null);
     } catch {
       // silently ignore
@@ -226,10 +233,14 @@ export function SessionManagement({ className, classNames }: SessionManagementPr
   };
 
   const handleConfirmRevokeCurrent = async () => {
-    const currentSession = sessions?.find((s) => s.current || s.id === currentSessionId);
+    const currentSession = sessions?.find(
+      (s) => s.current || s.id === currentSessionId
+    );
     if (!currentSession) return;
     try {
-      await (client as Record<string, Function>).revokeSession({ token: currentSession.token ?? currentSession.id });
+      await (client as Record<string, Function>).revokeSession({
+        token: currentSession.token ?? currentSession.id,
+      });
     } catch {
       // ignore
     }
@@ -268,11 +279,18 @@ export function SessionManagement({ className, classNames }: SessionManagementPr
   }
 
   // Determine empty states
-  const currentSession = sessions?.find((s) => s.current || s.id === currentSessionId);
+  const currentSession = sessions?.find(
+    (s) => s.current || s.id === currentSessionId
+  );
   // "only current" = only one session and it's current, OR no sessions at all
-  const otherSessions = sessions?.filter((s) => !s.current && s.id !== currentSessionId) ?? [];
+  const otherSessions =
+    sessions?.filter((s) => !s.current && s.id !== currentSessionId) ?? [];
   const isEmpty = sessions !== null && sessions.length === 0;
-  const hasOnlyCurrent = sessions !== null && !isEmpty && sessions.length >= 1 && otherSessions.length === 0;
+  const hasOnlyCurrent =
+    sessions !== null &&
+    !isEmpty &&
+    sessions.length >= 1 &&
+    otherSessions.length === 0;
 
   return (
     <div className={cn("w-full max-w-2xl", className, classNames?.card)}>
@@ -281,10 +299,13 @@ export function SessionManagement({ className, classNames }: SessionManagementPr
         {sessions && sessions.length > 0 && (
           <ul className="space-y-3">
             {sessions.map((session) => {
-              const isCurrent = session.current || session.id === currentSessionId;
+              const isCurrent =
+                session.current || session.id === currentSessionId;
               const isRevoking = revokingId === session.id;
               const deviceLabel = parseUserAgent(session.userAgent);
-              const timestamp = formatTimestamp(session.updatedAt ?? session.createdAt);
+              const timestamp = formatTimestamp(
+                session.updatedAt ?? session.createdAt
+              );
 
               return (
                 <li
@@ -309,10 +330,14 @@ export function SessionManagement({ className, classNames }: SessionManagementPr
                       )}
                     </div>
                     {session.ipAddress && (
-                      <p className="text-xs text-muted-foreground mt-0.5">{session.ipAddress}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {session.ipAddress}
+                      </p>
                     )}
                     {timestamp && (
-                      <p className="text-xs text-muted-foreground">{timestamp}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {timestamp}
+                      </p>
                     )}
                   </div>
 
@@ -326,7 +351,9 @@ export function SessionManagement({ className, classNames }: SessionManagementPr
                     aria-label="Revoke"
                     className={classNames?.revokeButton}
                     onClick={() =>
-                      isCurrent ? handleRevokeCurrent() : handleRevokeNonCurrent(session)
+                      isCurrent
+                        ? handleRevokeCurrent()
+                        : handleRevokeNonCurrent(session)
                     }
                   >
                     {isRevoking ? "Revoking…" : "Revoke"}

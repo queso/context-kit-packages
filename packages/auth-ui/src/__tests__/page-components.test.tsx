@@ -1,8 +1,8 @@
-import { describe, test, expect, mock, beforeEach, afterEach } from "bun:test";
-import { render, screen, waitFor, cleanup } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { existsSync } from "fs";
 import { resolve } from "path";
-import React from "react";
+import type React from "react";
 
 const pkgRoot = resolve(import.meta.dir, "../..");
 
@@ -16,7 +16,12 @@ function fileExists(relativePath: string) {
 
 const mockUseSession = mock(() => ({
   data: {
-    user: { id: "user-1", name: "Test User", email: "test@example.com", image: null },
+    user: {
+      id: "user-1",
+      name: "Test User",
+      email: "test@example.com",
+      image: null,
+    },
     session: { id: "session-1", userId: "user-1" },
   },
   isPending: false,
@@ -25,16 +30,29 @@ const mockUseSession = mock(() => ({
 
 const mockAuthClient = {
   signIn: {
-    email: mock(() => Promise.resolve({ data: { user: { id: "u1" } }, error: null })),
-    social: mock(() => Promise.resolve({ data: { url: "https://accounts.google.com" }, error: null })),
+    email: mock(() =>
+      Promise.resolve({ data: { user: { id: "u1" } }, error: null })
+    ),
+    social: mock(() =>
+      Promise.resolve({
+        data: { url: "https://accounts.google.com" },
+        error: null,
+      })
+    ),
   },
   signUp: {
-    email: mock(() => Promise.resolve({ data: { user: { id: "u1" } }, error: null })),
+    email: mock(() =>
+      Promise.resolve({ data: { user: { id: "u1" } }, error: null })
+    ),
   },
   signOut: mock(() => Promise.resolve({ data: { status: true }, error: null })),
   useSession: mockUseSession,
-  forgetPassword: mock(() => Promise.resolve({ data: { status: true }, error: null })),
-  resetPassword: mock(() => Promise.resolve({ data: { status: true }, error: null })),
+  forgetPassword: mock(() =>
+    Promise.resolve({ data: { status: true }, error: null })
+  ),
+  resetPassword: mock(() =>
+    Promise.resolve({ data: { status: true }, error: null })
+  ),
 };
 
 mock.module("@context-kit/auth/client", () => ({
@@ -67,7 +85,9 @@ mock.module("next/navigation", () => ({
 async function getWrapper() {
   const { AuthProvider } = await import("../components/auth-provider");
   return function Wrapper({ children }: { children: React.ReactNode }) {
-    return <AuthProvider baseURL="http://localhost:3000">{children}</AuthProvider>;
+    return (
+      <AuthProvider baseURL="http://localhost:3000">{children}</AuthProvider>
+    );
   };
 }
 
@@ -89,11 +109,15 @@ describe("file structure — page components", () => {
   });
 
   test("src/components/pages/forgot-password-page.tsx exists", () => {
-    expect(fileExists("src/components/pages/forgot-password-page.tsx")).toBe(true);
+    expect(fileExists("src/components/pages/forgot-password-page.tsx")).toBe(
+      true
+    );
   });
 
   test("src/components/pages/reset-password-page.tsx exists", () => {
-    expect(fileExists("src/components/pages/reset-password-page.tsx")).toBe(true);
+    expect(fileExists("src/components/pages/reset-password-page.tsx")).toBe(
+      true
+    );
   });
 
   test("src/components/pages/user-profile-page.tsx exists", () => {
@@ -101,11 +125,15 @@ describe("file structure — page components", () => {
   });
 
   test("src/components/pages/change-password-page.tsx exists", () => {
-    expect(fileExists("src/components/pages/change-password-page.tsx")).toBe(true);
+    expect(fileExists("src/components/pages/change-password-page.tsx")).toBe(
+      true
+    );
   });
 
   test("src/components/pages/session-management-page.tsx exists", () => {
-    expect(fileExists("src/components/pages/session-management-page.tsx")).toBe(true);
+    expect(fileExists("src/components/pages/session-management-page.tsx")).toBe(
+      true
+    );
   });
 });
 
@@ -202,7 +230,11 @@ describe("SignInPage export", () => {
 
 describe("SignInPage rendering", () => {
   beforeEach(() => {
-    mockUseSession.mockReturnValue({ data: null, isPending: false, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: false,
+      error: null,
+    });
     mockPush.mockClear();
   });
 
@@ -238,7 +270,9 @@ describe("SignInPage rendering", () => {
   test("passes providers prop through to SignIn", async () => {
     const { SignInPage } = await import("../components/pages/sign-in-page");
     const Wrapper = await getWrapper();
-    render(<SignInPage providers={["google", "github"]} />, { wrapper: Wrapper });
+    render(<SignInPage providers={["google", "github"]} />, {
+      wrapper: Wrapper,
+    });
     expect(screen.getByText(/continue with google/i)).toBeDefined();
     expect(screen.getByText(/continue with github/i)).toBeDefined();
   });
@@ -246,7 +280,10 @@ describe("SignInPage rendering", () => {
   test("accepts className prop", async () => {
     const { SignInPage } = await import("../components/pages/sign-in-page");
     const Wrapper = await getWrapper();
-    const { container } = render(<SignInPage className="custom-sign-in-page" />, { wrapper: Wrapper });
+    const { container } = render(
+      <SignInPage className="custom-sign-in-page" />,
+      { wrapper: Wrapper }
+    );
     expect(container.querySelector(".custom-sign-in-page")).toBeDefined();
   });
 });
@@ -264,7 +301,11 @@ describe("SignUpPage export", () => {
 
 describe("SignUpPage rendering", () => {
   beforeEach(() => {
-    mockUseSession.mockReturnValue({ data: null, isPending: false, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: false,
+      error: null,
+    });
     mockPush.mockClear();
   });
 
@@ -307,7 +348,10 @@ describe("SignUpPage rendering", () => {
   test("accepts className prop", async () => {
     const { SignUpPage } = await import("../components/pages/sign-up-page");
     const Wrapper = await getWrapper();
-    const { container } = render(<SignUpPage className="custom-sign-up-page" />, { wrapper: Wrapper });
+    const { container } = render(
+      <SignUpPage className="custom-sign-up-page" />,
+      { wrapper: Wrapper }
+    );
     expect(container.querySelector(".custom-sign-up-page")).toBeDefined();
   });
 });
@@ -325,18 +369,28 @@ describe("ForgotPasswordPage export", () => {
 
 describe("ForgotPasswordPage rendering", () => {
   beforeEach(() => {
-    mockUseSession.mockReturnValue({ data: null, isPending: false, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: false,
+      error: null,
+    });
     mockPush.mockClear();
   });
 
   test("renders without crashing", async () => {
-    const { ForgotPasswordPage } = await import("../components/pages/forgot-password-page");
+    const { ForgotPasswordPage } = await import(
+      "../components/pages/forgot-password-page"
+    );
     const Wrapper = await getWrapper();
-    expect(() => render(<ForgotPasswordPage />, { wrapper: Wrapper })).not.toThrow();
+    expect(() =>
+      render(<ForgotPasswordPage />, { wrapper: Wrapper })
+    ).not.toThrow();
   });
 
   test("does NOT redirect when unauthenticated (no AuthGuard)", async () => {
-    const { ForgotPasswordPage } = await import("../components/pages/forgot-password-page");
+    const { ForgotPasswordPage } = await import(
+      "../components/pages/forgot-password-page"
+    );
     const Wrapper = await getWrapper();
     render(<ForgotPasswordPage />, { wrapper: Wrapper });
 
@@ -345,23 +399,32 @@ describe("ForgotPasswordPage rendering", () => {
   });
 
   test("renders the ForgotPassword form component (has email input)", async () => {
-    const { ForgotPasswordPage } = await import("../components/pages/forgot-password-page");
+    const { ForgotPasswordPage } = await import(
+      "../components/pages/forgot-password-page"
+    );
     const Wrapper = await getWrapper();
     render(<ForgotPasswordPage />, { wrapper: Wrapper });
     expect(screen.getByLabelText(/email/i)).toBeDefined();
   });
 
   test("renders the ForgotPassword form submit button", async () => {
-    const { ForgotPasswordPage } = await import("../components/pages/forgot-password-page");
+    const { ForgotPasswordPage } = await import(
+      "../components/pages/forgot-password-page"
+    );
     const Wrapper = await getWrapper();
     render(<ForgotPasswordPage />, { wrapper: Wrapper });
     expect(screen.getByRole("button")).toBeDefined();
   });
 
   test("accepts className prop", async () => {
-    const { ForgotPasswordPage } = await import("../components/pages/forgot-password-page");
+    const { ForgotPasswordPage } = await import(
+      "../components/pages/forgot-password-page"
+    );
     const Wrapper = await getWrapper();
-    const { container } = render(<ForgotPasswordPage className="custom-forgot-page" />, { wrapper: Wrapper });
+    const { container } = render(
+      <ForgotPasswordPage className="custom-forgot-page" />,
+      { wrapper: Wrapper }
+    );
     expect(container.querySelector(".custom-forgot-page")).toBeDefined();
   });
 });
@@ -379,7 +442,11 @@ describe("ResetPasswordPage export", () => {
 
 describe("ResetPasswordPage rendering", () => {
   beforeEach(() => {
-    mockUseSession.mockReturnValue({ data: null, isPending: false, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: false,
+      error: null,
+    });
     mockPush.mockClear();
     mockSearchParamsGet.mockImplementation((key: string) =>
       key === "token" ? "test-reset-token" : null
@@ -392,13 +459,19 @@ describe("ResetPasswordPage rendering", () => {
   });
 
   test("renders without crashing", async () => {
-    const { ResetPasswordPage } = await import("../components/pages/reset-password-page");
+    const { ResetPasswordPage } = await import(
+      "../components/pages/reset-password-page"
+    );
     const Wrapper = await getWrapper();
-    expect(() => render(<ResetPasswordPage />, { wrapper: Wrapper })).not.toThrow();
+    expect(() =>
+      render(<ResetPasswordPage />, { wrapper: Wrapper })
+    ).not.toThrow();
   });
 
   test("does NOT redirect when unauthenticated (no AuthGuard)", async () => {
-    const { ResetPasswordPage } = await import("../components/pages/reset-password-page");
+    const { ResetPasswordPage } = await import(
+      "../components/pages/reset-password-page"
+    );
     const Wrapper = await getWrapper();
     render(<ResetPasswordPage />, { wrapper: Wrapper });
 
@@ -407,23 +480,32 @@ describe("ResetPasswordPage rendering", () => {
   });
 
   test("renders the ResetPassword form component (has password input)", async () => {
-    const { ResetPasswordPage } = await import("../components/pages/reset-password-page");
+    const { ResetPasswordPage } = await import(
+      "../components/pages/reset-password-page"
+    );
     const Wrapper = await getWrapper();
     render(<ResetPasswordPage />, { wrapper: Wrapper });
     expect(screen.getByLabelText(/^new password|^password/i)).toBeDefined();
   });
 
   test("renders the ResetPassword form submit button", async () => {
-    const { ResetPasswordPage } = await import("../components/pages/reset-password-page");
+    const { ResetPasswordPage } = await import(
+      "../components/pages/reset-password-page"
+    );
     const Wrapper = await getWrapper();
     render(<ResetPasswordPage />, { wrapper: Wrapper });
     expect(screen.getByRole("button")).toBeDefined();
   });
 
   test("accepts className prop", async () => {
-    const { ResetPasswordPage } = await import("../components/pages/reset-password-page");
+    const { ResetPasswordPage } = await import(
+      "../components/pages/reset-password-page"
+    );
     const Wrapper = await getWrapper();
-    const { container } = render(<ResetPasswordPage className="custom-reset-page" />, { wrapper: Wrapper });
+    const { container } = render(
+      <ResetPasswordPage className="custom-reset-page" />,
+      { wrapper: Wrapper }
+    );
     expect(container.querySelector(".custom-reset-page")).toBeDefined();
   });
 });
@@ -441,12 +523,18 @@ describe("UserProfilePage export", () => {
 
 describe("UserProfilePage — unauthenticated", () => {
   beforeEach(() => {
-    mockUseSession.mockReturnValue({ data: null, isPending: false, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: false,
+      error: null,
+    });
     mockPush.mockClear();
   });
 
   test("redirects to sign-in when not authenticated (uses AuthGuard)", async () => {
-    const { UserProfilePage } = await import("../components/pages/user-profile-page");
+    const { UserProfilePage } = await import(
+      "../components/pages/user-profile-page"
+    );
     const Wrapper = await getWrapper();
     render(<UserProfilePage />, { wrapper: Wrapper });
 
@@ -458,7 +546,9 @@ describe("UserProfilePage — unauthenticated", () => {
   });
 
   test("does not render the user profile form when unauthenticated", async () => {
-    const { UserProfilePage } = await import("../components/pages/user-profile-page");
+    const { UserProfilePage } = await import(
+      "../components/pages/user-profile-page"
+    );
     const Wrapper = await getWrapper();
     render(<UserProfilePage />, { wrapper: Wrapper });
     // Profile content should not be visible
@@ -470,7 +560,12 @@ describe("UserProfilePage — authenticated", () => {
   beforeEach(() => {
     mockUseSession.mockReturnValue({
       data: {
-        user: { id: "user-1", name: "Test User", email: "test@example.com", image: null },
+        user: {
+          id: "user-1",
+          name: "Test User",
+          email: "test@example.com",
+          image: null,
+        },
         session: { id: "session-1", userId: "user-1" },
       },
       isPending: false,
@@ -480,21 +575,25 @@ describe("UserProfilePage — authenticated", () => {
   });
 
   test("renders the UserProfile form when authenticated", async () => {
-    const { UserProfilePage } = await import("../components/pages/user-profile-page");
+    const { UserProfilePage } = await import(
+      "../components/pages/user-profile-page"
+    );
     const Wrapper = await getWrapper();
     render(<UserProfilePage />, { wrapper: Wrapper });
     // UserProfile form should be visible — look for name/profile fields or button
     await waitFor(() => {
       expect(
         screen.queryByLabelText(/name/i) !== null ||
-        screen.queryByRole("button", { name: /save|update/i }) !== null ||
-        screen.queryByText(/profile/i) !== null
+          screen.queryByRole("button", { name: /save|update/i }) !== null ||
+          screen.queryByText(/profile/i) !== null
       ).toBe(true);
     });
   });
 
   test("does not redirect when authenticated", async () => {
-    const { UserProfilePage } = await import("../components/pages/user-profile-page");
+    const { UserProfilePage } = await import(
+      "../components/pages/user-profile-page"
+    );
     const Wrapper = await getWrapper();
     render(<UserProfilePage />, { wrapper: Wrapper });
 
@@ -503,9 +602,14 @@ describe("UserProfilePage — authenticated", () => {
   });
 
   test("accepts className prop", async () => {
-    const { UserProfilePage } = await import("../components/pages/user-profile-page");
+    const { UserProfilePage } = await import(
+      "../components/pages/user-profile-page"
+    );
     const Wrapper = await getWrapper();
-    const { container } = render(<UserProfilePage className="custom-profile-page" />, { wrapper: Wrapper });
+    const { container } = render(
+      <UserProfilePage className="custom-profile-page" />,
+      { wrapper: Wrapper }
+    );
     expect(container.querySelector(".custom-profile-page")).toBeDefined();
   });
 });
@@ -523,12 +627,18 @@ describe("ChangePasswordPage export", () => {
 
 describe("ChangePasswordPage — unauthenticated", () => {
   beforeEach(() => {
-    mockUseSession.mockReturnValue({ data: null, isPending: false, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: false,
+      error: null,
+    });
     mockPush.mockClear();
   });
 
   test("redirects to sign-in when not authenticated (uses AuthGuard)", async () => {
-    const { ChangePasswordPage } = await import("../components/pages/change-password-page");
+    const { ChangePasswordPage } = await import(
+      "../components/pages/change-password-page"
+    );
     const Wrapper = await getWrapper();
     render(<ChangePasswordPage />, { wrapper: Wrapper });
 
@@ -540,10 +650,14 @@ describe("ChangePasswordPage — unauthenticated", () => {
   });
 
   test("does not render the change password form when unauthenticated", async () => {
-    const { ChangePasswordPage } = await import("../components/pages/change-password-page");
+    const { ChangePasswordPage } = await import(
+      "../components/pages/change-password-page"
+    );
     const Wrapper = await getWrapper();
     render(<ChangePasswordPage />, { wrapper: Wrapper });
-    expect(screen.queryByLabelText(/current password|new password/i)).toBeNull();
+    expect(
+      screen.queryByLabelText(/current password|new password/i)
+    ).toBeNull();
   });
 });
 
@@ -551,7 +665,12 @@ describe("ChangePasswordPage — authenticated", () => {
   beforeEach(() => {
     mockUseSession.mockReturnValue({
       data: {
-        user: { id: "user-1", name: "Test User", email: "test@example.com", image: null },
+        user: {
+          id: "user-1",
+          name: "Test User",
+          email: "test@example.com",
+          image: null,
+        },
         session: { id: "session-1", userId: "user-1" },
       },
       isPending: false,
@@ -561,19 +680,23 @@ describe("ChangePasswordPage — authenticated", () => {
   });
 
   test("renders the ChangePassword form when authenticated", async () => {
-    const { ChangePasswordPage } = await import("../components/pages/change-password-page");
+    const { ChangePasswordPage } = await import(
+      "../components/pages/change-password-page"
+    );
     const Wrapper = await getWrapper();
     render(<ChangePasswordPage />, { wrapper: Wrapper });
     await waitFor(() => {
       expect(
-        screen.queryAllByLabelText(/current password|new password/i).length > 0 ||
-        screen.queryByRole("button", { name: /change|update/i }) !== null
+        screen.queryAllByLabelText(/current password|new password/i).length >
+          0 || screen.queryByRole("button", { name: /change|update/i }) !== null
       ).toBe(true);
     });
   });
 
   test("does not redirect when authenticated", async () => {
-    const { ChangePasswordPage } = await import("../components/pages/change-password-page");
+    const { ChangePasswordPage } = await import(
+      "../components/pages/change-password-page"
+    );
     const Wrapper = await getWrapper();
     render(<ChangePasswordPage />, { wrapper: Wrapper });
 
@@ -582,9 +705,14 @@ describe("ChangePasswordPage — authenticated", () => {
   });
 
   test("accepts className prop", async () => {
-    const { ChangePasswordPage } = await import("../components/pages/change-password-page");
+    const { ChangePasswordPage } = await import(
+      "../components/pages/change-password-page"
+    );
     const Wrapper = await getWrapper();
-    const { container } = render(<ChangePasswordPage className="custom-change-pw-page" />, { wrapper: Wrapper });
+    const { container } = render(
+      <ChangePasswordPage className="custom-change-pw-page" />,
+      { wrapper: Wrapper }
+    );
     expect(container.querySelector(".custom-change-pw-page")).toBeDefined();
   });
 });
@@ -602,12 +730,18 @@ describe("SessionManagementPage export", () => {
 
 describe("SessionManagementPage — unauthenticated", () => {
   beforeEach(() => {
-    mockUseSession.mockReturnValue({ data: null, isPending: false, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: false,
+      error: null,
+    });
     mockPush.mockClear();
   });
 
   test("redirects to sign-in when not authenticated (uses AuthGuard)", async () => {
-    const { SessionManagementPage } = await import("../components/pages/session-management-page");
+    const { SessionManagementPage } = await import(
+      "../components/pages/session-management-page"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagementPage />, { wrapper: Wrapper });
 
@@ -619,10 +753,14 @@ describe("SessionManagementPage — unauthenticated", () => {
   });
 
   test("does not render session list when unauthenticated", async () => {
-    const { SessionManagementPage } = await import("../components/pages/session-management-page");
+    const { SessionManagementPage } = await import(
+      "../components/pages/session-management-page"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagementPage />, { wrapper: Wrapper });
-    expect(screen.queryByText(/active sessions|your sessions|revoke/i)).toBeNull();
+    expect(
+      screen.queryByText(/active sessions|your sessions|revoke/i)
+    ).toBeNull();
   });
 });
 
@@ -630,7 +768,12 @@ describe("SessionManagementPage — authenticated", () => {
   beforeEach(() => {
     mockUseSession.mockReturnValue({
       data: {
-        user: { id: "user-1", name: "Test User", email: "test@example.com", image: null },
+        user: {
+          id: "user-1",
+          name: "Test User",
+          email: "test@example.com",
+          image: null,
+        },
         session: { id: "session-1", userId: "user-1" },
       },
       isPending: false,
@@ -640,21 +783,25 @@ describe("SessionManagementPage — authenticated", () => {
   });
 
   test("renders the SessionManagement component when authenticated", async () => {
-    const { SessionManagementPage } = await import("../components/pages/session-management-page");
+    const { SessionManagementPage } = await import(
+      "../components/pages/session-management-page"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagementPage />, { wrapper: Wrapper });
     // SessionManagement renders some content about sessions
     await waitFor(() => {
       expect(
         screen.queryByText(/session/i) !== null ||
-        screen.queryByRole("list") !== null ||
-        screen.queryByRole("button") !== null
+          screen.queryByRole("list") !== null ||
+          screen.queryByRole("button") !== null
       ).toBe(true);
     });
   });
 
   test("does not redirect when authenticated", async () => {
-    const { SessionManagementPage } = await import("../components/pages/session-management-page");
+    const { SessionManagementPage } = await import(
+      "../components/pages/session-management-page"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagementPage />, { wrapper: Wrapper });
 
@@ -663,9 +810,14 @@ describe("SessionManagementPage — authenticated", () => {
   });
 
   test("accepts className prop", async () => {
-    const { SessionManagementPage } = await import("../components/pages/session-management-page");
+    const { SessionManagementPage } = await import(
+      "../components/pages/session-management-page"
+    );
     const Wrapper = await getWrapper();
-    const { container } = render(<SessionManagementPage className="custom-sessions-page" />, { wrapper: Wrapper });
+    const { container } = render(
+      <SessionManagementPage className="custom-sessions-page" />,
+      { wrapper: Wrapper }
+    );
     expect(container.querySelector(".custom-sessions-page")).toBeDefined();
   });
 });

@@ -1,10 +1,12 @@
 "use client";
 
-import * as React from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
+import type * as React from "react";
 import { cn } from "../../lib/utils";
 
-export function Dialog(props: React.ComponentPropsWithoutRef<typeof DialogPrimitive.Root>) {
+export function Dialog(
+  props: React.ComponentPropsWithoutRef<typeof DialogPrimitive.Root>
+) {
   return <DialogPrimitive.Root {...props} />;
 }
 
@@ -74,20 +76,32 @@ export function DialogContent({
 }
 DialogContent.displayName = "DialogContent";
 
-export function DialogHeader({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+export function DialogHeader({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={cn("flex flex-col space-y-1.5 text-center sm:text-left", className)}
+      className={cn(
+        "flex flex-col space-y-1.5 text-center sm:text-left",
+        className
+      )}
       {...props}
     />
   );
 }
 DialogHeader.displayName = "DialogHeader";
 
-export function DialogFooter({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+export function DialogFooter({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={cn("flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2", className)}
+      className={cn(
+        "flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2",
+        className
+      )}
       {...props}
     />
   );
@@ -104,7 +118,10 @@ export function DialogTitle({
   return (
     <DialogPrimitive.Title
       ref={ref}
-      className={cn("text-lg font-semibold leading-none tracking-tight", className)}
+      className={cn(
+        "text-lg font-semibold leading-none tracking-tight",
+        className
+      )}
       {...props}
     />
   );

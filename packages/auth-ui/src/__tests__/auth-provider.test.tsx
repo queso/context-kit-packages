@@ -1,5 +1,5 @@
-import { describe, test, expect, mock, beforeEach } from "bun:test";
-import { render, screen, renderHook, act } from "@testing-library/react";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { act, render, renderHook, screen } from "@testing-library/react";
 import { existsSync } from "fs";
 import { resolve } from "path";
 import React from "react";
@@ -31,7 +31,9 @@ const mockAuthClient = {
   signUp: mockSignUp,
 };
 
-const mockCreateAuthClient = mock((_opts: { baseURL: string }) => mockAuthClient);
+const mockCreateAuthClient = mock(
+  (_opts: { baseURL: string }) => mockAuthClient
+);
 
 mock.module("@context-kit/auth/client", () => ({
   createAuthClient: mockCreateAuthClient,
@@ -100,7 +102,9 @@ describe("AuthProvider", () => {
         <span>ok</span>
       </AuthProvider>
     );
-    const call = mockCreateAuthClient.mock.calls[0]?.[0] as { baseURL: string } | undefined;
+    const call = mockCreateAuthClient.mock.calls[0]?.[0] as
+      | { baseURL: string }
+      | undefined;
     expect(call?.baseURL).toBe("https://example.com/api/auth");
   });
 });
@@ -198,7 +202,11 @@ describe("useSession hook", () => {
   });
 
   test("useSession isPending is false when mock returns false", async () => {
-    mockUseSession.mockReturnValue({ data: null, isPending: false, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: false,
+      error: null,
+    });
 
     const { AuthProvider } = await import("../components/auth-provider");
     const { useSession } = await import("../hooks/use-session");
@@ -213,7 +221,11 @@ describe("useSession hook", () => {
   });
 
   test("useSession isPending is true when mock returns pending state", async () => {
-    mockUseSession.mockReturnValue({ data: null, isPending: true, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: true,
+      error: null,
+    });
 
     const { AuthProvider } = await import("../components/auth-provider");
     const { useSession } = await import("../hooks/use-session");
@@ -227,11 +239,19 @@ describe("useSession hook", () => {
     expect(result.current.isPending).toBe(true);
 
     // Reset for subsequent tests
-    mockUseSession.mockReturnValue({ data: null, isPending: false, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: false,
+      error: null,
+    });
   });
 
   test("useSession surfaces user data when session is active", async () => {
-    const fakeUser = { id: "user-1", email: "test@example.com", name: "Test User" };
+    const fakeUser = {
+      id: "user-1",
+      email: "test@example.com",
+      name: "Test User",
+    };
     const fakeSession = { id: "session-1", userId: "user-1" };
     mockUseSession.mockReturnValue({
       data: { user: fakeUser, session: fakeSession },
@@ -251,7 +271,11 @@ describe("useSession hook", () => {
     expect(result.current.data?.user?.email).toBe("test@example.com");
 
     // Reset
-    mockUseSession.mockReturnValue({ data: null, isPending: false, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: false,
+      error: null,
+    });
   });
 
   test("useSession throws helpful error when used outside AuthProvider", async () => {

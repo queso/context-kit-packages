@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { render, screen } from "@testing-library/react";
 
 describe("React rendering smoke test", () => {

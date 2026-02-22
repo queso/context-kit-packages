@@ -1,7 +1,11 @@
 "use client";
 
 export type AuthClient = {
-  useSession: () => { data: SessionData | null; isPending: boolean; error: unknown };
+  useSession: () => {
+    data: SessionData | null;
+    isPending: boolean;
+    error: unknown;
+  };
   signIn: unknown;
   signOut: unknown;
   signUp: unknown;

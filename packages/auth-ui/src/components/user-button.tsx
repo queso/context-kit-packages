@@ -1,11 +1,11 @@
 "use client";
 
-import * as React from "react";
 import Link from "next/link";
-import { useAuthContext } from "./auth-provider";
+import * as React from "react";
 import { useSession } from "../hooks/use-session";
 import { cn } from "../lib/utils";
-import { Avatar, AvatarImage, AvatarFallback } from "./ui/avatar";
+import { useAuthContext } from "./auth-provider";
+import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 
 export type UserButtonProps = {
   onSignOut?: () => void;
@@ -35,7 +35,10 @@ export function UserButton({
   React.useEffect(() => {
     if (!open) return;
     const handleOutsideClick = (event: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(event.target as Node)
+      ) {
         setOpen(false);
       }
     };
@@ -65,7 +68,10 @@ export function UserButton({
       >
         <Avatar className={classNames?.avatar}>
           {user.image ? (
-            <AvatarImage src={user.image as string} alt={user.name ?? "User avatar"} />
+            <AvatarImage
+              src={user.image as string}
+              alt={user.name ?? "User avatar"}
+            />
           ) : null}
           <AvatarFallback>{initials}</AvatarFallback>
         </Avatar>
@@ -81,7 +87,9 @@ export function UserButton({
           {/* User info label */}
           <div className="px-2 py-1.5 text-sm font-semibold">
             <div>{user.name}</div>
-            <div className="text-xs font-normal text-muted-foreground">{user.email}</div>
+            <div className="text-xs font-normal text-muted-foreground">
+              {user.email}
+            </div>
           </div>
           <div className="-mx-1 my-1 h-px bg-muted" role="separator" />
           {/* Profile link */}

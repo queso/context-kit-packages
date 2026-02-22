@@ -1,7 +1,7 @@
 "use client";
 
-import * as React from "react";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
+import type * as React from "react";
 import { cn } from "../../lib/utils";
 
 export function DropdownMenu(
@@ -11,7 +11,9 @@ export function DropdownMenu(
 }
 
 export function DropdownMenuTrigger(
-  props: React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Trigger> & {
+  props: React.ComponentPropsWithoutRef<
+    typeof DropdownMenuPrimitive.Trigger
+  > & {
     ref?: React.Ref<React.ElementRef<typeof DropdownMenuPrimitive.Trigger>>;
   }
 ) {
@@ -86,7 +88,11 @@ export function DropdownMenuLabel({
   return (
     <DropdownMenuPrimitive.Label
       ref={ref}
-      className={cn("px-2 py-1.5 text-sm font-semibold", inset && "pl-8", className)}
+      className={cn(
+        "px-2 py-1.5 text-sm font-semibold",
+        inset && "pl-8",
+        className
+      )}
       {...props}
     />
   );

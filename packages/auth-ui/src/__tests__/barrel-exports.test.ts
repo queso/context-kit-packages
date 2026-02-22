@@ -1,7 +1,7 @@
-import { describe, test, expect } from "bun:test";
+import { describe, expect, test } from "bun:test";
+import { execSync } from "child_process";
 import { existsSync } from "fs";
 import { resolve } from "path";
-import { execSync } from "child_process";
 
 const pkgRoot = resolve(import.meta.dir, "../..");
 
@@ -19,9 +19,7 @@ describe("barrel exports", () => {
         "SessionManagement",
       ];
       for (const name of formComponents) {
-        expect(typeof (mod as Record<string, unknown>)[name]).toBe(
-          "function",
-        );
+        expect(typeof (mod as Record<string, unknown>)[name]).toBe("function");
       }
     });
 
@@ -29,16 +27,14 @@ describe("barrel exports", () => {
       const mod = await import("../index");
       const utilityComponents = ["UserButton", "AuthGuard", "SocialButton"];
       for (const name of utilityComponents) {
-        expect(typeof (mod as Record<string, unknown>)[name]).toBe(
-          "function",
-        );
+        expect(typeof (mod as Record<string, unknown>)[name]).toBe("function");
       }
     });
 
     test("should export AuthRouter as a function", async () => {
       const mod = await import("../index");
       expect(typeof (mod as Record<string, unknown>)["AuthRouter"]).toBe(
-        "function",
+        "function"
       );
     });
 
@@ -54,9 +50,7 @@ describe("barrel exports", () => {
         "SessionManagementPage",
       ];
       for (const name of pageComponents) {
-        expect(typeof (mod as Record<string, unknown>)[name]).toBe(
-          "function",
-        );
+        expect(typeof (mod as Record<string, unknown>)[name]).toBe("function");
       }
     });
 
@@ -72,13 +66,13 @@ describe("barrel exports", () => {
     test("should export AuthProvider, useAuth, and useSession as functions", async () => {
       const mod = await import("../client");
       expect(typeof (mod as Record<string, unknown>)["AuthProvider"]).toBe(
-        "function",
+        "function"
       );
       expect(typeof (mod as Record<string, unknown>)["useAuth"]).toBe(
-        "function",
+        "function"
       );
       expect(typeof (mod as Record<string, unknown>)["useSession"]).toBe(
-        "function",
+        "function"
       );
     });
 

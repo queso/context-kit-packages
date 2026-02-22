@@ -5,11 +5,11 @@ export { getSession, getUser } from "./session";
 export type {
   AuthConfig,
   AuthInstance,
-  SessionData,
-  PasswordRules,
   // Better Auth re-exports
   BetterAuthPlugin,
+  PasswordRules,
+  Session,
+  SessionData,
   SocialProviders,
   User,
-  Session,
 } from "./types";

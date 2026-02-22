@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { render, screen } from "@testing-library/react";
 import { existsSync } from "fs";
 import { resolve } from "path";
@@ -114,7 +114,14 @@ describe("Button component", () => {
 
   test("Button renders all variants without errors", async () => {
     const { Button, buttonVariants } = await import("../components/ui/button");
-    const variants = ["default", "destructive", "outline", "secondary", "ghost", "link"] as const;
+    const variants = [
+      "default",
+      "destructive",
+      "outline",
+      "secondary",
+      "ghost",
+      "link",
+    ] as const;
     for (const variant of variants) {
       const { unmount } = render(<Button variant={variant}>{variant}</Button>);
       expect(screen.getByRole("button", { name: variant })).toBeDefined();
@@ -227,8 +234,14 @@ describe("Card components", () => {
   });
 
   test("Card composes sub-components without errors", async () => {
-    const { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } =
-      await import("../components/ui/card");
+    const {
+      Card,
+      CardHeader,
+      CardTitle,
+      CardDescription,
+      CardContent,
+      CardFooter,
+    } = await import("../components/ui/card");
     render(
       <Card>
         <CardHeader>
@@ -332,7 +345,9 @@ describe("DropdownMenu components", () => {
   });
 
   test("DropdownMenu renders trigger without errors", async () => {
-    const { DropdownMenu, DropdownMenuTrigger } = await import("../components/ui/dropdown-menu");
+    const { DropdownMenu, DropdownMenuTrigger } = await import(
+      "../components/ui/dropdown-menu"
+    );
     render(
       <DropdownMenu>
         <DropdownMenuTrigger>Open menu</DropdownMenuTrigger>

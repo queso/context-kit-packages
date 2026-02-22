@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { render, screen } from "@testing-library/react";
 import { existsSync } from "fs";
 import { resolve } from "path";
@@ -88,7 +88,9 @@ describe("icon SVG rendering", () => {
   });
 
   test("MicrosoftIcon renders an svg element", async () => {
-    const { MicrosoftIcon } = await import("../components/icons/provider-icons");
+    const { MicrosoftIcon } = await import(
+      "../components/icons/provider-icons"
+    );
     const { container } = render(<MicrosoftIcon />);
     expect(container.querySelector("svg")).toBeDefined();
   });
@@ -318,13 +320,17 @@ describe("SocialButton component", () => {
 
   test("SocialButton renders no svg icon for unknown provider", async () => {
     const { SocialButton } = await import("../components/social-button");
-    const { container } = render(<SocialButton provider="unknown-provider-xyz" />);
+    const { container } = render(
+      <SocialButton provider="unknown-provider-xyz" />
+    );
     expect(container.querySelector("svg")).toBeNull();
   });
 
   test("SocialButton renders gracefully for unknown provider without crashing", async () => {
     const { SocialButton } = await import("../components/social-button");
-    expect(() => render(<SocialButton provider="unknown-provider-xyz" />)).not.toThrow();
+    expect(() =>
+      render(<SocialButton provider="unknown-provider-xyz" />)
+    ).not.toThrow();
     expect(screen.getByRole("button")).toBeDefined();
   });
 
@@ -351,7 +357,14 @@ describe("SocialButton component", () => {
   test("SocialButton calls onClick when clicked", async () => {
     const { SocialButton } = await import("../components/social-button");
     let clicked = false;
-    render(<SocialButton provider="google" onClick={() => { clicked = true; }} />);
+    render(
+      <SocialButton
+        provider="google"
+        onClick={() => {
+          clicked = true;
+        }}
+      />
+    );
     screen.getByRole("button").click();
     expect(clicked).toBe(true);
   });
@@ -359,7 +372,15 @@ describe("SocialButton component", () => {
   test("SocialButton does not call onClick when disabled", async () => {
     const { SocialButton } = await import("../components/social-button");
     let clicked = false;
-    render(<SocialButton provider="google" disabled onClick={() => { clicked = true; }} />);
+    render(
+      <SocialButton
+        provider="google"
+        disabled
+        onClick={() => {
+          clicked = true;
+        }}
+      />
+    );
     screen.getByRole("button").click();
     expect(clicked).toBe(false);
   });
@@ -369,20 +390,28 @@ describe("SocialButton component", () => {
     render(<SocialButton provider="google" loading />);
     const btn = screen.getByRole("button") as HTMLButtonElement;
     // Loading should disable interaction
-    expect(btn.disabled || btn.getAttribute("aria-busy") === "true" || btn.getAttribute("data-loading") === "true").toBe(true);
+    expect(
+      btn.disabled ||
+        btn.getAttribute("aria-busy") === "true" ||
+        btn.getAttribute("data-loading") === "true"
+    ).toBe(true);
   });
 
   test("SocialButton renderIcon prop overrides the default icon", async () => {
     const { SocialButton } = await import("../components/social-button");
     const CustomIcon = () => <svg data-testid="custom-icon" />;
-    render(<SocialButton provider="google" renderIcon={() => <CustomIcon />} />);
+    render(
+      <SocialButton provider="google" renderIcon={() => <CustomIcon />} />
+    );
     expect(screen.getByTestId("custom-icon")).toBeDefined();
   });
 
   test("SocialButton renderIcon prop replaces the built-in GoogleIcon", async () => {
     const { SocialButton } = await import("../components/social-button");
     // Render with default first to confirm svg is there
-    const { unmount, container: c1 } = render(<SocialButton provider="google" />);
+    const { unmount, container: c1 } = render(
+      <SocialButton provider="google" />
+    );
     expect(c1.querySelector("svg")).toBeDefined();
     unmount();
 

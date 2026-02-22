@@ -1,8 +1,14 @@
-import { describe, test, expect, mock, beforeEach } from "bun:test";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { existsSync } from "fs";
 import { resolve } from "path";
-import React from "react";
+import type React from "react";
 
 const pkgRoot = resolve(import.meta.dir, "../..");
 
@@ -24,7 +30,12 @@ const mockSignUp = mock(() => Promise.resolve({ data: null, error: null }));
 // Default: active session with a user
 const mockUseSession = mock(() => ({
   data: {
-    user: { id: "user-1", name: "Test User", email: "test@example.com", image: null },
+    user: {
+      id: "user-1",
+      name: "Test User",
+      email: "test@example.com",
+      image: null,
+    },
     session: { id: "session-1", userId: "user-1" },
   },
   isPending: false,
@@ -51,7 +62,11 @@ mock.module("@context-kit/auth/client", () => ({
 
 const mockPush = mock(() => {});
 const mockReplace = mock(() => {});
-const mockUseRouter = mock(() => ({ push: mockPush, replace: mockReplace, back: mock(() => {}) }));
+const mockUseRouter = mock(() => ({
+  push: mockPush,
+  replace: mockReplace,
+  back: mock(() => {}),
+}));
 
 mock.module("next/navigation", () => ({
   useRouter: mockUseRouter,
@@ -66,7 +81,9 @@ mock.module("next/navigation", () => ({
 async function getWrapper() {
   const { AuthProvider } = await import("../components/auth-provider");
   return function Wrapper({ children }: { children: React.ReactNode }) {
-    return <AuthProvider baseURL="http://localhost:3000">{children}</AuthProvider>;
+    return (
+      <AuthProvider baseURL="http://localhost:3000">{children}</AuthProvider>
+    );
   };
 }
 
@@ -99,7 +116,12 @@ describe("UserProfile rendering", () => {
   beforeEach(() => {
     mockUseSession.mockReturnValue({
       data: {
-        user: { id: "user-1", name: "Test User", email: "test@example.com", image: null },
+        user: {
+          id: "user-1",
+          name: "Test User",
+          email: "test@example.com",
+          image: null,
+        },
         session: { id: "session-1", userId: "user-1" },
       },
       isPending: false,
@@ -128,17 +150,22 @@ describe("UserProfile rendering", () => {
     // Avatar primitive renders a container div; presence of avatar region
     expect(
       container.querySelector("[data-slot='avatar']") ??
-      container.querySelector(".avatar") ??
-      container.querySelector("[class*='avatar']") ??
-      // fallback: any element showing the initials
-      screen.queryByText("T")
+        container.querySelector(".avatar") ??
+        container.querySelector("[class*='avatar']") ??
+        // fallback: any element showing the initials
+        screen.queryByText("T")
     ).toBeDefined();
   });
 
   test("avatar shows first-letter initials fallback when image is null", async () => {
     mockUseSession.mockReturnValue({
       data: {
-        user: { id: "user-1", name: "Test User", email: "test@example.com", image: null },
+        user: {
+          id: "user-1",
+          name: "Test User",
+          email: "test@example.com",
+          image: null,
+        },
         session: { id: "session-1", userId: "user-1" },
       },
       isPending: false,
@@ -154,7 +181,12 @@ describe("UserProfile rendering", () => {
   test("avatar initials fallback uses first letter of name", async () => {
     mockUseSession.mockReturnValue({
       data: {
-        user: { id: "user-2", name: "Alice Smith", email: "alice@example.com", image: null },
+        user: {
+          id: "user-2",
+          name: "Alice Smith",
+          email: "alice@example.com",
+          image: null,
+        },
         session: { id: "session-2", userId: "user-2" },
       },
       isPending: false,
@@ -181,7 +213,12 @@ describe("inline editing — name", () => {
   beforeEach(() => {
     mockUseSession.mockReturnValue({
       data: {
-        user: { id: "user-1", name: "Test User", email: "test@example.com", image: null },
+        user: {
+          id: "user-1",
+          name: "Test User",
+          email: "test@example.com",
+          image: null,
+        },
         session: { id: "session-1", userId: "user-1" },
       },
       isPending: false,
@@ -201,7 +238,7 @@ describe("inline editing — name", () => {
       // An input should now be visible
       expect(
         screen.queryByDisplayValue("Test User") ??
-        screen.queryByRole("textbox", { name: /name/i })
+          screen.queryByRole("textbox", { name: /name/i })
       ).toBeDefined();
     });
   });
@@ -239,8 +276,11 @@ describe("inline editing — name", () => {
     });
 
     // Change the value then cancel
-    const input = screen.queryByDisplayValue("Test User") ??
-      screen.queryByRole("textbox", { name: /name/i }) as HTMLInputElement | null;
+    const input =
+      screen.queryByDisplayValue("Test User") ??
+      (screen.queryByRole("textbox", {
+        name: /name/i,
+      }) as HTMLInputElement | null);
     if (input) {
       fireEvent.change(input, { target: { value: "Changed Name" } });
     }
@@ -264,7 +304,7 @@ describe("inline editing — name", () => {
     await waitFor(() => {
       expect(
         screen.queryByDisplayValue("Test User") ??
-        screen.queryByRole("textbox", { name: /name/i })
+          screen.queryByRole("textbox", { name: /name/i })
       ).toBeDefined();
     });
 
@@ -276,7 +316,9 @@ describe("inline editing — name", () => {
     await waitFor(() => {
       expect(mockUpdateUser).toHaveBeenCalledTimes(1);
     });
-    const callArg = mockUpdateUser.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    const callArg = mockUpdateUser.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
     expect(callArg?.name).toBe("Updated Name");
   });
 
@@ -289,7 +331,7 @@ describe("inline editing — name", () => {
     await waitFor(() => {
       expect(
         screen.queryByDisplayValue("Test User") ??
-        screen.queryByRole("textbox", { name: /name/i })
+          screen.queryByRole("textbox", { name: /name/i })
       ).toBeDefined();
     });
 
@@ -323,7 +365,12 @@ describe("inline editing — email", () => {
   beforeEach(() => {
     mockUseSession.mockReturnValue({
       data: {
-        user: { id: "user-1", name: "Test User", email: "test@example.com", image: null },
+        user: {
+          id: "user-1",
+          name: "Test User",
+          email: "test@example.com",
+          image: null,
+        },
         session: { id: "session-1", userId: "user-1" },
       },
       isPending: false,
@@ -341,7 +388,7 @@ describe("inline editing — email", () => {
     await waitFor(() => {
       expect(
         screen.queryByDisplayValue("test@example.com") ??
-        screen.queryByRole("textbox", { name: /email/i })
+          screen.queryByRole("textbox", { name: /email/i })
       ).toBeDefined();
     });
   });
@@ -367,7 +414,7 @@ describe("inline editing — email", () => {
     await waitFor(() => {
       expect(
         screen.queryByDisplayValue("test@example.com") ??
-        screen.queryByRole("textbox", { name: /email/i })
+          screen.queryByRole("textbox", { name: /email/i })
       ).toBeDefined();
     });
 
@@ -379,7 +426,9 @@ describe("inline editing — email", () => {
     await waitFor(() => {
       expect(mockUpdateUser).toHaveBeenCalledTimes(1);
     });
-    const callArg = mockUpdateUser.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    const callArg = mockUpdateUser.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
     expect(callArg?.email).toBe("new@example.com");
   });
 
@@ -392,7 +441,7 @@ describe("inline editing — email", () => {
     await waitFor(() => {
       expect(
         screen.queryByDisplayValue("test@example.com") ??
-        screen.queryByRole("textbox", { name: /email/i })
+          screen.queryByRole("textbox", { name: /email/i })
       ).toBeDefined();
     });
 
@@ -438,7 +487,12 @@ describe("save feedback", () => {
   beforeEach(() => {
     mockUseSession.mockReturnValue({
       data: {
-        user: { id: "user-1", name: "Test User", email: "test@example.com", image: null },
+        user: {
+          id: "user-1",
+          name: "Test User",
+          email: "test@example.com",
+          image: null,
+        },
         session: { id: "session-1", userId: "user-1" },
       },
       isPending: false,
@@ -457,7 +511,7 @@ describe("save feedback", () => {
     await waitFor(() => {
       expect(
         screen.queryByDisplayValue("Test User") ??
-        screen.queryByRole("textbox", { name: /name/i })
+          screen.queryByRole("textbox", { name: /name/i })
       ).toBeDefined();
     });
 
@@ -484,7 +538,7 @@ describe("save feedback", () => {
     await waitFor(() => {
       expect(
         screen.queryByDisplayValue("Test User") ??
-        screen.queryByRole("textbox", { name: /name/i })
+          screen.queryByRole("textbox", { name: /name/i })
       ).toBeDefined();
     });
 
@@ -494,7 +548,9 @@ describe("save feedback", () => {
     fireEvent.click(screen.getByRole("button", { name: /save/i }));
 
     await waitFor(() => {
-      expect(screen.getByText(/error|failed|something went wrong/i)).toBeDefined();
+      expect(
+        screen.getByText(/error|failed|something went wrong/i)
+      ).toBeDefined();
     });
   });
 
@@ -512,7 +568,7 @@ describe("save feedback", () => {
     await waitFor(() => {
       expect(
         screen.queryByDisplayValue("Test User") ??
-        screen.queryByRole("textbox", { name: /name/i })
+          screen.queryByRole("textbox", { name: /name/i })
       ).toBeDefined();
     });
 
@@ -522,7 +578,9 @@ describe("save feedback", () => {
     fireEvent.click(screen.getByRole("button", { name: /save/i }));
 
     await waitFor(() => {
-      expect(screen.getByText(/error|failed|something went wrong/i)).toBeDefined();
+      expect(
+        screen.getByText(/error|failed|something went wrong/i)
+      ).toBeDefined();
     });
 
     console.error = origError;
@@ -531,7 +589,11 @@ describe("save feedback", () => {
 
   test("save button is disabled during save loading", async () => {
     let resolve!: (v: unknown) => void;
-    mockUpdateUser.mockReturnValue(new Promise((res) => { resolve = res; }));
+    mockUpdateUser.mockReturnValue(
+      new Promise((res) => {
+        resolve = res;
+      })
+    );
 
     const { UserProfile } = await import("../components/user-profile");
     const Wrapper = await getWrapper();
@@ -541,7 +603,7 @@ describe("save feedback", () => {
     await waitFor(() => {
       expect(
         screen.queryByDisplayValue("Test User") ??
-        screen.queryByRole("textbox", { name: /name/i })
+          screen.queryByRole("textbox", { name: /name/i })
       ).toBeDefined();
     });
 
@@ -553,7 +615,9 @@ describe("save feedback", () => {
       fireEvent.click(screen.getByRole("button", { name: /save/i }));
     });
 
-    const saveBtn = screen.getByRole("button", { name: /save/i }) as HTMLButtonElement;
+    const saveBtn = screen.getByRole("button", {
+      name: /save/i,
+    }) as HTMLButtonElement;
     expect(
       saveBtn.disabled || saveBtn.getAttribute("aria-disabled") === "true"
     ).toBe(true);
@@ -568,7 +632,11 @@ describe("save feedback", () => {
 
 describe("unauthenticated redirect", () => {
   test("redirects to sign-in when session has no user", async () => {
-    mockUseSession.mockReturnValue({ data: null, isPending: false, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: false,
+      error: null,
+    });
     mockPush.mockClear();
 
     const { UserProfile } = await import("../components/user-profile");
@@ -583,7 +651,11 @@ describe("unauthenticated redirect", () => {
   });
 
   test("does not redirect when session is loading (isPending true)", async () => {
-    mockUseSession.mockReturnValue({ data: null, isPending: true, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: true,
+      error: null,
+    });
     mockPush.mockClear();
 
     const { UserProfile } = await import("../components/user-profile");
@@ -597,7 +669,12 @@ describe("unauthenticated redirect", () => {
     // Reset
     mockUseSession.mockReturnValue({
       data: {
-        user: { id: "user-1", name: "Test User", email: "test@example.com", image: null },
+        user: {
+          id: "user-1",
+          name: "Test User",
+          email: "test@example.com",
+          image: null,
+        },
         session: { id: "session-1", userId: "user-1" },
       },
       isPending: false,
@@ -614,7 +691,12 @@ describe("className and classNames props", () => {
   beforeEach(() => {
     mockUseSession.mockReturnValue({
       data: {
-        user: { id: "user-1", name: "Test User", email: "test@example.com", image: null },
+        user: {
+          id: "user-1",
+          name: "Test User",
+          email: "test@example.com",
+          image: null,
+        },
         session: { id: "session-1", userId: "user-1" },
       },
       isPending: false,
@@ -625,7 +707,9 @@ describe("className and classNames props", () => {
   test("accepts className prop on the root element", async () => {
     const { UserProfile } = await import("../components/user-profile");
     const Wrapper = await getWrapper();
-    const { container } = render(<UserProfile className="custom-profile" />, { wrapper: Wrapper });
+    const { container } = render(<UserProfile className="custom-profile" />, {
+      wrapper: Wrapper,
+    });
     expect(container.querySelector(".custom-profile")).toBeDefined();
   });
 
@@ -652,17 +736,16 @@ describe("className and classNames props", () => {
   test("accepts classNames.saveButton override", async () => {
     const { UserProfile } = await import("../components/user-profile");
     const Wrapper = await getWrapper();
-    render(
-      <UserProfile classNames={{ saveButton: "custom-save-btn" }} />,
-      { wrapper: Wrapper }
-    );
+    render(<UserProfile classNames={{ saveButton: "custom-save-btn" }} />, {
+      wrapper: Wrapper,
+    });
 
     // Enter edit mode to reveal save button
     fireEvent.click(screen.getByText("Test User"));
     await waitFor(() => {
       expect(
         screen.queryByDisplayValue("Test User") ??
-        screen.queryByRole("textbox", { name: /name/i })
+          screen.queryByRole("textbox", { name: /name/i })
       ).toBeDefined();
     });
 

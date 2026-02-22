@@ -1,7 +1,7 @@
 "use client";
 
-import * as React from "react";
 import { useRouter } from "next/navigation";
+import * as React from "react";
 import { useSession } from "../hooks/use-session";
 import { cn } from "../lib/utils";
 
@@ -35,7 +35,11 @@ export function AuthGuard({
       return <>{loadingComponent}</>;
     }
     return (
-      <div className={cn("flex items-center justify-center", className)} role="status" aria-busy="true">
+      <div
+        className={cn("flex items-center justify-center", className)}
+        role="status"
+        aria-busy="true"
+      >
         <div className="animate-spin h-6 w-6 rounded-full border-2 border-current border-t-transparent" />
       </div>
     );

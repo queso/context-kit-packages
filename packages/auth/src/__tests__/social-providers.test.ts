@@ -1,5 +1,5 @@
-import { describe, test, expect } from "bun:test";
-import { validConfig, setupEnvGuard } from "./helpers";
+import { describe, expect, test } from "bun:test";
+import { setupEnvGuard, validConfig } from "./helpers";
 
 setupEnvGuard();
 

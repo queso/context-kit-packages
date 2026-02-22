@@ -1,8 +1,14 @@
-import { describe, test, expect, mock, beforeEach, afterEach } from "bun:test";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { existsSync } from "fs";
 import { resolve } from "path";
-import React from "react";
+import type React from "react";
 
 const pkgRoot = resolve(import.meta.dir, "../..");
 
@@ -21,7 +27,11 @@ const mockForgetPassword = mock(() =>
 const mockResetPassword = mock(() =>
   Promise.resolve({ data: { status: true }, error: null })
 );
-const mockUseSession = mock(() => ({ data: null, isPending: false, error: null }));
+const mockUseSession = mock(() => ({
+  data: null,
+  isPending: false,
+  error: null,
+}));
 const mockSignIn = mock(() => Promise.resolve({ data: null, error: null }));
 const mockSignOut = mock(() => Promise.resolve({ data: null, error: null }));
 const mockSignUp = mock(() => Promise.resolve({ data: null, error: null }));
@@ -53,7 +63,11 @@ const mockGet = mock((key: string) => {
 const mockSearchParams = { get: mockGet };
 const mockUseSearchParams = mock(() => mockSearchParams);
 const mockPush = mock(() => {});
-const mockUseRouter = mock(() => ({ push: mockPush, replace: mock(() => {}), back: mock(() => {}) }));
+const mockUseRouter = mock(() => ({
+  push: mockPush,
+  replace: mock(() => {}),
+  back: mock(() => {}),
+}));
 
 mock.module("next/navigation", () => ({
   useSearchParams: mockUseSearchParams,
@@ -68,7 +82,9 @@ mock.module("next/navigation", () => ({
 async function getWrapper() {
   const { AuthProvider } = await import("../components/auth-provider");
   return function Wrapper({ children }: { children: React.ReactNode }) {
-    return <AuthProvider baseURL="http://localhost:3000">{children}</AuthProvider>;
+    return (
+      <AuthProvider baseURL="http://localhost:3000">{children}</AuthProvider>
+    );
   };
 }
 
@@ -102,7 +118,9 @@ describe("forgotPasswordSchema", () => {
 
   test("forgotPasswordSchema accepts a valid email", async () => {
     const { forgotPasswordSchema } = await import("../lib/schemas");
-    const result = forgotPasswordSchema.safeParse({ email: "user@example.com" });
+    const result = forgotPasswordSchema.safeParse({
+      email: "user@example.com",
+    });
     expect(result.success).toBe(true);
   });
 
@@ -133,36 +151,49 @@ describe("resetPasswordSchema", () => {
 
   test("resetPasswordSchema accepts valid matching passwords with default rules", async () => {
     const { resetPasswordSchema } = await import("../lib/schemas");
-    const schema = typeof resetPasswordSchema === "function"
-      ? resetPasswordSchema({})
-      : resetPasswordSchema;
-    const result = schema.safeParse({ password: "Password1!", confirmPassword: "Password1!" });
+    const schema =
+      typeof resetPasswordSchema === "function"
+        ? resetPasswordSchema({})
+        : resetPasswordSchema;
+    const result = schema.safeParse({
+      password: "Password1!",
+      confirmPassword: "Password1!",
+    });
     expect(result.success).toBe(true);
   });
 
   test("resetPasswordSchema rejects mismatched passwords", async () => {
     const { resetPasswordSchema } = await import("../lib/schemas");
-    const schema = typeof resetPasswordSchema === "function"
-      ? resetPasswordSchema({})
-      : resetPasswordSchema;
-    const result = schema.safeParse({ password: "Password1!", confirmPassword: "Different1!" });
+    const schema =
+      typeof resetPasswordSchema === "function"
+        ? resetPasswordSchema({})
+        : resetPasswordSchema;
+    const result = schema.safeParse({
+      password: "Password1!",
+      confirmPassword: "Different1!",
+    });
     expect(result.success).toBe(false);
   });
 
   test("resetPasswordSchema rejects password shorter than minLength", async () => {
     const { resetPasswordSchema } = await import("../lib/schemas");
-    const schema = typeof resetPasswordSchema === "function"
-      ? resetPasswordSchema({ minLength: 12 })
-      : resetPasswordSchema;
-    const result = schema.safeParse({ password: "Short1!", confirmPassword: "Short1!" });
+    const schema =
+      typeof resetPasswordSchema === "function"
+        ? resetPasswordSchema({ minLength: 12 })
+        : resetPasswordSchema;
+    const result = schema.safeParse({
+      password: "Short1!",
+      confirmPassword: "Short1!",
+    });
     expect(result.success).toBe(false);
   });
 
   test("resetPasswordSchema accepts password meeting custom minLength", async () => {
     const { resetPasswordSchema } = await import("../lib/schemas");
-    const schema = typeof resetPasswordSchema === "function"
-      ? resetPasswordSchema({ minLength: 12 })
-      : resetPasswordSchema;
+    const schema =
+      typeof resetPasswordSchema === "function"
+        ? resetPasswordSchema({ minLength: 12 })
+        : resetPasswordSchema;
     const pwd = "LongEnough12!";
     const result = schema.safeParse({ password: pwd, confirmPassword: pwd });
     expect(result.success).toBe(true);
@@ -170,18 +201,20 @@ describe("resetPasswordSchema", () => {
 
   test("resetPasswordSchema rejects empty password", async () => {
     const { resetPasswordSchema } = await import("../lib/schemas");
-    const schema = typeof resetPasswordSchema === "function"
-      ? resetPasswordSchema({})
-      : resetPasswordSchema;
+    const schema =
+      typeof resetPasswordSchema === "function"
+        ? resetPasswordSchema({})
+        : resetPasswordSchema;
     const result = schema.safeParse({ password: "", confirmPassword: "" });
     expect(result.success).toBe(false);
   });
 
   test("resetPasswordSchema rejects missing fields", async () => {
     const { resetPasswordSchema } = await import("../lib/schemas");
-    const schema = typeof resetPasswordSchema === "function"
-      ? resetPasswordSchema({})
-      : resetPasswordSchema;
+    const schema =
+      typeof resetPasswordSchema === "function"
+        ? resetPasswordSchema({})
+        : resetPasswordSchema;
     const result = schema.safeParse({});
     expect(result.success).toBe(false);
   });
@@ -212,7 +245,9 @@ describe("ForgotPassword component", () => {
     const { ForgotPassword } = await import("../components/forgot-password");
     const Wrapper = await getWrapper();
     render(<ForgotPassword />, { wrapper: Wrapper });
-    expect(screen.getByRole("button", { name: /send|reset|submit/i })).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: /send|reset|submit/i })
+    ).toBeDefined();
   });
 
   test("ForgotPassword renders a 'Back to sign in' link", async () => {
@@ -231,7 +266,10 @@ describe("ForgotPassword component", () => {
   });
 
   test("ForgotPassword calls authClient.forgetPassword with submitted email", async () => {
-    mockForgetPassword.mockResolvedValue({ data: { status: true }, error: null });
+    mockForgetPassword.mockResolvedValue({
+      data: { status: true },
+      error: null,
+    });
     const { ForgotPassword } = await import("../components/forgot-password");
     const Wrapper = await getWrapper();
     render(<ForgotPassword />, { wrapper: Wrapper });
@@ -243,12 +281,17 @@ describe("ForgotPassword component", () => {
     await waitFor(() => {
       expect(mockForgetPassword).toHaveBeenCalledTimes(1);
     });
-    const callArg = mockForgetPassword.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    const callArg = mockForgetPassword.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
     expect(callArg?.email).toBe("user@example.com");
   });
 
   test("ForgotPassword shows success message after submission regardless of email existence", async () => {
-    mockForgetPassword.mockResolvedValue({ data: { status: true }, error: null });
+    mockForgetPassword.mockResolvedValue({
+      data: { status: true },
+      error: null,
+    });
     const { ForgotPassword } = await import("../components/forgot-password");
     const Wrapper = await getWrapper();
     render(<ForgotPassword />, { wrapper: Wrapper });
@@ -266,7 +309,10 @@ describe("ForgotPassword component", () => {
 
   test("ForgotPassword shows success message even when email does not exist (prevents enumeration)", async () => {
     // Simulates server returning error (no account) but UI must still show success message
-    mockForgetPassword.mockResolvedValue({ data: null, error: { message: "User not found" } });
+    mockForgetPassword.mockResolvedValue({
+      data: null,
+      error: { message: "User not found" },
+    });
     const { ForgotPassword } = await import("../components/forgot-password");
     const Wrapper = await getWrapper();
     render(<ForgotPassword />, { wrapper: Wrapper });
@@ -284,7 +330,11 @@ describe("ForgotPassword component", () => {
 
   test("ForgotPassword disables submit button during loading", async () => {
     let resolveRequest!: (v: unknown) => void;
-    mockForgetPassword.mockReturnValue(new Promise((res) => { resolveRequest = res; }));
+    mockForgetPassword.mockReturnValue(
+      new Promise((res) => {
+        resolveRequest = res;
+      })
+    );
 
     const { ForgotPassword } = await import("../components/forgot-password");
     const Wrapper = await getWrapper();
@@ -297,8 +347,12 @@ describe("ForgotPassword component", () => {
       fireEvent.submit(emailInput.closest("form")!);
     });
 
-    const submitBtn = screen.getByRole("button", { name: /send|reset|submit/i }) as HTMLButtonElement;
-    expect(submitBtn.disabled || submitBtn.getAttribute("aria-disabled") === "true").toBe(true);
+    const submitBtn = screen.getByRole("button", {
+      name: /send|reset|submit/i,
+    }) as HTMLButtonElement;
+    expect(
+      submitBtn.disabled || submitBtn.getAttribute("aria-disabled") === "true"
+    ).toBe(true);
 
     // Resolve to avoid dangling promises
     resolveRequest({ data: { status: true }, error: null });
@@ -344,7 +398,9 @@ describe("ForgotPassword component", () => {
   test("ForgotPassword accepts className prop", async () => {
     const { ForgotPassword } = await import("../components/forgot-password");
     const Wrapper = await getWrapper();
-    const { container } = render(<ForgotPassword className="custom-forgot" />, { wrapper: Wrapper });
+    const { container } = render(<ForgotPassword className="custom-forgot" />, {
+      wrapper: Wrapper,
+    });
     expect(container.querySelector(".custom-forgot")).toBeDefined();
   });
 });
@@ -386,14 +442,19 @@ describe("ResetPassword component", () => {
     const { ResetPassword } = await import("../components/reset-password");
     const Wrapper = await getWrapper();
     render(<ResetPassword />, { wrapper: Wrapper });
-    expect(screen.getByRole("button", { name: /reset|submit|update/i })).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: /reset|submit|update/i })
+    ).toBeDefined();
   });
 
   test("ResetPassword reads token from URL via useSearchParams", async () => {
     mockGet.mockImplementation((key: string) =>
       key === "token" ? "my-special-token" : null
     );
-    mockResetPassword.mockResolvedValue({ data: { status: true }, error: null });
+    mockResetPassword.mockResolvedValue({
+      data: { status: true },
+      error: null,
+    });
 
     const { ResetPassword } = await import("../components/reset-password");
     const Wrapper = await getWrapper();
@@ -408,12 +469,17 @@ describe("ResetPassword component", () => {
     await waitFor(() => {
       expect(mockResetPassword).toHaveBeenCalledTimes(1);
     });
-    const callArg = mockResetPassword.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    const callArg = mockResetPassword.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
     expect(callArg?.token).toBe("my-special-token");
   });
 
   test("ResetPassword submits new password to authClient.resetPassword", async () => {
-    mockResetPassword.mockResolvedValue({ data: { status: true }, error: null });
+    mockResetPassword.mockResolvedValue({
+      data: { status: true },
+      error: null,
+    });
 
     const { ResetPassword } = await import("../components/reset-password");
     const Wrapper = await getWrapper();
@@ -428,12 +494,17 @@ describe("ResetPassword component", () => {
     await waitFor(() => {
       expect(mockResetPassword).toHaveBeenCalledTimes(1);
     });
-    const callArg = mockResetPassword.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    const callArg = mockResetPassword.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
     expect(callArg?.newPassword ?? callArg?.password).toBe("NewPassword1!");
   });
 
   test("ResetPassword shows success message on successful reset", async () => {
-    mockResetPassword.mockResolvedValue({ data: { status: true }, error: null });
+    mockResetPassword.mockResolvedValue({
+      data: { status: true },
+      error: null,
+    });
 
     const { ResetPassword } = await import("../components/reset-password");
     const Wrapper = await getWrapper();
@@ -453,7 +524,10 @@ describe("ResetPassword component", () => {
   });
 
   test("ResetPassword shows link to sign-in on success", async () => {
-    mockResetPassword.mockResolvedValue({ data: { status: true }, error: null });
+    mockResetPassword.mockResolvedValue({
+      data: { status: true },
+      error: null,
+    });
 
     const { ResetPassword } = await import("../components/reset-password");
     const Wrapper = await getWrapper();
@@ -501,7 +575,8 @@ describe("ResetPassword component", () => {
     render(<ResetPassword />, { wrapper: Wrapper });
 
     // Either shows an error immediately, or on submit
-    const hasError = !!document.querySelector("[role='alert']") ||
+    const hasError =
+      !!document.querySelector("[role='alert']") ||
       screen.queryByText(/invalid|expired|missing|token/i) !== null;
 
     if (!hasError) {
@@ -511,7 +586,9 @@ describe("ResetPassword component", () => {
         const confirmInput = screen.queryByLabelText(/confirm password/i);
         if (confirmInput) {
           fireEvent.change(pwdInput, { target: { value: "NewPassword1!" } });
-          fireEvent.change(confirmInput, { target: { value: "NewPassword1!" } });
+          fireEvent.change(confirmInput, {
+            target: { value: "NewPassword1!" },
+          });
           fireEvent.submit(pwdInput.closest("form")!);
           await waitFor(() => {
             expect(mockResetPassword).not.toHaveBeenCalled();
@@ -523,13 +600,17 @@ describe("ResetPassword component", () => {
     // Either an error is shown, or resetPassword was never called — both are valid
     expect(
       mockResetPassword.mock.calls.length === 0 ||
-      screen.queryByText(/invalid|expired|missing|token/i) !== null
+        screen.queryByText(/invalid|expired|missing|token/i) !== null
     ).toBe(true);
   });
 
   test("ResetPassword disables submit button during loading", async () => {
     let resolveRequest!: (v: unknown) => void;
-    mockResetPassword.mockReturnValue(new Promise((res) => { resolveRequest = res; }));
+    mockResetPassword.mockReturnValue(
+      new Promise((res) => {
+        resolveRequest = res;
+      })
+    );
 
     const { ResetPassword } = await import("../components/reset-password");
     const Wrapper = await getWrapper();
@@ -544,8 +625,12 @@ describe("ResetPassword component", () => {
       fireEvent.submit(pwdInput.closest("form")!);
     });
 
-    const submitBtn = screen.getByRole("button", { name: /reset|submit|update/i }) as HTMLButtonElement;
-    expect(submitBtn.disabled || submitBtn.getAttribute("aria-disabled") === "true").toBe(true);
+    const submitBtn = screen.getByRole("button", {
+      name: /reset|submit|update/i,
+    }) as HTMLButtonElement;
+    expect(
+      submitBtn.disabled || submitBtn.getAttribute("aria-disabled") === "true"
+    ).toBe(true);
 
     resolveRequest({ data: { status: true }, error: null });
   });
@@ -603,14 +688,18 @@ describe("ResetPassword component", () => {
     fireEvent.submit(pwdInput.closest("form")!);
 
     await waitFor(() => {
-      expect(screen.getByText(/passwords.*match|match.*passwords|do not match/i)).toBeDefined();
+      expect(
+        screen.getByText(/passwords.*match|match.*passwords|do not match/i)
+      ).toBeDefined();
     });
   });
 
   test("ResetPassword enforces passwordRules minLength prop", async () => {
     const { ResetPassword } = await import("../components/reset-password");
     const Wrapper = await getWrapper();
-    render(<ResetPassword passwordRules={{ minLength: 12 }} />, { wrapper: Wrapper });
+    render(<ResetPassword passwordRules={{ minLength: 12 }} />, {
+      wrapper: Wrapper,
+    });
 
     const pwdInput = screen.getByLabelText(/new password|^password/i);
     const confirmInput = screen.getByLabelText(/confirm password/i);
@@ -627,7 +716,9 @@ describe("ResetPassword component", () => {
   test("ResetPassword accepts className prop", async () => {
     const { ResetPassword } = await import("../components/reset-password");
     const Wrapper = await getWrapper();
-    const { container } = render(<ResetPassword className="custom-reset" />, { wrapper: Wrapper });
+    const { container } = render(<ResetPassword className="custom-reset" />, {
+      wrapper: Wrapper,
+    });
     expect(container.querySelector(".custom-reset")).toBeDefined();
   });
 });

@@ -1,11 +1,14 @@
 "use client";
 
+import { zodResolver } from "@hookform/resolvers/zod";
 import * as React from "react";
 import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { useAuthContext } from "./auth-provider";
-import { forgotPasswordSchema, type ForgotPasswordFormValues } from "../lib/schemas";
+import {
+  type ForgotPasswordFormValues,
+  forgotPasswordSchema,
+} from "../lib/schemas";
 import { cn } from "../lib/utils";
+import { useAuthContext } from "./auth-provider";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
@@ -37,7 +40,10 @@ export function ForgotPassword({ className, classNames }: ForgotPasswordProps) {
   const onSubmit = async (values: ForgotPasswordFormValues) => {
     setNetworkError(null);
     try {
-      await (client as Record<string, Function>).forgetPassword({ email: values.email, redirectTo: "/reset-password" });
+      await (client as Record<string, Function>).forgetPassword({
+        email: values.email,
+        redirectTo: "/reset-password",
+      });
       // Always show success to prevent email enumeration
       setSubmitted(true);
     } catch {
@@ -49,7 +55,8 @@ export function ForgotPassword({ className, classNames }: ForgotPasswordProps) {
     return (
       <div className={cn("w-full max-w-md", className, classNames?.card)}>
         <p>
-          If an account exists with that email, we&apos;ve sent a password reset link.
+          If an account exists with that email, we&apos;ve sent a password reset
+          link.
         </p>
         <a href="/sign-in">Back to sign in</a>
       </div>

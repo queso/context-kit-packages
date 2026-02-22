@@ -1,8 +1,14 @@
-import { describe, test, expect, mock, beforeEach } from "bun:test";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { existsSync } from "fs";
 import { resolve } from "path";
-import React from "react";
+import type React from "react";
 
 const pkgRoot = resolve(import.meta.dir, "../..");
 
@@ -73,8 +79,12 @@ const mockAuthClient = {
   signIn: mock(() => Promise.resolve({ data: null, error: null })),
   signOut: mock(() => Promise.resolve({ data: null, error: null })),
   signUp: mock(() => Promise.resolve({ data: null, error: null })),
-  forgetPassword: mock(() => Promise.resolve({ data: { status: true }, error: null })),
-  resetPassword: mock(() => Promise.resolve({ data: { status: true }, error: null })),
+  forgetPassword: mock(() =>
+    Promise.resolve({ data: { status: true }, error: null })
+  ),
+  resetPassword: mock(() =>
+    Promise.resolve({ data: { status: true }, error: null })
+  ),
 };
 
 mock.module("@context-kit/auth/client", () => ({
@@ -105,7 +115,9 @@ mock.module("next/navigation", () => ({
 async function getWrapper() {
   const { AuthProvider } = await import("../components/auth-provider");
   return function Wrapper({ children }: { children: React.ReactNode }) {
-    return <AuthProvider baseURL="http://localhost:3000">{children}</AuthProvider>;
+    return (
+      <AuthProvider baseURL="http://localhost:3000">{children}</AuthProvider>
+    );
   };
 }
 
@@ -152,7 +164,9 @@ describe("SessionManagement session list rendering", () => {
   });
 
   test("calls authClient.listSessions() on mount", async () => {
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagement />, { wrapper: Wrapper });
 
@@ -162,7 +176,9 @@ describe("SessionManagement session list rendering", () => {
   });
 
   test("renders session list after fetching", async () => {
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagement />, { wrapper: Wrapper });
 
@@ -174,7 +190,9 @@ describe("SessionManagement session list rendering", () => {
   });
 
   test("renders browser/device info from user agent for each session", async () => {
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagement />, { wrapper: Wrapper });
 
@@ -188,19 +206,24 @@ describe("SessionManagement session list rendering", () => {
   });
 
   test("renders IP address for each session", async () => {
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagement />, { wrapper: Wrapper });
 
     await waitFor(() => {
       expect(
-        screen.queryByText(/192\.168\.1\.1/) ?? screen.queryByText(/10\.0\.0\.1/)
+        screen.queryByText(/192\.168\.1\.1/) ??
+          screen.queryByText(/10\.0\.0\.1/)
       ).toBeDefined();
     });
   });
 
   test("current session shows 'Current session' badge", async () => {
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagement />, { wrapper: Wrapper });
 
@@ -214,7 +237,9 @@ describe("SessionManagement session list rendering", () => {
       data: [CURRENT_SESSION, OTHER_SESSION_1, OTHER_SESSION_2],
       error: null,
     });
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagement />, { wrapper: Wrapper });
 
@@ -226,14 +251,20 @@ describe("SessionManagement session list rendering", () => {
   });
 
   test("renders timestamp info for sessions", async () => {
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagement />, { wrapper: Wrapper });
 
     await waitFor(() => {
       // Some date-like text should appear (year, "ago", "Jan", etc.)
       const content = document.body.textContent ?? "";
-      expect(content.match(/\d{4}|ago|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec/i)).toBeTruthy();
+      expect(
+        content.match(
+          /\d{4}|ago|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec/i
+        )
+      ).toBeTruthy();
     });
   });
 });
@@ -258,17 +289,24 @@ describe("revoking a non-current session", () => {
       data: [CURRENT_SESSION, OTHER_SESSION_1],
       error: null,
     });
-    mockRevokeSession.mockResolvedValue({ data: { status: true }, error: null });
+    mockRevokeSession.mockResolvedValue({
+      data: { status: true },
+      error: null,
+    });
   });
 
   test("clicking Revoke on a non-current session calls authClient.revokeSession()", async () => {
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagement />, { wrapper: Wrapper });
 
     // Wait for sessions to load, then find a revoke button for the non-current session
     await waitFor(() => {
-      expect(screen.getAllByRole("button", { name: /revoke/i }).length).toBeGreaterThanOrEqual(1);
+      expect(
+        screen.getAllByRole("button", { name: /revoke/i }).length
+      ).toBeGreaterThanOrEqual(1);
     });
 
     // Get all revoke buttons; the non-current session's button should be one of them
@@ -283,12 +321,16 @@ describe("revoking a non-current session", () => {
   });
 
   test("revokeSession is called with the session id or token", async () => {
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagement />, { wrapper: Wrapper });
 
     await waitFor(() => {
-      expect(screen.getAllByRole("button", { name: /revoke/i }).length).toBeGreaterThanOrEqual(1);
+      expect(
+        screen.getAllByRole("button", { name: /revoke/i }).length
+      ).toBeGreaterThanOrEqual(1);
     });
 
     const revokeButtons = screen.getAllByRole("button", { name: /revoke/i });
@@ -297,23 +339,30 @@ describe("revoking a non-current session", () => {
     await waitFor(() => {
       expect(mockRevokeSession).toHaveBeenCalledTimes(1);
     });
-    const arg = mockRevokeSession.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    const arg = mockRevokeSession.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
     // Accepts either {id} or {token} or the raw string
     const passedValue = arg?.id ?? arg?.token ?? arg;
     expect(
       passedValue === OTHER_SESSION_1.id ||
-      passedValue === OTHER_SESSION_1.token ||
-      (typeof arg === "string" && (arg === OTHER_SESSION_1.id || arg === OTHER_SESSION_1.token))
+        passedValue === OTHER_SESSION_1.token ||
+        (typeof arg === "string" &&
+          (arg === OTHER_SESSION_1.id || arg === OTHER_SESSION_1.token))
     ).toBe(true);
   });
 
   test("non-current session revoke does NOT redirect to sign-in", async () => {
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagement />, { wrapper: Wrapper });
 
     await waitFor(() => {
-      expect(screen.getAllByRole("button", { name: /revoke/i }).length).toBeGreaterThanOrEqual(1);
+      expect(
+        screen.getAllByRole("button", { name: /revoke/i }).length
+      ).toBeGreaterThanOrEqual(1);
     });
 
     const revokeButtons = screen.getAllByRole("button", { name: /revoke/i });
@@ -329,18 +378,28 @@ describe("revoking a non-current session", () => {
 
   test("revoke button shows loading state during revocation", async () => {
     let resolve!: (v: unknown) => void;
-    mockRevokeSession.mockReturnValue(new Promise((res) => { resolve = res; }));
+    mockRevokeSession.mockReturnValue(
+      new Promise((res) => {
+        resolve = res;
+      })
+    );
 
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagement />, { wrapper: Wrapper });
 
     await waitFor(() => {
-      expect(screen.getAllByRole("button", { name: /revoke/i }).length).toBeGreaterThanOrEqual(1);
+      expect(
+        screen.getAllByRole("button", { name: /revoke/i }).length
+      ).toBeGreaterThanOrEqual(1);
     });
 
     const revokeButtons = screen.getAllByRole("button", { name: /revoke/i });
-    const targetBtn = revokeButtons[revokeButtons.length - 1]! as HTMLButtonElement;
+    const targetBtn = revokeButtons[
+      revokeButtons.length - 1
+    ]! as HTMLButtonElement;
 
     await act(async () => {
       fireEvent.click(targetBtn);
@@ -349,13 +408,16 @@ describe("revoking a non-current session", () => {
     // Button should be disabled or show loading during the async call
     expect(
       targetBtn.disabled ||
-      targetBtn.getAttribute("aria-disabled") === "true" ||
-      targetBtn.getAttribute("data-loading") === "true" ||
-      screen.queryByText(/revoking|loading/i) !== null
+        targetBtn.getAttribute("aria-disabled") === "true" ||
+        targetBtn.getAttribute("data-loading") === "true" ||
+        screen.queryByText(/revoking|loading/i) !== null
     ).toBe(true);
 
     resolve({ data: { status: true }, error: null });
-    mockRevokeSession.mockResolvedValue({ data: { status: true }, error: null });
+    mockRevokeSession.mockResolvedValue({
+      data: { status: true },
+      error: null,
+    });
   });
 });
 
@@ -379,11 +441,16 @@ describe("revoking the current session", () => {
       data: [CURRENT_SESSION, OTHER_SESSION_1],
       error: null,
     });
-    mockRevokeSession.mockResolvedValue({ data: { status: true }, error: null });
+    mockRevokeSession.mockResolvedValue({
+      data: { status: true },
+      error: null,
+    });
   });
 
   test("clicking Revoke on current session opens confirmation Dialog", async () => {
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagement />, { wrapper: Wrapper });
 
@@ -404,7 +471,9 @@ describe("revoking the current session", () => {
   });
 
   test("confirmation Dialog shows warning that this will sign out the user", async () => {
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagement />, { wrapper: Wrapper });
 
@@ -421,7 +490,9 @@ describe("revoking the current session", () => {
   });
 
   test("Dialog confirm calls revokeSession and redirects to sign-in", async () => {
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagement />, { wrapper: Wrapper });
 
@@ -433,11 +504,15 @@ describe("revoking the current session", () => {
     fireEvent.click(revokeButtons[0]!);
 
     await waitFor(() => {
-      expect(screen.getByText(/sign you out|are you sure|confirm/i)).toBeDefined();
+      expect(
+        screen.getByText(/sign you out|are you sure|confirm/i)
+      ).toBeDefined();
     });
 
     // Click the confirm button inside the dialog
-    fireEvent.click(screen.getByRole("button", { name: /confirm|yes|sign out|revoke/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /confirm|yes|sign out|revoke/i })
+    );
 
     await waitFor(() => {
       expect(mockRevokeSession).toHaveBeenCalledTimes(1);
@@ -450,7 +525,9 @@ describe("revoking the current session", () => {
   });
 
   test("Dialog cancel dismisses without calling revokeSession", async () => {
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagement />, { wrapper: Wrapper });
 
@@ -462,7 +539,9 @@ describe("revoking the current session", () => {
     fireEvent.click(revokeButtons[0]!);
 
     await waitFor(() => {
-      expect(screen.getByText(/sign you out|are you sure|confirm/i)).toBeDefined();
+      expect(
+        screen.getByText(/sign you out|are you sure|confirm/i)
+      ).toBeDefined();
     });
 
     // Click the cancel button
@@ -471,14 +550,16 @@ describe("revoking the current session", () => {
     await waitFor(() => {
       expect(
         screen.queryByText(/sign you out|are you sure/) === null ||
-        screen.queryByRole("dialog") === null
+          screen.queryByRole("dialog") === null
       ).toBe(true);
     });
     expect(mockRevokeSession).not.toHaveBeenCalled();
   });
 
   test("Dialog is dismissed by pressing Escape key", async () => {
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagement />, { wrapper: Wrapper });
 
@@ -490,15 +571,20 @@ describe("revoking the current session", () => {
     fireEvent.click(revokeButtons[0]!);
 
     await waitFor(() => {
-      expect(screen.getByText(/sign you out|are you sure|confirm/i)).toBeDefined();
+      expect(
+        screen.getByText(/sign you out|are you sure|confirm/i)
+      ).toBeDefined();
     });
 
-    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape", code: "Escape" });
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+      code: "Escape",
+    });
 
     await waitFor(() => {
       expect(
         screen.queryByText(/sign you out|are you sure/) === null ||
-        screen.queryByRole("dialog") === null
+          screen.queryByRole("dialog") === null
       ).toBe(true);
     });
     expect(mockRevokeSession).not.toHaveBeenCalled();
@@ -512,7 +598,11 @@ describe("revoking the current session", () => {
 describe("loading state", () => {
   test("shows loading indicator while fetching sessions", async () => {
     let resolve!: (v: unknown) => void;
-    mockListSessions.mockReturnValue(new Promise((res) => { resolve = res; }));
+    mockListSessions.mockReturnValue(
+      new Promise((res) => {
+        resolve = res;
+      })
+    );
     mockUseSession.mockReturnValue({
       data: {
         user: { id: "user-1", name: "Test User", email: "test@example.com" },
@@ -522,20 +612,27 @@ describe("loading state", () => {
       error: null,
     });
 
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagement />, { wrapper: Wrapper });
 
     // While the promise is pending, a loading indicator should be shown
     expect(
       screen.queryByText(/loading|fetching/i) !== null ||
-      document.querySelector("[aria-busy='true']") !== null ||
-      document.querySelector("[data-loading]") !== null ||
-      document.querySelector(".animate-pulse, .skeleton, [class*='loading'], [class*='spinner']") !== null
+        document.querySelector("[aria-busy='true']") !== null ||
+        document.querySelector("[data-loading]") !== null ||
+        document.querySelector(
+          ".animate-pulse, .skeleton, [class*='loading'], [class*='spinner']"
+        ) !== null
     ).toBe(true);
 
     resolve({ data: [CURRENT_SESSION, OTHER_SESSION_1], error: null });
-    mockListSessions.mockResolvedValue({ data: [CURRENT_SESSION, OTHER_SESSION_1], error: null });
+    mockListSessions.mockResolvedValue({
+      data: [CURRENT_SESSION, OTHER_SESSION_1],
+      error: null,
+    });
   });
 });
 
@@ -558,7 +655,9 @@ describe("error state", () => {
       error: { message: "Failed to fetch sessions" },
     });
 
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagement />, { wrapper: Wrapper });
 
@@ -583,7 +682,9 @@ describe("error state", () => {
     const origError = console.error;
     console.error = () => {};
 
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagement />, { wrapper: Wrapper });
 
@@ -594,7 +695,10 @@ describe("error state", () => {
     });
 
     console.error = origError;
-    mockListSessions.mockResolvedValue({ data: [CURRENT_SESSION, OTHER_SESSION_1], error: null });
+    mockListSessions.mockResolvedValue({
+      data: [CURRENT_SESSION, OTHER_SESSION_1],
+      error: null,
+    });
   });
 });
 
@@ -617,7 +721,9 @@ describe("empty state", () => {
       error: null,
     });
 
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagement />, { wrapper: Wrapper });
 
@@ -639,7 +745,9 @@ describe("empty state", () => {
     });
     mockListSessions.mockResolvedValue({ data: [], error: null });
 
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagement />, { wrapper: Wrapper });
 
@@ -657,10 +765,16 @@ describe("empty state", () => {
 
 describe("unauthenticated redirect", () => {
   test("redirects to sign-in when no active session", async () => {
-    mockUseSession.mockReturnValue({ data: null, isPending: false, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: false,
+      error: null,
+    });
     mockPush.mockClear();
 
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagement />, { wrapper: Wrapper });
 
@@ -672,10 +786,16 @@ describe("unauthenticated redirect", () => {
   });
 
   test("does not redirect while session is loading", async () => {
-    mockUseSession.mockReturnValue({ data: null, isPending: true, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: true,
+      error: null,
+    });
     mockPush.mockClear();
 
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagement />, { wrapper: Wrapper });
 
@@ -713,11 +833,16 @@ describe("multiple sessions", () => {
       data: [CURRENT_SESSION, OTHER_SESSION_1, OTHER_SESSION_2],
       error: null,
     });
-    mockRevokeSession.mockResolvedValue({ data: { status: true }, error: null });
+    mockRevokeSession.mockResolvedValue({
+      data: { status: true },
+      error: null,
+    });
   });
 
   test("renders all sessions when multiple are returned", async () => {
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagement />, { wrapper: Wrapper });
 
@@ -729,7 +854,9 @@ describe("multiple sessions", () => {
   });
 
   test("only one 'Current session' badge appears", async () => {
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     render(<SessionManagement />, { wrapper: Wrapper });
 
@@ -761,7 +888,9 @@ describe("className and classNames props", () => {
   });
 
   test("accepts className prop on the root element", async () => {
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     const { container } = render(
       <SessionManagement className="custom-sessions" />,
@@ -771,7 +900,9 @@ describe("className and classNames props", () => {
   });
 
   test("accepts classNames.card override", async () => {
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     const { container } = render(
       <SessionManagement classNames={{ card: "custom-card" }} />,
@@ -781,7 +912,9 @@ describe("className and classNames props", () => {
   });
 
   test("accepts classNames.revokeButton override", async () => {
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     render(
       <SessionManagement classNames={{ revokeButton: "custom-revoke-btn" }} />,
@@ -795,7 +928,9 @@ describe("className and classNames props", () => {
   });
 
   test("accepts classNames.currentBadge override", async () => {
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     const { container } = render(
       <SessionManagement classNames={{ currentBadge: "custom-badge" }} />,
@@ -808,7 +943,9 @@ describe("className and classNames props", () => {
   });
 
   test("accepts classNames.sessionItem override", async () => {
-    const { SessionManagement } = await import("../components/session-management");
+    const { SessionManagement } = await import(
+      "../components/session-management"
+    );
     const Wrapper = await getWrapper();
     const { container } = render(
       <SessionManagement classNames={{ sessionItem: "custom-session-item" }} />,

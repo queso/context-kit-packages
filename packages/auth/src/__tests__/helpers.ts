@@ -1,4 +1,4 @@
-import { beforeEach, afterEach } from "bun:test";
+import { afterEach, beforeEach } from "bun:test";
 import type { AuthConfig } from "../types";
 
 // Minimal PrismaClient-shaped object for testing

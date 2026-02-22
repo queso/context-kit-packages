@@ -1,8 +1,14 @@
-import { describe, test, expect, mock, beforeEach } from "bun:test";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { existsSync } from "fs";
 import { resolve } from "path";
-import React from "react";
+import type React from "react";
 
 const pkgRoot = resolve(import.meta.dir, "../..");
 
@@ -32,8 +38,12 @@ const mockAuthClient = {
   signIn: mock(() => Promise.resolve({ data: null, error: null })),
   signOut: mock(() => Promise.resolve({ data: null, error: null })),
   signUp: mock(() => Promise.resolve({ data: null, error: null })),
-  forgetPassword: mock(() => Promise.resolve({ data: { status: true }, error: null })),
-  resetPassword: mock(() => Promise.resolve({ data: { status: true }, error: null })),
+  forgetPassword: mock(() =>
+    Promise.resolve({ data: { status: true }, error: null })
+  ),
+  resetPassword: mock(() =>
+    Promise.resolve({ data: { status: true }, error: null })
+  ),
 };
 
 mock.module("@context-kit/auth/client", () => ({
@@ -64,7 +74,9 @@ mock.module("next/navigation", () => ({
 async function getWrapper() {
   const { AuthProvider } = await import("../components/auth-provider");
   return function Wrapper({ children }: { children: React.ReactNode }) {
-    return <AuthProvider baseURL="http://localhost:3000">{children}</AuthProvider>;
+    return (
+      <AuthProvider baseURL="http://localhost:3000">{children}</AuthProvider>
+    );
   };
 }
 
@@ -75,7 +87,9 @@ async function getWrapper() {
 function fillForm(current: string, newPwd: string, confirm: string) {
   const currentInput = screen.getByLabelText(/current password/i);
   const newInput = screen.getByLabelText(/new password/i);
-  const confirmInput = screen.getByLabelText(/confirm.*new password|confirm password/i);
+  const confirmInput = screen.getByLabelText(
+    /confirm.*new password|confirm password/i
+  );
   fireEvent.change(currentInput, { target: { value: current } });
   fireEvent.change(newInput, { target: { value: newPwd } });
   fireEvent.change(confirmInput, { target: { value: confirm } });
@@ -252,16 +266,22 @@ describe("ChangePassword rendering", () => {
     const { ChangePassword } = await import("../components/change-password");
     const Wrapper = await getWrapper();
     render(<ChangePassword />, { wrapper: Wrapper });
-    expect(screen.getByLabelText(/confirm.*new password|confirm password/i)).toBeDefined();
+    expect(
+      screen.getByLabelText(/confirm.*new password|confirm password/i)
+    ).toBeDefined();
   });
 
   test("all three password fields have type='password'", async () => {
     const { ChangePassword } = await import("../components/change-password");
     const Wrapper = await getWrapper();
     render(<ChangePassword />, { wrapper: Wrapper });
-    const currentInput = screen.getByLabelText(/current password/i) as HTMLInputElement;
+    const currentInput = screen.getByLabelText(
+      /current password/i
+    ) as HTMLInputElement;
     const newInput = screen.getByLabelText(/new password/i) as HTMLInputElement;
-    const confirmInput = screen.getByLabelText(/confirm.*new password|confirm password/i) as HTMLInputElement;
+    const confirmInput = screen.getByLabelText(
+      /confirm.*new password|confirm password/i
+    ) as HTMLInputElement;
     expect(currentInput.type).toBe("password");
     expect(newInput.type).toBe("password");
     expect(confirmInput.type).toBe("password");
@@ -271,13 +291,19 @@ describe("ChangePassword rendering", () => {
     const { ChangePassword } = await import("../components/change-password");
     const Wrapper = await getWrapper();
     render(<ChangePassword />, { wrapper: Wrapper });
-    expect(screen.getByRole("button", { name: /change password|update password|save/i })).toBeDefined();
+    expect(
+      screen.getByRole("button", {
+        name: /change password|update password|save/i,
+      })
+    ).toBeDefined();
   });
 
   test("renders without errors when session is active", async () => {
     const { ChangePassword } = await import("../components/change-password");
     const Wrapper = await getWrapper();
-    expect(() => render(<ChangePassword />, { wrapper: Wrapper })).not.toThrow();
+    expect(() =>
+      render(<ChangePassword />, { wrapper: Wrapper })
+    ).not.toThrow();
   });
 });
 
@@ -297,7 +323,10 @@ describe("ChangePassword form submission", () => {
       isPending: false,
       error: null,
     });
-    mockChangePassword.mockResolvedValue({ data: { status: true }, error: null });
+    mockChangePassword.mockResolvedValue({
+      data: { status: true },
+      error: null,
+    });
   });
 
   test("calls authClient.changePassword() with currentPassword and newPassword on submit", async () => {
@@ -305,13 +334,19 @@ describe("ChangePassword form submission", () => {
     const Wrapper = await getWrapper();
     render(<ChangePassword />, { wrapper: Wrapper });
 
-    const { currentInput } = fillForm("OldPassword1!", "NewPassword1!", "NewPassword1!");
+    const { currentInput } = fillForm(
+      "OldPassword1!",
+      "NewPassword1!",
+      "NewPassword1!"
+    );
     fireEvent.submit(currentInput.closest("form")!);
 
     await waitFor(() => {
       expect(mockChangePassword).toHaveBeenCalledTimes(1);
     });
-    const arg = mockChangePassword.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    const arg = mockChangePassword.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
     expect(arg?.currentPassword).toBe("OldPassword1!");
     expect(arg?.newPassword).toBe("NewPassword1!");
   });
@@ -321,11 +356,17 @@ describe("ChangePassword form submission", () => {
     const Wrapper = await getWrapper();
     render(<ChangePassword />, { wrapper: Wrapper });
 
-    const { currentInput } = fillForm("OldPassword1!", "NewPassword1!", "NewPassword1!");
+    const { currentInput } = fillForm(
+      "OldPassword1!",
+      "NewPassword1!",
+      "NewPassword1!"
+    );
     fireEvent.submit(currentInput.closest("form")!);
 
     await waitFor(() => {
-      expect(screen.getByText(/password.*changed|password.*updated|success/i)).toBeDefined();
+      expect(
+        screen.getByText(/password.*changed|password.*updated|success/i)
+      ).toBeDefined();
     });
   });
 
@@ -338,12 +379,18 @@ describe("ChangePassword form submission", () => {
     const Wrapper = await getWrapper();
     render(<ChangePassword />, { wrapper: Wrapper });
 
-    const { currentInput } = fillForm("WrongPassword1!", "NewPassword1!", "NewPassword1!");
+    const { currentInput } = fillForm(
+      "WrongPassword1!",
+      "NewPassword1!",
+      "NewPassword1!"
+    );
     fireEvent.submit(currentInput.closest("form")!);
 
     await waitFor(() => {
       expect(
-        screen.getByText(/incorrect.*password|wrong.*password|current password.*incorrect/i)
+        screen.getByText(
+          /incorrect.*password|wrong.*password|current password.*incorrect/i
+        )
       ).toBeDefined();
     });
   });
@@ -357,26 +404,43 @@ describe("ChangePassword form submission", () => {
     const Wrapper = await getWrapper();
     render(<ChangePassword />, { wrapper: Wrapper });
 
-    const { currentInput } = fillForm("OldPassword1!", "NewPassword1!", "NewPassword1!");
+    const { currentInput } = fillForm(
+      "OldPassword1!",
+      "NewPassword1!",
+      "NewPassword1!"
+    );
     fireEvent.submit(currentInput.closest("form")!);
 
     await waitFor(() => {
-      expect(screen.getByText(/something went wrong|error|try again/i)).toBeDefined();
+      expect(
+        screen.getByText(/something went wrong|error|try again/i)
+      ).toBeDefined();
     });
 
     console.error = origError;
-    mockChangePassword.mockResolvedValue({ data: { status: true }, error: null });
+    mockChangePassword.mockResolvedValue({
+      data: { status: true },
+      error: null,
+    });
   });
 
   test("disables submit button during loading", async () => {
     let resolve!: (v: unknown) => void;
-    mockChangePassword.mockReturnValue(new Promise((res) => { resolve = res; }));
+    mockChangePassword.mockReturnValue(
+      new Promise((res) => {
+        resolve = res;
+      })
+    );
 
     const { ChangePassword } = await import("../components/change-password");
     const Wrapper = await getWrapper();
     render(<ChangePassword />, { wrapper: Wrapper });
 
-    const { currentInput } = fillForm("OldPassword1!", "NewPassword1!", "NewPassword1!");
+    const { currentInput } = fillForm(
+      "OldPassword1!",
+      "NewPassword1!",
+      "NewPassword1!"
+    );
     await act(async () => {
       fireEvent.submit(currentInput.closest("form")!);
     });
@@ -384,10 +448,15 @@ describe("ChangePassword form submission", () => {
     const btn = screen.getByRole("button", {
       name: /change password|update password|save/i,
     }) as HTMLButtonElement;
-    expect(btn.disabled || btn.getAttribute("aria-disabled") === "true").toBe(true);
+    expect(btn.disabled || btn.getAttribute("aria-disabled") === "true").toBe(
+      true
+    );
 
     resolve({ data: { status: true }, error: null });
-    mockChangePassword.mockResolvedValue({ data: { status: true }, error: null });
+    mockChangePassword.mockResolvedValue({
+      data: { status: true },
+      error: null,
+    });
   });
 });
 
@@ -439,7 +508,11 @@ describe("ChangePassword validation", () => {
     const Wrapper = await getWrapper();
     render(<ChangePassword />, { wrapper: Wrapper });
 
-    const { currentInput } = fillForm("OldPassword1!", "NewPassword1!", "Different1!");
+    const { currentInput } = fillForm(
+      "OldPassword1!",
+      "NewPassword1!",
+      "Different1!"
+    );
     fireEvent.submit(currentInput.closest("form")!);
 
     await waitFor(() => {
@@ -452,11 +525,17 @@ describe("ChangePassword validation", () => {
     const Wrapper = await getWrapper();
     render(<ChangePassword />, { wrapper: Wrapper });
 
-    const { currentInput } = fillForm("OldPassword1!", "NewPassword1!", "Different1!");
+    const { currentInput } = fillForm(
+      "OldPassword1!",
+      "NewPassword1!",
+      "Different1!"
+    );
     fireEvent.submit(currentInput.closest("form")!);
 
     await waitFor(() => {
-      expect(screen.getByText(/passwords.*match|do not match|match/i)).toBeDefined();
+      expect(
+        screen.getByText(/passwords.*match|do not match|match/i)
+      ).toBeDefined();
     });
   });
 
@@ -465,7 +544,11 @@ describe("ChangePassword validation", () => {
     const Wrapper = await getWrapper();
     render(<ChangePassword />, { wrapper: Wrapper });
 
-    const { currentInput } = fillForm("SamePassword1!", "SamePassword1!", "SamePassword1!");
+    const { currentInput } = fillForm(
+      "SamePassword1!",
+      "SamePassword1!",
+      "SamePassword1!"
+    );
     fireEvent.submit(currentInput.closest("form")!);
 
     await waitFor(() => {
@@ -478,12 +561,18 @@ describe("ChangePassword validation", () => {
     const Wrapper = await getWrapper();
     render(<ChangePassword />, { wrapper: Wrapper });
 
-    const { currentInput } = fillForm("SamePassword1!", "SamePassword1!", "SamePassword1!");
+    const { currentInput } = fillForm(
+      "SamePassword1!",
+      "SamePassword1!",
+      "SamePassword1!"
+    );
     fireEvent.submit(currentInput.closest("form")!);
 
     await waitFor(() => {
       expect(
-        screen.getByText(/same.*current|different.*current|must be different|new password.*different/i)
+        screen.getByText(
+          /same.*current|different.*current|must be different|new password.*different/i
+        )
       ).toBeDefined();
     });
   });
@@ -504,7 +593,9 @@ describe("ChangePassword validation", () => {
   test("passwordRules.minLength=12 rejects passwords below custom minimum", async () => {
     const { ChangePassword } = await import("../components/change-password");
     const Wrapper = await getWrapper();
-    render(<ChangePassword passwordRules={{ minLength: 12 }} />, { wrapper: Wrapper });
+    render(<ChangePassword passwordRules={{ minLength: 12 }} />, {
+      wrapper: Wrapper,
+    });
 
     // "NewPwd1!" is only 8 chars — below custom min of 12
     const { currentInput } = fillForm("OldPassword1!", "NewPwd1!", "NewPwd1!");
@@ -516,10 +607,15 @@ describe("ChangePassword validation", () => {
   });
 
   test("passwordRules.minLength=12 accepts passwords meeting the custom minimum", async () => {
-    mockChangePassword.mockResolvedValue({ data: { status: true }, error: null });
+    mockChangePassword.mockResolvedValue({
+      data: { status: true },
+      error: null,
+    });
     const { ChangePassword } = await import("../components/change-password");
     const Wrapper = await getWrapper();
-    render(<ChangePassword passwordRules={{ minLength: 12 }} />, { wrapper: Wrapper });
+    render(<ChangePassword passwordRules={{ minLength: 12 }} />, {
+      wrapper: Wrapper,
+    });
 
     const longPwd = "LongPassword1!";
     const { currentInput } = fillForm("OldPassword1!", longPwd, longPwd);
@@ -537,7 +633,11 @@ describe("ChangePassword validation", () => {
 
 describe("unauthenticated redirect", () => {
   test("redirects to sign-in when no session", async () => {
-    mockUseSession.mockReturnValue({ data: null, isPending: false, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: false,
+      error: null,
+    });
     mockPush.mockClear();
 
     const { ChangePassword } = await import("../components/change-password");
@@ -552,7 +652,11 @@ describe("unauthenticated redirect", () => {
   });
 
   test("does not redirect while session is loading", async () => {
-    mockUseSession.mockReturnValue({ data: null, isPending: true, error: null });
+    mockUseSession.mockReturnValue({
+      data: null,
+      isPending: true,
+      error: null,
+    });
     mockPush.mockClear();
 
     const { ChangePassword } = await import("../components/change-password");
@@ -603,11 +707,12 @@ describe("className and classNames props", () => {
   test("accepts classNames.submitButton override", async () => {
     const { ChangePassword } = await import("../components/change-password");
     const Wrapper = await getWrapper();
-    render(
-      <ChangePassword classNames={{ submitButton: "custom-submit" }} />,
-      { wrapper: Wrapper }
-    );
-    const btn = screen.getByRole("button", { name: /change password|update password|save/i });
+    render(<ChangePassword classNames={{ submitButton: "custom-submit" }} />, {
+      wrapper: Wrapper,
+    });
+    const btn = screen.getByRole("button", {
+      name: /change password|update password|save/i,
+    });
     expect(btn.className).toContain("custom-submit");
   });
 

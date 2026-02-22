@@ -1,10 +1,10 @@
-import { describe, test, expect } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import type {
   AuthConfig,
   AuthInstance,
-  SessionData,
   MiddlewareConfig,
   PasswordRules,
+  SessionData,
 } from "../types";
 
 describe("types are importable and structurally sound", () => {

@@ -1,5 +1,5 @@
-import { describe, test, expect } from "bun:test";
-import { validConfig, setupEnvGuard } from "./helpers";
+import { describe, expect, test } from "bun:test";
+import { setupEnvGuard, validConfig } from "./helpers";
 
 setupEnvGuard();
 
@@ -15,23 +15,21 @@ describe("createAuth", () => {
 
   test("throws a descriptive error when BETTER_AUTH_SECRET is missing", async () => {
     const { createAuth } = await import("../create-auth");
-    expect(() =>
-      createAuth(validConfig({ secret: undefined }))
-    ).toThrow(/BETTER_AUTH_SECRET/i);
+    expect(() => createAuth(validConfig({ secret: undefined }))).toThrow(
+      /BETTER_AUTH_SECRET/i
+    );
   });
 
   test("throws a descriptive error when BETTER_AUTH_URL is missing", async () => {
     const { createAuth } = await import("../create-auth");
-    expect(() =>
-      createAuth(validConfig({ baseURL: undefined }))
-    ).toThrow(/BETTER_AUTH_URL/i);
+    expect(() => createAuth(validConfig({ baseURL: undefined }))).toThrow(
+      /BETTER_AUTH_URL/i
+    );
   });
 
   test("throws a descriptive error when prisma is not provided", async () => {
     const { createAuth } = await import("../create-auth");
-    expect(() =>
-      createAuth(validConfig({ prisma: null }))
-    ).toThrow(/prisma/i);
+    expect(() => createAuth(validConfig({ prisma: null }))).toThrow(/prisma/i);
   });
 
   test("reads BETTER_AUTH_SECRET and BETTER_AUTH_URL from environment", async () => {
@@ -39,7 +37,9 @@ describe("createAuth", () => {
     process.env.BETTER_AUTH_URL = "http://localhost:3000";
     const { createAuth } = await import("../create-auth");
     // Should not throw when env vars are set and no config override
-    const auth = createAuth(validConfig({ secret: undefined, baseURL: undefined }));
+    const auth = createAuth(
+      validConfig({ secret: undefined, baseURL: undefined })
+    );
     expect(auth).toBeDefined();
   });
 

@@ -1,9 +1,9 @@
 "use client";
 
-import * as React from "react";
-import { Button } from "./ui/button";
-import { providerIcons } from "./icons/index";
+import type * as React from "react";
 import { cn } from "../lib/utils";
+import { providerIcons } from "./icons/index";
+import { Button } from "./ui/button";
 
 export type SocialButtonProps = {
   provider: string;
@@ -22,16 +22,15 @@ export function SocialButton({
   loading = false,
   renderIcon,
 }: SocialButtonProps) {
-  const providerLabel =
-    provider.charAt(0).toUpperCase() + provider.slice(1);
+  const providerLabel = provider.charAt(0).toUpperCase() + provider.slice(1);
 
   const IconComponent = providerIcons[provider.toLowerCase()];
 
-  const icon = renderIcon
-    ? renderIcon()
-    : IconComponent
-      ? <IconComponent aria-hidden="true" />
-      : null;
+  const icon = renderIcon ? (
+    renderIcon()
+  ) : IconComponent ? (
+    <IconComponent aria-hidden="true" />
+  ) : null;
 
   return (
     <Button

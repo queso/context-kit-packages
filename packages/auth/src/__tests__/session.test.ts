@@ -1,4 +1,4 @@
-import { describe, test, expect, mock } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import type { AuthInstance } from "../types";
 
 // Mock next/headers before importing the module under test
@@ -10,7 +10,10 @@ mock.module("next/headers", () => ({
 }));
 
 // Raw Better Auth response shape (before our transformation)
-type RawSessionResponse = { user: typeof fakeUser; session: typeof fakeSession } | null;
+type RawSessionResponse = {
+  user: typeof fakeUser;
+  session: typeof fakeSession;
+} | null;
 
 // Factory: create a mock AuthInstance with a controllable getSession.
 // sessionResponse should be the raw Better Auth shape, NOT the transformed SessionData.
@@ -81,7 +84,10 @@ describe("getSession", () => {
     const { getSession } = await import("../session");
     const sessionWithStringDate = {
       user: fakeUser,
-      session: { ...fakeSession, expiresAt: fakeSession.expiresAt.toISOString() as unknown as Date },
+      session: {
+        ...fakeSession,
+        expiresAt: fakeSession.expiresAt.toISOString() as unknown as Date,
+      },
     };
     const auth = createMockAuth(sessionWithStringDate);
     const result = await getSession(auth);

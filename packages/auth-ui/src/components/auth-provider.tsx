@@ -1,7 +1,7 @@
 "use client";
 
-import * as React from "react";
 import { createAuthClient } from "@context-kit/auth/client";
+import * as React from "react";
 import type { AuthUIContextValue } from "../types";
 
 const AuthUIContext = React.createContext<AuthUIContextValue | null>(null);
@@ -12,10 +12,7 @@ export type AuthProviderProps = {
 };
 
 export function AuthProvider({ baseURL, children }: AuthProviderProps) {
-  const client = React.useMemo(
-    () => createAuthClient({ baseURL }),
-    [baseURL]
-  );
+  const client = React.useMemo(() => createAuthClient({ baseURL }), [baseURL]);
 
   return (
     <AuthUIContext.Provider value={{ client }}>

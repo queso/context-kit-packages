@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
 describe("client entry point", () => {
   test("createAuthClient is exported and callable", async () => {

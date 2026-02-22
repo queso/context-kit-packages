@@ -1,8 +1,14 @@
-import { describe, test, expect, mock, beforeEach } from "bun:test";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { existsSync } from "fs";
 import { resolve } from "path";
-import React from "react";
+import type React from "react";
 
 const pkgRoot = resolve(import.meta.dir, "../..");
 
@@ -27,7 +33,11 @@ const mockSignInSocial = mock(() =>
 const mockSignUpEmail = mock(() =>
   Promise.resolve({ data: { user: { id: "u1" } }, error: null })
 );
-const mockUseSession = mock(() => ({ data: null, isPending: false, error: null }));
+const mockUseSession = mock(() => ({
+  data: null,
+  isPending: false,
+  error: null,
+}));
 const mockSignOut = mock(() => Promise.resolve({ data: null, error: null }));
 
 const mockAuthClient = {
@@ -40,8 +50,12 @@ const mockAuthClient = {
   },
   signOut: mockSignOut,
   useSession: mockUseSession,
-  forgetPassword: mock(() => Promise.resolve({ data: { status: true }, error: null })),
-  resetPassword: mock(() => Promise.resolve({ data: { status: true }, error: null })),
+  forgetPassword: mock(() =>
+    Promise.resolve({ data: { status: true }, error: null })
+  ),
+  resetPassword: mock(() =>
+    Promise.resolve({ data: { status: true }, error: null })
+  ),
 };
 
 const mockCreateAuthClient = mock(() => mockAuthClient);
@@ -76,7 +90,9 @@ mock.module("next/navigation", () => ({
 async function getWrapper() {
   const { AuthProvider } = await import("../components/auth-provider");
   return function Wrapper({ children }: { children: React.ReactNode }) {
-    return <AuthProvider baseURL="http://localhost:3000">{children}</AuthProvider>;
+    return (
+      <AuthProvider baseURL="http://localhost:3000">{children}</AuthProvider>
+    );
   };
 }
 
@@ -92,7 +108,12 @@ function fillSignIn(email: string, password: string) {
   return { emailInput, passwordInput };
 }
 
-function fillSignUp(name: string, email: string, password: string, confirm: string) {
+function fillSignUp(
+  name: string,
+  email: string,
+  password: string,
+  confirm: string
+) {
   const nameInput = screen.getByLabelText(/name/i);
   const emailInput = screen.getByLabelText(/email/i);
   const passwordInput = screen.getByLabelText(/^password/i);
@@ -130,19 +151,28 @@ describe("signInSchema", () => {
 
   test("signInSchema accepts a valid email and non-empty password", async () => {
     const { signInSchema } = await import("../lib/schemas");
-    const result = signInSchema.safeParse({ email: "user@example.com", password: "secret123" });
+    const result = signInSchema.safeParse({
+      email: "user@example.com",
+      password: "secret123",
+    });
     expect(result.success).toBe(true);
   });
 
   test("signInSchema rejects an invalid email", async () => {
     const { signInSchema } = await import("../lib/schemas");
-    const result = signInSchema.safeParse({ email: "not-an-email", password: "secret123" });
+    const result = signInSchema.safeParse({
+      email: "not-an-email",
+      password: "secret123",
+    });
     expect(result.success).toBe(false);
   });
 
   test("signInSchema rejects an empty password", async () => {
     const { signInSchema } = await import("../lib/schemas");
-    const result = signInSchema.safeParse({ email: "user@example.com", password: "" });
+    const result = signInSchema.safeParse({
+      email: "user@example.com",
+      password: "",
+    });
     expect(result.success).toBe(false);
   });
 
@@ -290,7 +320,9 @@ describe("SignIn rendering", () => {
     const { SignIn } = await import("../components/sign-in");
     const Wrapper = await getWrapper();
     render(<SignIn />, { wrapper: Wrapper });
-    expect(screen.getByRole("button", { name: /sign.?in|log.?in|submit/i })).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: /sign.?in|log.?in|submit/i })
+    ).toBeDefined();
   });
 
   test("password input type is password (not visible text)", async () => {
@@ -344,7 +376,10 @@ describe("SignIn form submission", () => {
     mockSignInEmail.mockClear();
     mockSignInSocial.mockClear();
     mockPush.mockClear();
-    mockSignInEmail.mockResolvedValue({ data: { user: { id: "u1" } }, error: null });
+    mockSignInEmail.mockResolvedValue({
+      data: { user: { id: "u1" } },
+      error: null,
+    });
   });
 
   test("calls authClient.signIn.email() with email and password on submit", async () => {
@@ -358,7 +393,9 @@ describe("SignIn form submission", () => {
     await waitFor(() => {
       expect(mockSignInEmail).toHaveBeenCalledTimes(1);
     });
-    const arg = mockSignInEmail.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    const arg = mockSignInEmail.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
     expect(arg?.email).toBe("user@example.com");
     expect(arg?.password).toBe("Password1!");
   });
@@ -404,7 +441,9 @@ describe("SignIn form submission", () => {
     await waitFor(() => {
       expect(mockSignInEmail).toHaveBeenCalledTimes(1);
     });
-    const arg = mockSignInEmail.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    const arg = mockSignInEmail.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
     expect(arg?.callbackURL ?? arg?.callbackUrl).toBe("/home");
   });
 
@@ -422,7 +461,9 @@ describe("SignIn form submission", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(/invalid.*credentials|invalid.*email.*password|incorrect/i)
+        screen.getByText(
+          /invalid.*credentials|invalid.*email.*password|incorrect/i
+        )
       ).toBeDefined();
     });
   });
@@ -440,10 +481,15 @@ describe("SignIn form submission", () => {
     fireEvent.submit(screen.getByLabelText(/email/i).closest("form")!);
 
     await waitFor(() => {
-      expect(screen.getByText(/something went wrong|error|try again/i)).toBeDefined();
+      expect(
+        screen.getByText(/something went wrong|error|try again/i)
+      ).toBeDefined();
     });
     console.error = origError;
-    mockSignInEmail.mockResolvedValue({ data: { user: { id: "u1" } }, error: null });
+    mockSignInEmail.mockResolvedValue({
+      data: { user: { id: "u1" } },
+      error: null,
+    });
   });
 
   test("does not call signIn.email() when email is invalid", async () => {
@@ -474,7 +520,11 @@ describe("SignIn form submission", () => {
 
   test("disables submit button during loading", async () => {
     let resolve!: (v: unknown) => void;
-    mockSignInEmail.mockReturnValue(new Promise((res) => { resolve = res; }));
+    mockSignInEmail.mockReturnValue(
+      new Promise((res) => {
+        resolve = res;
+      })
+    );
 
     const { SignIn } = await import("../components/sign-in");
     const Wrapper = await getWrapper();
@@ -485,18 +535,28 @@ describe("SignIn form submission", () => {
       fireEvent.submit(screen.getByLabelText(/email/i).closest("form")!);
     });
 
-    const btn = screen.getByRole("button", { name: /sign.?in|log.?in|submit/i }) as HTMLButtonElement;
-    expect(btn.disabled || btn.getAttribute("aria-disabled") === "true").toBe(true);
+    const btn = screen.getByRole("button", {
+      name: /sign.?in|log.?in|submit/i,
+    }) as HTMLButtonElement;
+    expect(btn.disabled || btn.getAttribute("aria-disabled") === "true").toBe(
+      true
+    );
 
     resolve({ data: { user: { id: "u1" } }, error: null });
-    mockSignInEmail.mockResolvedValue({ data: { user: { id: "u1" } }, error: null });
+    mockSignInEmail.mockResolvedValue({
+      data: { user: { id: "u1" } },
+      error: null,
+    });
   });
 });
 
 describe("SignIn social providers", () => {
   beforeEach(() => {
     mockSignInSocial.mockClear();
-    mockSignInSocial.mockResolvedValue({ data: { url: "https://accounts.google.com" }, error: null });
+    mockSignInSocial.mockResolvedValue({
+      data: { url: "https://accounts.google.com" },
+      error: null,
+    });
   });
 
   test("clicking a social button calls authClient.signIn.social() with provider", async () => {
@@ -504,33 +564,45 @@ describe("SignIn social providers", () => {
     const Wrapper = await getWrapper();
     render(<SignIn providers={["google"]} />, { wrapper: Wrapper });
 
-    fireEvent.click(screen.getByText(/continue with google/i).closest("button")!);
+    fireEvent.click(
+      screen.getByText(/continue with google/i).closest("button")!
+    );
 
     await waitFor(() => {
       expect(mockSignInSocial).toHaveBeenCalledTimes(1);
     });
-    const arg = mockSignInSocial.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    const arg = mockSignInSocial.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
     expect(arg?.provider).toBe("google");
   });
 
   test("social button passes callbackUrl to signIn.social()", async () => {
     const { SignIn } = await import("../components/sign-in");
     const Wrapper = await getWrapper();
-    render(<SignIn providers={["github"]} callbackUrl="/dashboard" />, { wrapper: Wrapper });
+    render(<SignIn providers={["github"]} callbackUrl="/dashboard" />, {
+      wrapper: Wrapper,
+    });
 
-    fireEvent.click(screen.getByText(/continue with github/i).closest("button")!);
+    fireEvent.click(
+      screen.getByText(/continue with github/i).closest("button")!
+    );
 
     await waitFor(() => {
       expect(mockSignInSocial).toHaveBeenCalledTimes(1);
     });
-    const arg = mockSignInSocial.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    const arg = mockSignInSocial.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
     expect(arg?.callbackURL ?? arg?.callbackUrl).toBe("/dashboard");
   });
 
   test("multiple providers each render a SocialButton", async () => {
     const { SignIn } = await import("../components/sign-in");
     const Wrapper = await getWrapper();
-    render(<SignIn providers={["google", "github", "discord"]} />, { wrapper: Wrapper });
+    render(<SignIn providers={["google", "github", "discord"]} />, {
+      wrapper: Wrapper,
+    });
     expect(screen.getByText(/continue with google/i)).toBeDefined();
     expect(screen.getByText(/continue with github/i)).toBeDefined();
     expect(screen.getByText(/continue with discord/i)).toBeDefined();
@@ -541,12 +613,16 @@ describe("SignIn social providers", () => {
     const Wrapper = await getWrapper();
     render(<SignIn providers={["google", "github"]} />, { wrapper: Wrapper });
 
-    fireEvent.click(screen.getByText(/continue with github/i).closest("button")!);
+    fireEvent.click(
+      screen.getByText(/continue with github/i).closest("button")!
+    );
 
     await waitFor(() => {
       expect(mockSignInSocial).toHaveBeenCalledTimes(1);
     });
-    const arg = mockSignInSocial.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    const arg = mockSignInSocial.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
     expect(arg?.provider).toBe("github");
   });
 });
@@ -555,15 +631,21 @@ describe("SignIn className and classNames props", () => {
   test("accepts className prop", async () => {
     const { SignIn } = await import("../components/sign-in");
     const Wrapper = await getWrapper();
-    const { container } = render(<SignIn className="custom-sign-in" />, { wrapper: Wrapper });
+    const { container } = render(<SignIn className="custom-sign-in" />, {
+      wrapper: Wrapper,
+    });
     expect(container.querySelector(".custom-sign-in")).toBeDefined();
   });
 
   test("accepts classNames.submitButton override", async () => {
     const { SignIn } = await import("../components/sign-in");
     const Wrapper = await getWrapper();
-    render(<SignIn classNames={{ submitButton: "custom-submit" }} />, { wrapper: Wrapper });
-    const btn = screen.getByRole("button", { name: /sign.?in|log.?in|submit/i });
+    render(<SignIn classNames={{ submitButton: "custom-submit" }} />, {
+      wrapper: Wrapper,
+    });
+    const btn = screen.getByRole("button", {
+      name: /sign.?in|log.?in|submit/i,
+    });
     expect(btn.className).toContain("custom-submit");
   });
 });
@@ -613,7 +695,9 @@ describe("SignUp rendering", () => {
     const Wrapper = await getWrapper();
     render(<SignUp />, { wrapper: Wrapper });
     const pwdInput = screen.getByLabelText(/^password/i) as HTMLInputElement;
-    const confirmInput = screen.getByLabelText(/confirm password/i) as HTMLInputElement;
+    const confirmInput = screen.getByLabelText(
+      /confirm password/i
+    ) as HTMLInputElement;
     expect(pwdInput.type).toBe("password");
     expect(confirmInput.type).toBe("password");
   });
@@ -622,7 +706,9 @@ describe("SignUp rendering", () => {
     const { SignUp } = await import("../components/sign-up");
     const Wrapper = await getWrapper();
     render(<SignUp />, { wrapper: Wrapper });
-    expect(screen.getByRole("button", { name: /sign.?up|create.*account|register/i })).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: /sign.?up|create.*account|register/i })
+    ).toBeDefined();
   });
 
   test("renders 'Already have an account? Sign in' link", async () => {
@@ -659,7 +745,10 @@ describe("SignUp form submission", () => {
   beforeEach(() => {
     mockSignUpEmail.mockClear();
     mockPush.mockClear();
-    mockSignUpEmail.mockResolvedValue({ data: { user: { id: "u1" } }, error: null });
+    mockSignUpEmail.mockResolvedValue({
+      data: { user: { id: "u1" } },
+      error: null,
+    });
   });
 
   test("calls authClient.signUp.email() with name, email, and password on submit", async () => {
@@ -673,7 +762,9 @@ describe("SignUp form submission", () => {
     await waitFor(() => {
       expect(mockSignUpEmail).toHaveBeenCalledTimes(1);
     });
-    const arg = mockSignUpEmail.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    const arg = mockSignUpEmail.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
     expect(arg?.name).toBe("Alice Smith");
     expect(arg?.email).toBe("alice@example.com");
     expect(arg?.password).toBe("Password1!");
@@ -741,10 +832,15 @@ describe("SignUp form submission", () => {
     fireEvent.submit(screen.getByLabelText(/email/i).closest("form")!);
 
     await waitFor(() => {
-      expect(screen.getByText(/something went wrong|error|try again/i)).toBeDefined();
+      expect(
+        screen.getByText(/something went wrong|error|try again/i)
+      ).toBeDefined();
     });
     console.error = origError;
-    mockSignUpEmail.mockResolvedValue({ data: { user: { id: "u1" } }, error: null });
+    mockSignUpEmail.mockResolvedValue({
+      data: { user: { id: "u1" } },
+      error: null,
+    });
   });
 
   test("does not call signUp.email() when passwords do not match", async () => {
@@ -769,7 +865,9 @@ describe("SignUp form submission", () => {
     fireEvent.submit(screen.getByLabelText(/email/i).closest("form")!);
 
     await waitFor(() => {
-      expect(screen.getByText(/passwords.*match|do not match|match/i)).toBeDefined();
+      expect(
+        screen.getByText(/passwords.*match|do not match|match/i)
+      ).toBeDefined();
     });
   });
 
@@ -829,7 +927,11 @@ describe("SignUp form submission", () => {
 
   test("disables submit button during loading", async () => {
     let resolve!: (v: unknown) => void;
-    mockSignUpEmail.mockReturnValue(new Promise((res) => { resolve = res; }));
+    mockSignUpEmail.mockReturnValue(
+      new Promise((res) => {
+        resolve = res;
+      })
+    );
 
     const { SignUp } = await import("../components/sign-up");
     const Wrapper = await getWrapper();
@@ -840,18 +942,28 @@ describe("SignUp form submission", () => {
       fireEvent.submit(screen.getByLabelText(/email/i).closest("form")!);
     });
 
-    const btn = screen.getByRole("button", { name: /sign.?up|create.*account|register/i }) as HTMLButtonElement;
-    expect(btn.disabled || btn.getAttribute("aria-disabled") === "true").toBe(true);
+    const btn = screen.getByRole("button", {
+      name: /sign.?up|create.*account|register/i,
+    }) as HTMLButtonElement;
+    expect(btn.disabled || btn.getAttribute("aria-disabled") === "true").toBe(
+      true
+    );
 
     resolve({ data: { user: { id: "u1" } }, error: null });
-    mockSignUpEmail.mockResolvedValue({ data: { user: { id: "u1" } }, error: null });
+    mockSignUpEmail.mockResolvedValue({
+      data: { user: { id: "u1" } },
+      error: null,
+    });
   });
 });
 
 describe("SignUp social providers", () => {
   beforeEach(() => {
     mockSignInSocial.mockClear();
-    mockSignInSocial.mockResolvedValue({ data: { url: "https://accounts.google.com" }, error: null });
+    mockSignInSocial.mockResolvedValue({
+      data: { url: "https://accounts.google.com" },
+      error: null,
+    });
   });
 
   test("clicking a social button calls authClient.signIn.social() with provider", async () => {
@@ -859,12 +971,16 @@ describe("SignUp social providers", () => {
     const Wrapper = await getWrapper();
     render(<SignUp providers={["google"]} />, { wrapper: Wrapper });
 
-    fireEvent.click(screen.getByText(/continue with google/i).closest("button")!);
+    fireEvent.click(
+      screen.getByText(/continue with google/i).closest("button")!
+    );
 
     await waitFor(() => {
       expect(mockSignInSocial).toHaveBeenCalledTimes(1);
     });
-    const arg = mockSignInSocial.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    const arg = mockSignInSocial.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
     expect(arg?.provider).toBe("google");
   });
 });
@@ -873,15 +989,21 @@ describe("SignUp className and classNames props", () => {
   test("accepts className prop", async () => {
     const { SignUp } = await import("../components/sign-up");
     const Wrapper = await getWrapper();
-    const { container } = render(<SignUp className="custom-sign-up" />, { wrapper: Wrapper });
+    const { container } = render(<SignUp className="custom-sign-up" />, {
+      wrapper: Wrapper,
+    });
     expect(container.querySelector(".custom-sign-up")).toBeDefined();
   });
 
   test("accepts classNames.submitButton override", async () => {
     const { SignUp } = await import("../components/sign-up");
     const Wrapper = await getWrapper();
-    render(<SignUp classNames={{ submitButton: "custom-submit" }} />, { wrapper: Wrapper });
-    const btn = screen.getByRole("button", { name: /sign.?up|create.*account|register/i });
+    render(<SignUp classNames={{ submitButton: "custom-submit" }} />, {
+      wrapper: Wrapper,
+    });
+    const btn = screen.getByRole("button", {
+      name: /sign.?up|create.*account|register/i,
+    });
     expect(btn.className).toContain("custom-submit");
   });
 });

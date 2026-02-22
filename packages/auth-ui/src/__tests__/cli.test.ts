@@ -1,7 +1,14 @@
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "fs";
-import { join, resolve } from "path";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "fs";
 import { tmpdir } from "os";
+import { join, resolve } from "path";
 
 // ---------------------------------------------------------------------------
 // The CLI module must export a `scaffold` function that can be called
@@ -48,25 +55,42 @@ function createTmpDir(): string {
   return mkdtempSync(join(tmpdir(), "auth-ui-cli-test-"));
 }
 
-function setupNextProject(root: string, appDirName: "app" | "src/app" = "app"): void {
+function setupNextProject(
+  root: string,
+  appDirName: "app" | "src/app" = "app"
+): void {
   // package.json at root signals a valid Next.js project
   writeFileSync(
     join(root, "package.json"),
-    JSON.stringify({ name: "my-app", dependencies: { next: "^14.0.0" } }, null, 2)
+    JSON.stringify(
+      { name: "my-app", dependencies: { next: "^14.0.0" } },
+      null,
+      2
+    )
   );
   // Create the app directory
   const appPath = join(root, ...appDirName.split("/"));
   mkdirSync(appPath, { recursive: true });
 }
 
-function readRoute(root: string, appDirName: string, routeFile: string, pathPrefix = ""): string {
+function readRoute(
+  root: string,
+  appDirName: string,
+  routeFile: string,
+  pathPrefix = ""
+): string {
   const filePath = pathPrefix
     ? join(root, appDirName, pathPrefix, routeFile)
     : join(root, appDirName, routeFile);
   return readFileSync(filePath, "utf-8");
 }
 
-function routeExists(root: string, appDirName: string, routeFile: string, pathPrefix = ""): boolean {
+function routeExists(
+  root: string,
+  appDirName: string,
+  routeFile: string,
+  pathPrefix = ""
+): boolean {
   const filePath = pathPrefix
     ? join(root, appDirName, pathPrefix, routeFile)
     : join(root, appDirName, routeFile);
@@ -117,7 +141,10 @@ describe("app directory detection", () => {
 
   test("throws when neither app/ nor src/app/ exists", async () => {
     // Has package.json but no app directory
-    writeFileSync(join(tmpDir, "package.json"), JSON.stringify({ name: "no-app" }));
+    writeFileSync(
+      join(tmpDir, "package.json"),
+      JSON.stringify({ name: "no-app" })
+    );
     const { scaffold } = await import("../cli");
     await expect(scaffold({ cwd: tmpDir })).rejects.toThrow(/app/i);
   });
@@ -286,7 +313,9 @@ describe("--providers flag", () => {
     const { scaffold } = await import("../cli");
     await scaffold({ cwd: tmpDir, providers: ["google"] });
 
-    const nonProviderRoutes = ROUTE_FILES.filter((f) => !PROVIDER_PAGES.includes(f));
+    const nonProviderRoutes = ROUTE_FILES.filter(
+      (f) => !PROVIDER_PAGES.includes(f)
+    );
     for (const routeFile of nonProviderRoutes) {
       const content = readRoute(tmpDir, "app", routeFile);
       // Should still be a simple re-export, not a wrapper component

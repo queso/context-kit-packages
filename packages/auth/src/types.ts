@@ -1,4 +1,10 @@
-import type { betterAuth, BetterAuthPlugin, SocialProviders, User, Session } from "better-auth";
+import type {
+  BetterAuthPlugin,
+  betterAuth,
+  Session,
+  SocialProviders,
+  User,
+} from "better-auth";
 
 // Re-export Better Auth plugin types so consumers can extend without importing better-auth directly
 export type { BetterAuthPlugin, SocialProviders, User, Session };
@@ -76,7 +82,6 @@ export interface AuthConfig {
     url: string;
     token: string;
   }) => Promise<void>;
-
 }
 
 /**

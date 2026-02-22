@@ -32,13 +32,41 @@ type RouteDefinition = {
 };
 
 const ROUTES: RouteDefinition[] = [
-  { file: "sign-in/page.tsx", componentName: "SignInPage", supportsProviders: true },
-  { file: "sign-up/page.tsx", componentName: "SignUpPage", supportsProviders: true },
-  { file: "forgot-password/page.tsx", componentName: "ForgotPasswordPage", supportsProviders: false },
-  { file: "reset-password/page.tsx", componentName: "ResetPasswordPage", supportsProviders: false },
-  { file: "profile/page.tsx", componentName: "ProfilePage", supportsProviders: false },
-  { file: "profile/password/page.tsx", componentName: "ProfilePasswordPage", supportsProviders: false },
-  { file: "profile/sessions/page.tsx", componentName: "ProfileSessionsPage", supportsProviders: false },
+  {
+    file: "sign-in/page.tsx",
+    componentName: "SignInPage",
+    supportsProviders: true,
+  },
+  {
+    file: "sign-up/page.tsx",
+    componentName: "SignUpPage",
+    supportsProviders: true,
+  },
+  {
+    file: "forgot-password/page.tsx",
+    componentName: "ForgotPasswordPage",
+    supportsProviders: false,
+  },
+  {
+    file: "reset-password/page.tsx",
+    componentName: "ResetPasswordPage",
+    supportsProviders: false,
+  },
+  {
+    file: "profile/page.tsx",
+    componentName: "ProfilePage",
+    supportsProviders: false,
+  },
+  {
+    file: "profile/password/page.tsx",
+    componentName: "ProfilePasswordPage",
+    supportsProviders: false,
+  },
+  {
+    file: "profile/sessions/page.tsx",
+    componentName: "ProfileSessionsPage",
+    supportsProviders: false,
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -51,7 +79,10 @@ function generateSimpleReExport(componentName: string): string {
 
 const VALID_PROVIDER_RE = /^[a-zA-Z0-9_-]+$/;
 
-function generateWithProviders(componentName: string, providers: string[]): string {
+function generateWithProviders(
+  componentName: string,
+  providers: string[]
+): string {
   for (const p of providers) {
     if (!VALID_PROVIDER_RE.test(p)) {
       throw new Error(
@@ -101,7 +132,10 @@ export async function scaffold(opts: ScaffoldOptions): Promise<ScaffoldResult> {
 
   if (existsSync(appCandidate) && statSync(appCandidate).isDirectory()) {
     appDir = appCandidate;
-  } else if (existsSync(srcAppCandidate) && statSync(srcAppCandidate).isDirectory()) {
+  } else if (
+    existsSync(srcAppCandidate) &&
+    statSync(srcAppCandidate).isDirectory()
+  ) {
     appDir = srcAppCandidate;
   } else {
     throw new Error(
@@ -120,7 +154,10 @@ export async function scaffold(opts: ScaffoldOptions): Promise<ScaffoldResult> {
     // Prevent path traversal: resolved path must remain within appDir
     const resolvedFilePath = resolve(filePath);
     const resolvedAppDir = resolve(appDir);
-    if (!resolvedFilePath.startsWith(resolvedAppDir + "/") && resolvedFilePath !== resolvedAppDir) {
+    if (
+      !resolvedFilePath.startsWith(resolvedAppDir + "/") &&
+      resolvedFilePath !== resolvedAppDir
+    ) {
       throw new Error("Path must be within the app directory.");
     }
 
@@ -131,7 +168,9 @@ export async function scaffold(opts: ScaffoldOptions): Promise<ScaffoldResult> {
     }
 
     // Create directory if needed
-    const dir = filePath.replace(/\/page\.tsx$/, "").replace(/\\page\.tsx$/, "");
+    const dir = filePath
+      .replace(/\/page\.tsx$/, "")
+      .replace(/\\page\.tsx$/, "");
     mkdirSync(dir, { recursive: true });
 
     // Write file
@@ -168,7 +207,10 @@ function parseArgs(argv: string[]): {
     } else if (arg === "--path" && args[i + 1]) {
       path = args[++i];
     } else if (arg === "--providers" && args[i + 1]) {
-      providers = args[++i].split(",").map((p) => p.trim()).filter(Boolean);
+      providers = args[++i]
+        .split(",")
+        .map((p) => p.trim())
+        .filter(Boolean);
     }
   }
 
@@ -216,13 +258,17 @@ if (
   })
     .then((result) => {
       if (result.written.length > 0) {
-        console.log(`\nScaffolded ${result.written.length} file(s) into ${result.appDir}:`);
+        console.log(
+          `\nScaffolded ${result.written.length} file(s) into ${result.appDir}:`
+        );
         for (const f of result.written) {
           console.log(`  ✓ ${f}`);
         }
       }
       if (result.skipped.length > 0) {
-        console.log(`\nSkipped ${result.skipped.length} existing file(s) (use --force to overwrite):`);
+        console.log(
+          `\nSkipped ${result.skipped.length} existing file(s) (use --force to overwrite):`
+        );
         for (const f of result.skipped) {
           console.log(`  - ${f}`);
         }

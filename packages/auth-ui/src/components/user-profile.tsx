@@ -1,17 +1,17 @@
 "use client";
 
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useRouter } from "next/navigation";
 import * as React from "react";
 import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useRouter } from "next/navigation";
-import { useAuthContext } from "./auth-provider";
 import { useSession } from "../hooks/use-session";
 import { cn } from "../lib/utils";
+import { useAuthContext } from "./auth-provider";
+import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
-import { Avatar, AvatarImage, AvatarFallback } from "./ui/avatar";
 
 const profileSchema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -38,8 +38,12 @@ export function UserProfile({ className, classNames }: UserProfileProps) {
 
   const user = data?.user;
 
-  const [editingField, setEditingField] = React.useState<"name" | "email" | null>(null);
-  const [successMessage, setSuccessMessage] = React.useState<string | null>(null);
+  const [editingField, setEditingField] = React.useState<
+    "name" | "email" | null
+  >(null);
+  const [successMessage, setSuccessMessage] = React.useState<string | null>(
+    null
+  );
   const [serverError, setServerError] = React.useState<string | null>(null);
 
   const {
@@ -87,7 +91,9 @@ export function UserProfile({ className, classNames }: UserProfileProps) {
       if (editingField === "name") payload.name = values.name;
       if (editingField === "email") payload.email = values.email;
 
-      const result = await (client as Record<string, Function>).updateUser(payload);
+      const result = await (client as Record<string, Function>).updateUser(
+        payload
+      );
 
       if (result?.error) {
         setServerError("Something went wrong. Please try again.");
@@ -113,7 +119,10 @@ export function UserProfile({ className, classNames }: UserProfileProps) {
       <div className="flex justify-center mb-4">
         <Avatar className={classNames?.avatar}>
           {user?.image ? (
-            <AvatarImage src={user.image as string} alt={user.name ?? "User avatar"} />
+            <AvatarImage
+              src={user.image as string}
+              alt={user.name ?? "User avatar"}
+            />
           ) : null}
           <AvatarFallback>{initials}</AvatarFallback>
         </Avatar>
