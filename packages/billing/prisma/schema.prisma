@@ -1,0 +1,70 @@
+// @context-kit/billing — reference Prisma schema extension
+//
+// Copy the models below into your application's schema.prisma file.
+// Add the datasource and generator blocks from your existing schema; do NOT
+// duplicate them here.
+//
+// After copying, run:
+//   npx prisma generate
+//   npx prisma migrate dev --name add_billing
+
+// ─── Customer ────────────────────────────────────────────────────────────────
+// One record per user. Links your app's user to a Stripe Customer.
+
+model Customer {
+  id               String       @id @default(cuid())
+  userId           String       @unique
+  stripeCustomerId String       @unique
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  subscription     Subscription?
+
+  @@index([userId])
+}
+
+// ─── Subscription ─────────────────────────────────────────────────────────────
+// Tracks the active (or cancelled) Stripe Subscription for a Customer.
+
+model Subscription {
+  id                   String        @id @default(cuid())
+  customerId           String        @unique
+  stripeSubscriptionId String?       @unique
+  stripePriceId        String?
+  planId               String
+  status               String        @default("active")
+  interval             String?
+  currentPeriodStart   DateTime
+  currentPeriodEnd     DateTime
+  cancelAtPeriodEnd    Boolean       @default(false)
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  customer             Customer      @relation(fields: [customerId], references: [id])
+  usageRecords         UsageRecord[]
+
+  @@index([customerId])
+  @@index([status])
+}
+
+// ─── UsageRecord ──────────────────────────────────────────────────────────────
+// Per-feature usage tracking within a billing period.
+
+model UsageRecord {
+  id             String       @id @default(cuid())
+  subscriptionId String?
+  userId         String
+  feature        String
+  used           Int          @default(0)
+  periodStart    DateTime
+  periodEnd      DateTime
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id])
+
+  @@unique([subscriptionId, feature, periodStart])
+  @@unique([userId, feature, periodStart])
+  @@index([subscriptionId])
+  @@index([userId])
+}

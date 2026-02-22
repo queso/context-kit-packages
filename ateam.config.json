@@ -1,0 +1,10 @@
+{
+  "packageManager": "bun",
+  "checks": {
+    "typecheck": "bun --filter '@context-kit/*' typecheck",
+    "build": "bun --filter '@context-kit/*' build",
+    "test": "bun test"
+  },
+  "precheck": ["typecheck", "build", "test"],
+  "postcheck": ["typecheck", "build", "test"]
+}

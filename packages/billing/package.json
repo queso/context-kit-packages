@@ -1,0 +1,53 @@
+{
+  "name": "@context-kit/billing",
+  "version": "0.1.0",
+  "description": "Billing for context-kit projects, powered by Stripe",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./webhook": {
+      "types": "./dist/webhook.d.ts",
+      "import": "./dist/webhook.js"
+    },
+    "./cli": {
+      "types": "./dist/cli.d.ts",
+      "import": "./dist/cli.js"
+    }
+  },
+  "bin": {
+    "billing": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "stripe": "^17.0.0"
+  },
+  "peerDependencies": {
+    "@prisma/client": ">=5.0.0",
+    "next": ">=14.0.0"
+  },
+  "peerDependenciesMeta": {
+    "next": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@prisma/client": ">=5.0.0",
+    "@types/bun": "^1.3.9",
+    "next": ">=14.0.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.7.0"
+  }
+}
