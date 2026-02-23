@@ -15,20 +15,18 @@ function formatPrice(amount: number, currency = "USD"): string {
 function getCTALabel({
   isCurrent,
   isAuthenticated,
-  planOrder,
-  currentPlanOrder,
+  isUpgrade,
+  isDowngrade,
 }: {
   isCurrent?: boolean;
   isAuthenticated?: boolean;
-  planOrder?: number;
-  currentPlanOrder?: number;
+  isUpgrade?: boolean;
+  isDowngrade?: boolean;
 }): string {
   if (isCurrent) return "Current Plan";
   if (!isAuthenticated) return "Get Started";
-  if (planOrder !== undefined && currentPlanOrder !== undefined) {
-    if (planOrder > currentPlanOrder) return "Upgrade";
-    if (planOrder < currentPlanOrder) return "Downgrade";
-  }
+  if (isUpgrade) return "Upgrade";
+  if (isDowngrade) return "Downgrade";
   return "Select Plan";
 }
 
@@ -44,10 +42,20 @@ export function PricingCard({
   onSelectPlan,
   signInPath,
   isAuthenticated,
-  currentPlanOrder,
-  planOrder,
+  isUpgrade,
+  isDowngrade,
   className,
 }: PricingCardProps) {
+  if (
+    process.env.NODE_ENV !== "production" &&
+    !isAuthenticated &&
+    !signInPath
+  ) {
+    console.warn(
+      "[@context-kit/billing-ui] PricingCard: `signInPath` is missing for an unauthenticated view. Unauthenticated users will see a button instead of a sign-in link."
+    );
+  }
+
   const isFree = plan.isFree || price === 0;
 
   const displayedPrice =
@@ -57,8 +65,8 @@ export function PricingCard({
   const ctaLabel = getCTALabel({
     isCurrent,
     isAuthenticated,
-    planOrder,
-    currentPlanOrder,
+    isUpgrade,
+    isDowngrade,
   });
 
   const handleCTAClick = () => {

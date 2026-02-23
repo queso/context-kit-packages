@@ -60,6 +60,7 @@ function makeWrapper(
       <BillingProvider
         plans={wrapperPlans}
         currentSubscription={subscription ?? undefined}
+        isAuthenticated={subscription != null}
       >
         {children}
       </BillingProvider>

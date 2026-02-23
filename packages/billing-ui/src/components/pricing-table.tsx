@@ -43,14 +43,16 @@ export function PricingTable({
     const p = prices[plan.id];
     return p?.monthly != null && p?.yearly != null;
   });
-  const savingsPercentage = savingsPlan
-    ? Math.round(
-        ((prices[savingsPlan.id].monthly! * 12 -
-          prices[savingsPlan.id].yearly!) /
-          (prices[savingsPlan.id].monthly! * 12)) *
-          100
-      )
-    : 0;
+  let savingsPercentage = 0;
+  if (savingsPlan) {
+    const monthly = prices[savingsPlan.id].monthly!;
+    const yearly = prices[savingsPlan.id].yearly!;
+    if (monthly > 0 && yearly < monthly * 12) {
+      savingsPercentage = Math.round(
+        ((monthly * 12 - yearly) / (monthly * 12)) * 100
+      );
+    }
+  }
 
   if (plans.length === 0) {
     return (
@@ -86,10 +88,12 @@ export function PricingTable({
           const planFeatures = features[plan.id];
           const isCurrent = currentPlan?.id === plan.id;
           const isHighlighted = highlighted === plan.id;
-          const currentPlanOrder =
+          const currentPlanIdx =
             currentPlan != null
               ? plans.findIndex((p) => p.id === currentPlan.id)
-              : undefined;
+              : -1;
+          const isUpgrade = currentPlanIdx >= 0 && idx > currentPlanIdx;
+          const isDowngrade = currentPlanIdx >= 0 && idx < currentPlanIdx;
 
           return (
             <PricingCard
@@ -105,12 +109,8 @@ export function PricingTable({
               onSelectPlan={onSelectPlan}
               signInPath={signInPath}
               isAuthenticated={isAuthenticated}
-              currentPlanOrder={
-                currentPlanOrder !== undefined && currentPlanOrder >= 0
-                  ? currentPlanOrder
-                  : undefined
-              }
-              planOrder={idx}
+              isUpgrade={isUpgrade}
+              isDowngrade={isDowngrade}
             />
           );
         })}

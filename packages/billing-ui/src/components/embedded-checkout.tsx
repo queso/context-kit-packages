@@ -40,10 +40,9 @@ export function EmbeddedCheckout({
           setState({ status: "ready", clientSecret: secret });
         }
       })
-      .catch((err) => {
+      .catch(() => {
         if (!cancelled) {
-          const message =
-            err instanceof Error ? err.message : "Failed to start checkout.";
+          const message = "Something went wrong. Please try again.";
           setState({ status: "error", message });
         }
       });

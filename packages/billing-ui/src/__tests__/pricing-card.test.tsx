@@ -178,7 +178,7 @@ describe("PricingCard", () => {
     expect(screen.getByText(/get started/i)).toBeDefined();
   });
 
-  test("CTA shows 'Upgrade' when planOrder > currentPlanOrder", async () => {
+  test("CTA shows 'Upgrade' when isUpgrade is true", async () => {
     const { PricingCard } = await import("../components/pricing-card");
     const onSelectPlan = mock(() => {});
 
@@ -189,15 +189,14 @@ describe("PricingCard", () => {
         interval="monthly"
         onSelectPlan={onSelectPlan}
         isAuthenticated={true}
-        planOrder={2}
-        currentPlanOrder={1}
+        isUpgrade={true}
       />
     );
 
     expect(screen.getByText(/upgrade/i)).toBeDefined();
   });
 
-  test("CTA shows 'Downgrade' when planOrder < currentPlanOrder", async () => {
+  test("CTA shows 'Downgrade' when isDowngrade is true", async () => {
     const { PricingCard } = await import("../components/pricing-card");
     const onSelectPlan = mock(() => {});
 
@@ -208,8 +207,7 @@ describe("PricingCard", () => {
         interval="monthly"
         onSelectPlan={onSelectPlan}
         isAuthenticated={true}
-        planOrder={1}
-        currentPlanOrder={2}
+        isDowngrade={true}
       />
     );
 

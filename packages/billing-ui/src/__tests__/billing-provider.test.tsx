@@ -41,7 +41,7 @@ describe("BillingProvider", () => {
   test("renders children without error when no currentSubscription", async () => {
     const { BillingProvider } = await import("../components/billing-provider");
     render(
-      <BillingProvider plans={plans}>
+      <BillingProvider plans={plans} isAuthenticated={false}>
         <div>billing child</div>
       </BillingProvider>
     );
@@ -54,7 +54,11 @@ describe("BillingProvider", () => {
 
     const { result } = renderHook(() => useBilling(), {
       wrapper: ({ children }) => (
-        <BillingProvider plans={plans} currentSubscription={mockSubscription}>
+        <BillingProvider
+          plans={plans}
+          currentSubscription={mockSubscription}
+          isAuthenticated={true}
+        >
           {children}
         </BillingProvider>
       ),
@@ -70,7 +74,11 @@ describe("BillingProvider", () => {
 
     const { result } = renderHook(() => useBilling(), {
       wrapper: ({ children }) => (
-        <BillingProvider plans={plans} currentSubscription={mockSubscription}>
+        <BillingProvider
+          plans={plans}
+          currentSubscription={mockSubscription}
+          isAuthenticated={true}
+        >
           {children}
         </BillingProvider>
       ),
@@ -79,13 +87,17 @@ describe("BillingProvider", () => {
     expect(result.current.subscriptionStatus).toBe("active");
   });
 
-  test("isAuthenticated is true when currentSubscription is provided", async () => {
+  test("isAuthenticated is true when isAuthenticated prop is true", async () => {
     const { BillingProvider } = await import("../components/billing-provider");
     const { useBilling } = await import("../hooks/use-billing");
 
     const { result } = renderHook(() => useBilling(), {
       wrapper: ({ children }) => (
-        <BillingProvider plans={plans} currentSubscription={mockSubscription}>
+        <BillingProvider
+          plans={plans}
+          currentSubscription={mockSubscription}
+          isAuthenticated={true}
+        >
           {children}
         </BillingProvider>
       ),
@@ -94,13 +106,15 @@ describe("BillingProvider", () => {
     expect(result.current.isAuthenticated).toBe(true);
   });
 
-  test("isAuthenticated is false when no currentSubscription", async () => {
+  test("isAuthenticated is false when isAuthenticated prop is false", async () => {
     const { BillingProvider } = await import("../components/billing-provider");
     const { useBilling } = await import("../hooks/use-billing");
 
     const { result } = renderHook(() => useBilling(), {
       wrapper: ({ children }) => (
-        <BillingProvider plans={plans}>{children}</BillingProvider>
+        <BillingProvider plans={plans} isAuthenticated={false}>
+          {children}
+        </BillingProvider>
       ),
     });
 
@@ -115,7 +129,9 @@ describe("BillingProvider", () => {
 
     const { result } = renderHook(() => useBilling(), {
       wrapper: ({ children }) => (
-        <BillingProvider plans={plans}>{children}</BillingProvider>
+        <BillingProvider plans={plans} isAuthenticated={false}>
+          {children}
+        </BillingProvider>
       ),
     });
 
@@ -153,7 +169,9 @@ describe("useBilling hook", () => {
 
     const { result } = renderHook(() => useBilling(), {
       wrapper: ({ children }) => (
-        <BillingProvider plans={plans}>{children}</BillingProvider>
+        <BillingProvider plans={plans} isAuthenticated={false}>
+          {children}
+        </BillingProvider>
       ),
     });
 
@@ -168,7 +186,9 @@ describe("useBilling hook", () => {
 
     const { result } = renderHook(() => useBilling(), {
       wrapper: ({ children }) => (
-        <BillingProvider plans={plans}>{children}</BillingProvider>
+        <BillingProvider plans={plans} isAuthenticated={false}>
+          {children}
+        </BillingProvider>
       ),
     });
 

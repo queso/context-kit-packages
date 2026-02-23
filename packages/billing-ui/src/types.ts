@@ -20,6 +20,7 @@ export interface BillingUIContextValue {
   subscriptionStatus: SubscriptionStatus | null;
   interval: "monthly" | "yearly";
   setInterval: (interval: "monthly" | "yearly") => void;
+  /** Always `false` — data is pre-fetched via props, not loaded client-side. */
   isLoading: boolean;
   isAuthenticated: boolean;
 }
@@ -52,8 +53,10 @@ export interface PricingCardProps {
   onSelectPlan?: (planId: string, interval: "monthly" | "yearly") => void;
   signInPath?: string;
   isAuthenticated?: boolean;
-  currentPlanOrder?: number;
-  planOrder?: number;
+  /** Whether selecting this plan is an upgrade from the current plan. */
+  isUpgrade?: boolean;
+  /** Whether selecting this plan is a downgrade from the current plan. */
+  isDowngrade?: boolean;
   className?: string;
 }
 
@@ -84,6 +87,7 @@ export interface CheckoutSuccessProps {
 export interface PricingPageProps {
   plans: PlanDefinition[];
   currentSubscription?: SubscriptionData | null;
+  isAuthenticated?: boolean;
   features: Record<string, string[]>;
   prices: PlanPricing;
   onSelectPlan: (planId: string, interval: "monthly" | "yearly") => void;

@@ -16,12 +16,14 @@ export const BillingUIContext = createContext<BillingUIContextValue | null>(
 export interface BillingProviderProps {
   plans: PlanDefinition[];
   currentSubscription?: SubscriptionData | null;
+  isAuthenticated: boolean;
   children: React.ReactNode;
 }
 
 export function BillingProvider({
   plans,
   currentSubscription,
+  isAuthenticated,
   children,
 }: BillingProviderProps) {
   const [interval, setInterval] = useState<"monthly" | "yearly">("monthly");
@@ -34,8 +36,6 @@ export function BillingProvider({
     const subscriptionStatus: SubscriptionStatus | null =
       currentSubscription?.status ?? null;
 
-    const isAuthenticated = currentSubscription != null;
-
     return {
       plans,
       currentPlan,
@@ -46,7 +46,7 @@ export function BillingProvider({
       isLoading: false,
       isAuthenticated,
     };
-  }, [plans, currentSubscription, interval]);
+  }, [plans, currentSubscription, isAuthenticated, interval]);
 
   return (
     <BillingUIContext.Provider value={value}>

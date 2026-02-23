@@ -8,6 +8,7 @@ import { PageLayout } from "./page-layout.js";
 export function PricingPage({
   plans,
   currentSubscription,
+  isAuthenticated,
   features,
   prices,
   onSelectPlan,
@@ -17,7 +18,11 @@ export function PricingPage({
 }: PricingPageProps) {
   return (
     <PageLayout className={className}>
-      <BillingProvider plans={plans} currentSubscription={currentSubscription}>
+      <BillingProvider
+        plans={plans}
+        currentSubscription={currentSubscription}
+        isAuthenticated={isAuthenticated ?? currentSubscription != null}
+      >
         <PricingTable
           features={features}
           prices={prices}
