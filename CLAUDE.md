@@ -31,6 +31,7 @@ bun --filter @context-kit/auth-ui test   # run auth-ui tests
 | `@context-kit/auth` | `packages/auth` | In progress — Better Auth + Prisma |
 | `@context-kit/auth-ui` | `packages/auth-ui` | 0.1.0 — Auth UI components for Next.js App Router |
 | `@context-kit/billing` | `packages/billing` | Planned — Stripe subscriptions |
+| `@context-kit/billing-ui` | `packages/billing-ui` | 0.1.0 — Billing UI components for pricing and checkout |
 
 ## A(i)-Team Integration
 
