@@ -77,7 +77,15 @@ function resolvePlanId(
     }
   }
 
-  return priceId ?? "unknown";
+  if (!priceId) {
+    throw new Error(
+      `resolvePlanId: subscription "${stripeSub.id}" has no price ID and no planId metadata.`,
+    );
+  }
+
+  throw new Error(
+    `resolvePlanId: no plan found for subscription "${stripeSub.id}" with price ID "${priceId}".`,
+  );
 }
 
 async function upsertSubscriptionFromStripe(
@@ -250,7 +258,11 @@ export function toWebhookHandler(
           break;
         }
       }
-    } catch {
+    } catch (err) {
+      console.error(
+        `Webhook error [event.id=${event.id}, event.type=${event.type}]:`,
+        err instanceof Error ? err.message : err,
+      );
       return new Response("Internal server error processing webhook.", { status: 500 });
     }
 

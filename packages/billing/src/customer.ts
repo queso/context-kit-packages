@@ -1,4 +1,5 @@
 import type { PrismaCustomer } from "./prisma";
+import { BillingError } from "./types";
 
 type PrismaClientLike = {
   customer: {
@@ -54,6 +55,9 @@ export async function getOrCreateCustomer(
     if (code === "P2002") {
       const recovered = await prisma.customer.findUnique({ where: { userId } });
       if (recovered) return recovered;
+      throw new BillingError(
+        `Failed to create customer for user "${userId}": unique constraint violation occurred but recovery lookup returned null.`,
+      );
     }
     throw err;
   }

@@ -336,6 +336,25 @@ describe("toWebhookHandler", () => {
     if (id1 && id2) expect(id1).toBe(id2);
   });
 
+  test("checkout.session.completed: no-op (no db writes) when customer not found", async () => {
+    const subscriptionUpsert = mock((_: any) => Promise.resolve(MOCK_LOCAL_SUB));
+    const prisma = makeMockPrisma({
+      customerFindUnique: (_: any) => Promise.resolve(null),
+      subscriptionUpsert,
+    });
+    const stripe = makeMockStripe();
+    const plans = makePlansMap();
+
+    const event = makeEvent("checkout.session.completed", makeCheckoutSession());
+    const handler = toWebhookHandler({ stripe, prisma, plans, webhookSecret: WEBHOOK_SECRET });
+    const req = makeRequest(event);
+
+    const response = await handler(req);
+
+    expect(response.status).toBe(200);
+    expect(subscriptionUpsert).not.toHaveBeenCalled();
+  });
+
   test("customer.subscription.updated syncs cancel_at_period_end flag", async () => {
     const subscriptionUpsert = mock((_: any) => Promise.resolve(MOCK_LOCAL_SUB));
     const prisma = makeMockPrisma({ subscriptionUpsert });

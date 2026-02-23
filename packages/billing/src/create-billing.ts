@@ -9,6 +9,8 @@ import type {
   ChangePlanParams,
   CheckoutSessionParams,
   PlanDefinition,
+  SubscriptionData,
+  UsageResult,
 } from "./types.js";
 import { InvalidConfigError } from "./types.js";
 import { checkUsage, recordUsage } from "./usage.js";
@@ -107,8 +109,7 @@ export function createBilling(config: BillingConfig): BillingInstance {
       return plan;
     },
 
-    // biome-ignore lint/suspicious/noExplicitAny: module returns SubscriptionData|null; interface contracts non-null
-    async getSubscription(userId: string): Promise<any> {
+    async getSubscription(userId: string): Promise<SubscriptionData | null> {
       return getSubscription(userId, { prisma: ctx.prisma, plans: ctx.planMap, freeTier: config.freeTier });
     },
 
@@ -116,8 +117,7 @@ export function createBilling(config: BillingConfig): BillingInstance {
       return checkUsage(userId, feature, { prisma: ctx.prisma, plans: ctx.planMap, freeTier: config.freeTier });
     },
 
-    // biome-ignore lint/suspicious/noExplicitAny: module returns UsageResult|void; interface contracts void
-    async recordUsage(userId: string, feature: string, quantity: number): Promise<any> {
+    async recordUsage(userId: string, feature: string, quantity: number): Promise<UsageResult | void> {
       return recordUsage(userId, feature, quantity, { prisma: ctx.prisma, plans: ctx.planMap, freeTier: config.freeTier });
     },
 

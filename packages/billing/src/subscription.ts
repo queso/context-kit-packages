@@ -1,5 +1,5 @@
 import { BillingError } from "./types";
-import type { FreeTierConfig, PlanDefinition, SubscriptionData } from "./types";
+import type { FreeTierConfig, PlanDefinition, PlanWithPeriod, SubscriptionData } from "./types";
 import type { PrismaSubscription } from "./prisma";
 
 const ACTIVE_STATUSES = ["active", "trialing", "past_due", "unpaid", "incomplete"];
@@ -65,7 +65,7 @@ export async function getSubscription(
 export async function getPlan(
   userId: string,
   { prisma, plans, freeTier }: SubscriptionDeps,
-): Promise<(PlanDefinition & { currentPeriodStart?: Date; currentPeriodEnd?: Date }) | null> {
+): Promise<PlanWithPeriod | null> {
   const subscription = await getSubscription(userId, { prisma, plans, freeTier });
 
   if (subscription) {

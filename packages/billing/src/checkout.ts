@@ -1,6 +1,7 @@
 import { BillingError } from "./types";
 import type { PlanDefinition } from "./types";
 import { getOrCreateCustomer } from "./customer";
+import { resolvePriceId } from "./pricing";
 
 // biome-ignore lint/suspicious/noExplicitAny: structural duck-typing
 type PrismaClientLike = any;
@@ -21,37 +22,21 @@ type CheckoutDeps = {
   plans: Map<string, PlanDefinition>;
 };
 
-function resolvePriceId(plan: PlanDefinition, interval?: string): string {
-  // When an interval is explicitly requested and stripePriceIds is present, prefer it.
-  if (interval && plan.stripePriceIds) {
-    const key = interval as keyof typeof plan.stripePriceIds;
-    const priceId = plan.stripePriceIds[key];
-    if (priceId) return priceId;
-    throw new BillingError(
-      `Plan "${plan.id}" has no price for interval "${interval}".`
-    );
+function validateUrl(url: string, fieldName: string): void {
+  try {
+    new URL(url);
+  } catch {
+    throw new BillingError(`Invalid ${fieldName}: "${url}" is not a valid URL.`);
   }
-
-  if (plan.stripePriceId) return plan.stripePriceId;
-
-  if (plan.stripePriceIds) {
-    const key = "monthly" as keyof typeof plan.stripePriceIds;
-    const priceId = plan.stripePriceIds[key];
-    if (priceId) return priceId;
-    throw new BillingError(
-      `Plan "${plan.id}" has no price for interval "monthly".`
-    );
-  }
-
-  throw new BillingError(
-    `Plan "${plan.id}" has no Stripe price configured.`
-  );
 }
 
 export async function createCheckoutSession(
   { userId, planId, interval, successUrl, cancelUrl }: CheckoutParams,
   { prisma, stripe, plans }: CheckoutDeps,
 ): Promise<{ sessionId: string; url: string }> {
+  validateUrl(successUrl, "successUrl");
+  validateUrl(cancelUrl, "cancelUrl");
+
   const plan = plans.get(planId);
   if (!plan) {
     throw new BillingError(`Plan "${planId}" not found.`);

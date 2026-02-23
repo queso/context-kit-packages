@@ -4,6 +4,20 @@
 
 // ─── Error Classes ────────────────────────────────────────────────────────────
 
+/**
+ * Base error class for all billing-related errors.
+ *
+ * @example
+ * ```ts
+ * try {
+ *   await billing.createCheckoutSession(params);
+ * } catch (err) {
+ *   if (err instanceof BillingError) {
+ *     console.error("Billing error:", err.message);
+ *   }
+ * }
+ * ```
+ */
 export class BillingError extends Error {
   constructor(message: string) {
     super(message);
@@ -12,6 +26,20 @@ export class BillingError extends Error {
   }
 }
 
+/**
+ * Thrown when a usage cap is exceeded and `soft` mode is not enabled.
+ *
+ * @example
+ * ```ts
+ * try {
+ *   await billing.recordUsage(userId, "api_calls", 1);
+ * } catch (err) {
+ *   if (err instanceof UsageCapExceededError) {
+ *     console.log(`Used: ${err.used}, Limit: ${err.limit}`);
+ *   }
+ * }
+ * ```
+ */
 export class UsageCapExceededError extends BillingError {
   used: number;
   limit: number;
@@ -25,6 +53,20 @@ export class UsageCapExceededError extends BillingError {
   }
 }
 
+/**
+ * Thrown when the billing configuration is invalid (e.g., missing plans or keys).
+ *
+ * @example
+ * ```ts
+ * try {
+ *   const billing = createBilling(config);
+ * } catch (err) {
+ *   if (err instanceof InvalidConfigError) {
+ *     console.error("Fix your billing config:", err.message);
+ *   }
+ * }
+ * ```
+ */
 export class InvalidConfigError extends BillingError {
   constructor(message: string) {
     super(message);
@@ -33,6 +75,20 @@ export class InvalidConfigError extends BillingError {
   }
 }
 
+/**
+ * Thrown when webhook signature verification fails.
+ *
+ * @example
+ * ```ts
+ * try {
+ *   const response = await webhookHandler(req);
+ * } catch (err) {
+ *   if (err instanceof WebhookVerificationError) {
+ *     console.error("Invalid webhook signature:", err.message);
+ *   }
+ * }
+ * ```
+ */
 export class WebhookVerificationError extends BillingError {
   constructor(message: string) {
     super(message);
@@ -41,6 +97,21 @@ export class WebhookVerificationError extends BillingError {
   }
 }
 
+/**
+ * Thrown when an operation is invalid for the current subscription state
+ * (e.g., canceling an already-canceled subscription, changing plans while past due).
+ *
+ * @example
+ * ```ts
+ * try {
+ *   await billing.changePlan(userId, { planId: "pro" });
+ * } catch (err) {
+ *   if (err instanceof SubscriptionStateError) {
+ *     console.error("Invalid subscription state:", err.message);
+ *   }
+ * }
+ * ```
+ */
 export class SubscriptionStateError extends BillingError {
   constructor(message: string) {
     super(message);
@@ -144,11 +215,16 @@ export interface ChangePlanParams {
   prorate?: boolean;
 }
 
+export interface PlanWithPeriod extends PlanDefinition {
+  currentPeriodStart?: Date;
+  currentPeriodEnd?: Date;
+}
+
 export interface BillingInstance {
-  getSubscription(userId: string): Promise<SubscriptionData>;
+  getSubscription(userId: string): Promise<SubscriptionData | null>;
   getPlan(planId: string): PlanDefinition;
   checkUsage(userId: string, metric: string): Promise<UsageResult>;
-  recordUsage(userId: string, metric: string, amount: number): Promise<void>;
+  recordUsage(userId: string, metric: string, amount: number): Promise<UsageResult | void>;
   createCheckoutSession(params: CheckoutSessionParams): Promise<{ url: string }>;
   changePlan(userId: string, params: ChangePlanParams): Promise<void>;
   cancelSubscription(userId: string, params?: CancelParams): Promise<void>;

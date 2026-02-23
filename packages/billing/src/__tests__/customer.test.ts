@@ -231,7 +231,7 @@ describe("getOrCreateCustomer", () => {
     const stripe = makeMockStripe();
 
     await expect(getOrCreateCustomer(USER_ID, { prisma, stripe })).rejects.toThrow(
-      "Unique constraint failed on the fields: (`userId`)"
+      "Failed to create customer for user"
     );
     // findUnique called twice: initial lookup + recovery fetch (both null)
     expect(customerFindUnique).toHaveBeenCalledTimes(2);

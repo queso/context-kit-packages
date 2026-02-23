@@ -1,13 +1,13 @@
 import { BillingError, SubscriptionStateError } from "./types";
 import type { CancelParams, PlanDefinition } from "./types";
 import type { PrismaSubscription } from "./prisma";
+import { resolvePriceId } from "./pricing";
+import { findActiveSubscription } from "./subscription-helpers";
 
 // biome-ignore lint/suspicious/noExplicitAny: structural duck-typing for Prisma client
 type PrismaClientLike = any;
 // biome-ignore lint/suspicious/noExplicitAny: structural duck-typing for Stripe client
 type StripeClientLike = any;
-
-const ACTIVE_STATUSES = ["active", "trialing", "past_due", "unpaid", "incomplete"];
 
 type ManageDeps = {
   prisma: PrismaClientLike;
@@ -20,42 +20,6 @@ type ChangePlanParams = {
   interval?: string;
   prorate?: boolean;
 };
-
-async function findActiveSubscription(
-  userId: string,
-  prisma: PrismaClientLike,
-): Promise<PrismaSubscription | null> {
-  const customer = await prisma.customer.findUnique({ where: { userId } });
-  if (!customer) return null;
-
-  return prisma.subscription.findFirst({
-    where: {
-      customerId: customer.id,
-      status: { in: ACTIVE_STATUSES },
-    },
-    orderBy: { createdAt: "desc" },
-  });
-}
-
-function resolvePriceId(plan: PlanDefinition, interval?: string): string {
-  if (interval && plan.stripePriceIds) {
-    const key = interval as keyof typeof plan.stripePriceIds;
-    const priceId = plan.stripePriceIds[key];
-    if (priceId) return priceId;
-    throw new BillingError(`Plan "${plan.id}" has no price for interval "${interval}".`);
-  }
-
-  if (plan.stripePriceId) return plan.stripePriceId;
-
-  if (plan.stripePriceIds) {
-    const key = "monthly" as keyof typeof plan.stripePriceIds;
-    const priceId = plan.stripePriceIds[key];
-    if (priceId) return priceId;
-    throw new BillingError(`Plan "${plan.id}" has no price for interval "monthly".`);
-  }
-
-  throw new BillingError(`Plan "${plan.id}" has no Stripe price configured.`);
-}
 
 export async function changePlan(
   userId: string,
@@ -87,10 +51,16 @@ export async function changePlan(
   const newPriceId = resolvePriceId(targetPlan, params.interval);
   const prorate = params.prorate !== false;
 
-  await stripe.subscriptions.update(subscription.stripeSubscriptionId, {
+  const result = await stripe.subscriptions.update(subscription.stripeSubscriptionId, {
     items: [{ price: newPriceId }],
     proration_behavior: prorate ? "create_prorations" : "none",
   });
+
+  if (result.status === "canceled" || result.status === "incomplete_expired") {
+    throw new SubscriptionStateError(
+      `Stripe subscription update resulted in unexpected status: ${result.status}`,
+    );
+  }
 
   await prisma.subscription.update({
     where: { id: subscription.id },

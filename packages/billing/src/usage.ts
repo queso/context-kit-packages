@@ -1,11 +1,10 @@
 import { BillingError, UsageCapExceededError } from "./types";
 import type { FreeTierConfig, PlanDefinition, UsageResult } from "./types";
 import type { PrismaSubscription, PrismaUsageRecord } from "./prisma";
+import { findActiveSubscription } from "./subscription-helpers";
 
 // biome-ignore lint/suspicious/noExplicitAny: structural duck-typing for Prisma client
 type PrismaClientLike = any;
-
-const ACTIVE_STATUSES = ["active", "trialing", "past_due", "unpaid", "incomplete"];
 
 type UsageDeps = {
   prisma: PrismaClientLike;
@@ -36,22 +35,6 @@ function subscriptionPeriodBounds(sub: PrismaSubscription): PeriodBounds {
     periodStart: sub.currentPeriodStart,
     periodEnd: sub.currentPeriodEnd,
   };
-}
-
-async function findActiveSubscription(
-  userId: string,
-  prisma: PrismaClientLike,
-): Promise<PrismaSubscription | null> {
-  const customer = await prisma.customer.findUnique({ where: { userId } });
-  if (!customer) return null;
-
-  return prisma.subscription.findFirst({
-    where: {
-      customerId: customer.id,
-      status: { in: ACTIVE_STATUSES },
-    },
-    orderBy: { createdAt: "desc" },
-  });
 }
 
 async function findUsageRecord(
@@ -124,6 +107,10 @@ export async function recordUsage(
   quantity: number,
   { prisma, plans, freeTier, soft }: RecordUsageDeps,
 ): Promise<UsageResult | void> {
+  if (quantity < 0) {
+    throw new BillingError(`Usage quantity must be non-negative, got: ${quantity}`);
+  }
+
   const subscription = await findActiveSubscription(userId, prisma);
 
   if (!subscription && !freeTier) {

@@ -143,3 +143,20 @@ export async function runResync({
 
   return summary;
 }
+
+// CLI entry point
+if (import.meta.main) {
+  const stripeKey = process.env.STRIPE_SECRET_KEY;
+  if (!stripeKey) {
+    console.error("Error: STRIPE_SECRET_KEY environment variable is required.");
+    process.exit(1);
+  }
+
+  console.error(
+    "Error: The billing CLI requires a PrismaClient instance that cannot be auto-detected.\n" +
+    "Use the programmatic API instead:\n\n" +
+    '  import { runResync } from "@context-kit/billing/cli";\n' +
+    "  await runResync({ prisma, stripe });\n",
+  );
+  process.exit(1);
+}
