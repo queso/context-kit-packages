@@ -313,7 +313,13 @@ describe("ingestion handler — success path", () => {
     const callArgs = (clientErrorUpdate.mock.calls as any[][])[0][0];
     const newOccurrences = callArgs?.data?.occurrences;
     if (newOccurrences !== undefined) {
-      expect(newOccurrences).toBeGreaterThan(5);
+      // The implementation uses Prisma's atomic increment ({ increment: 1 })
+      // rather than a computed value, so we check for the atomic form.
+      if (typeof newOccurrences === "object" && newOccurrences !== null && "increment" in newOccurrences) {
+        expect((newOccurrences as { increment: number }).increment).toBeGreaterThan(0);
+      } else {
+        expect(newOccurrences).toBeGreaterThan(5);
+      }
     }
   });
 

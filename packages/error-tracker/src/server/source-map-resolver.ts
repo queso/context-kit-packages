@@ -1,6 +1,9 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join, basename } from "node:path";
-import { SourceMapConsumer } from "source-map";
+import { SourceMapConsumer, type BasicSourceMapConsumer, type IndexedSourceMapConsumer } from "source-map";
+import { parseFrameLine } from "./parse-stack.js";
+
+type SourceMapConsumerInstance = BasicSourceMapConsumer | IndexedSourceMapConsumer;
 
 export interface ResolveStackOptions {
   sourceMapDir?: string;
@@ -8,18 +11,6 @@ export interface ResolveStackOptions {
 
 const DEFAULT_SOURCE_MAP_DIR = ".next/static/chunks";
 
-// Parse a stack frame line, returns null if it doesn't match
-function parseFrameLine(line: string): { before: string; file: string; line: number; col: number } | null {
-  // Matches "    at Something (path/to/file.js:LINE:COL)" or "    at path/to/file.js:LINE:COL"
-  const match = line.match(/^(\s*at\s+(?:.+\s+\()?)((?:https?:\/\/[^)]+?|[^()\s]+))(?::(\d+):(\d+))\)?/);
-  if (!match) return null;
-  return {
-    before: match[1],
-    file: match[2],
-    line: parseInt(match[3], 10),
-    col: parseInt(match[4], 10),
-  };
-}
 
 function getMapFilePath(sourceMapDir: string, fileRef: string): string | null {
   // Extract just the filename portion (last path segment)
@@ -33,6 +24,32 @@ function getMapFilePath(sourceMapDir: string, fileRef: string): string | null {
   }
   const mapPath = join(sourceMapDir, `${fileName}.map`);
   return existsSync(mapPath) ? mapPath : null;
+}
+
+// Cache parsed source maps to avoid re-reading from disk on repeated errors.
+// Entries are SourceMapConsumer instances keyed by map file path.
+// Limited to 20 entries to bound memory; oldest entry evicted on overflow.
+const sourceMapCache = new Map<string, SourceMapConsumerInstance>();
+const SOURCE_MAP_CACHE_LIMIT = 20;
+
+async function getCachedConsumer(mapFilePath: string): Promise<SourceMapConsumerInstance> {
+  const cached = sourceMapCache.get(mapFilePath);
+  if (cached) return cached;
+
+  const rawMap = readFileSync(mapFilePath, "utf-8");
+  const sourceMap = JSON.parse(rawMap);
+  const consumer = await new SourceMapConsumer(sourceMap);
+
+  // Evict oldest entry if at limit
+  if (sourceMapCache.size >= SOURCE_MAP_CACHE_LIMIT) {
+    const firstKey = sourceMapCache.keys().next().value;
+    if (firstKey) {
+      sourceMapCache.get(firstKey)?.destroy();
+      sourceMapCache.delete(firstKey);
+    }
+  }
+  sourceMapCache.set(mapFilePath, consumer);
+  return consumer;
 }
 
 export async function resolveStack(rawStack: string, options?: ResolveStackOptions): Promise<string> {
@@ -56,19 +73,13 @@ export async function resolveStack(rawStack: string, options?: ResolveStackOptio
       }
 
       try {
-        const rawMap = readFileSync(mapFilePath, "utf-8");
-        const sourceMap = JSON.parse(rawMap);
-        const consumer = await new SourceMapConsumer(sourceMap);
-        try {
-          const pos = consumer.originalPositionFor({ line: parsed.line, column: parsed.col });
-          if (pos.source) {
-            const sourceName = pos.name ? `${pos.name} (${pos.source}:${pos.line}:${pos.column})` : `${pos.source}:${pos.line}:${pos.column}`;
-            resolved.push(`${parsed.before}${sourceName}`);
-          } else {
-            resolved.push(line);
-          }
-        } finally {
-          consumer.destroy();
+        const consumer = await getCachedConsumer(mapFilePath);
+        const pos = consumer.originalPositionFor({ line: parsed.line, column: parsed.column });
+        if (pos.source) {
+          const sourceName = pos.name ? `${pos.name} (${pos.source}:${pos.line}:${pos.column})` : `${pos.source}:${pos.line}:${pos.column}`;
+          resolved.push(`${parsed.prefix}${sourceName}`);
+        } else {
+          resolved.push(line);
         }
       } catch {
         // Corrupt or unparseable map — fall back to raw line

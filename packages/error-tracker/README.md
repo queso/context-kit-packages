@@ -1,75 +1,60 @@
 # @context-kit/error-tracker
 
-Client-side error tracking for context-kit projects. Automatically captures uncaught errors, render errors, and unhandled promise rejections, then reports them to your server for analysis and debugging.
+Client-side error tracking for Next.js App Router apps. Captures React render crashes, unhandled promise rejections, and `window.onerror` events, then stores them in your app's own Postgres database via Prisma. No external service required.
 
 ## Features
 
-- **Error Boundary** — React ErrorBoundary component that catches render errors
+- **Error Boundary** — React component that catches render errors and reports them
 - **Global Error Listeners** — Captures `window.onerror` and `unhandledrejection` events
-- **Client-side Reporter** — Fire-and-forget error reporting with loop prevention
-- **Server Ingestion** — Route handlers for receiving and storing errors in Prisma
-- **Error Query API** — Retrieve and filter stored errors with pagination
-- **Source Map Resolution** — Resolve minified stack traces back to original source
-- **Rate Limiting** — Protect your ingestion endpoint from abuse
-- **Console Patching** — Optionally capture `console.error` calls
-- **CLI Tool** — `npx error-tracker` commands for tailing and resolving errors
+- **Fire-and-Forget Reporter** — Non-blocking error reporting with loop prevention
+- **Server Ingestion** — Route handler that validates, deduplicates, and stores errors
+- **Source Map Resolution** — Resolves minified stack traces on the server using build-time source maps
+- **Query API** — Retrieve and filter stored errors with offset-based pagination
+- **Rate Limiting** — Per-IP rate limiting on the ingestion endpoint
+- **Console Patching** — Optionally capture `console.error` calls (opt-in)
+- **Deduplication** — Same error fingerprints are collapsed into one row with an occurrence counter
+- **CLI** — `npx error-tracker tail` and `npx error-tracker resolve <fingerprint>`
 
 ## Quick Start
 
-### 1. Install the package
+### 1. Install
 
 ```bash
-npm install @context-kit/error-tracker
-# or
 bun add @context-kit/error-tracker
+# or
+npm install @context-kit/error-tracker
 ```
 
-### 2. Add Prisma schema
+### 2. Add the Prisma model
 
-Extend your Prisma schema with the error-tracker model:
+Copy the model from `node_modules/@context-kit/error-tracker/prisma/error-tracker.prisma` into your schema, or paste it directly:
 
 ```prisma
-// prisma/schema.prisma
-generator client {
-  provider = "prisma-client-js"
-}
-
-datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-}
-
-// ... your other models ...
-
-// Include the error-tracker schema
 model ClientError {
-  id            String   @id @default(cuid())
-  message       String
-  stack         String?
-  resolvedStack String?
+  id             String    @id @default(cuid())
+  message        String
+  stack          String?
   componentStack String?
-  url           String
-  userAgent     String
-  environment   String
-  fingerprint   String   @unique
-  count         Int      @default(1)
-  lastSeen      DateTime @updatedAt
-  createdAt     DateTime @default(now())
-
-  @@index([environment])
-  @@index([lastSeen])
+  resolvedStack  String?
+  fingerprint    String    @unique
+  occurrences    Int       @default(1)
+  environment    String
+  url            String?
+  userAgent      String?
+  resolvedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  lastSeenAt     DateTime
 }
 ```
 
-Then run the migration:
+Then migrate:
 
 ```bash
 bunx prisma migrate dev --name add_client_errors
 ```
 
 ### 3. Mount route handlers
-
-Create a catch-all route for error tracking:
 
 ```typescript
 // app/api/errors/route.ts
@@ -79,50 +64,18 @@ import { prisma } from "@/lib/prisma";
 const handlers = createErrorHandlers({
   prisma,
   secretHeaderToken: process.env.ERROR_TRACKER_TOKEN,
-  sourceMapDir: process.env.NODE_ENV === "production" ? ".next/static" : undefined,
-  rateLimiter: { windowMs: 60000, maxRequests: 1000 },
+  sourceMapDir: process.env.NODE_ENV === "production" ? ".next/static/chunks" : undefined,
+  rateLimiter: { windowMs: 60_000, maxRequests: 100 },
 });
 
 export const POST = handlers.POST;
 export const GET = handlers.GET;
 ```
 
-### 4. Add ErrorBoundary to your layout
+### 4. Add ErrorBoundary and initialize tracking
 
 ```tsx
-// app/layout.tsx
-import { createErrorTracker } from "@context-kit/error-tracker";
-
-const tracker = createErrorTracker({
-  endpoint: "/api/errors",
-  token: process.env.NEXT_PUBLIC_ERROR_TRACKER_TOKEN,
-  environment: process.env.NODE_ENV,
-  patchConsoleError: true,
-});
-
-const { ErrorBoundary } = tracker;
-
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
-  return (
-    <html lang="en">
-      <body>
-        <ErrorBoundary>
-          {children}
-        </ErrorBoundary>
-      </body>
-    </html>
-  );
-}
-```
-
-### 5. Initialize error tracking in your app
-
-```tsx
-// app/layout.tsx (client component)
+// app/providers.tsx
 "use client";
 
 import { createErrorTracker } from "@context-kit/error-tracker";
@@ -131,8 +84,10 @@ import { useEffect } from "react";
 const tracker = createErrorTracker({
   endpoint: "/api/errors",
   token: process.env.NEXT_PUBLIC_ERROR_TRACKER_TOKEN,
-  patchConsoleError: true,
 });
+
+// Re-export the pre-configured ErrorBoundary (config is pre-bound)
+export const { ErrorBoundary } = tracker;
 
 export function ErrorTrackerInit() {
   useEffect(() => {
@@ -144,151 +99,169 @@ export function ErrorTrackerInit() {
 }
 ```
 
+```tsx
+// app/layout.tsx
+import { ErrorBoundary, ErrorTrackerInit } from "./providers";
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <body>
+        <ErrorTrackerInit />
+        <ErrorBoundary>
+          {children}
+        </ErrorBoundary>
+      </body>
+    </html>
+  );
+}
+```
+
+The `ErrorBoundary` returned by `createErrorTracker` has config pre-bound — you don't need to pass a `config` prop. If you want a custom fallback:
+
+```tsx
+<ErrorBoundary fallback={<div>Oops! Something broke.</div>}>
+  {children}
+</ErrorBoundary>
+
+{/* Or with error details: */}
+<ErrorBoundary fallback={(error) => <div>Error: {error.message}</div>}>
+  {children}
+</ErrorBoundary>
+```
+
 ## API Reference
 
 ### `createErrorTracker(options?)`
 
-Factory function that sets up error tracking. Returns an object with `init` and `ErrorBoundary`.
-
-#### Options
+Factory function that creates a configured error tracker instance.
 
 ```typescript
 interface CreateErrorTrackerOptions {
   endpoint?: string;           // Default: "/api/errors"
-  token?: string;              // Secret token for authentication
-  secretHeaderName?: string;   // Header name for token (default: "x-error-tracker-token")
-  environment?: string;        // Default: process.env.NODE_ENV
-  patchConsoleError?: boolean; // Default: false
+  token?: string;              // Secret token sent to the server
+  secretHeaderName?: string;   // Header name for the token (default: "x-error-tracker-token")
+  environment?: string;        // Default: process.env.NODE_ENV ?? "development"
+  patchConsoleError?: boolean; // Wrap console.error to report calls (default: false)
 }
 ```
 
-#### Returns
+Returns:
 
 ```typescript
 {
-  init: () => () => void;      // Function to initialize listeners, returns cleanup
-  ErrorBoundary: React.Component;  // ErrorBoundary component
+  init: () => () => void;        // Install global listeners; returns cleanup function
+  ErrorBoundary: React.Component // Pre-configured ErrorBoundary (config is pre-bound)
 }
 ```
 
 ### `createErrorHandlers(config)`
 
-Factory function that creates POST and GET handlers for your route.
-
-#### Config
+Factory function that creates Next.js App Router route handlers.
 
 ```typescript
 interface ErrorHandlersConfig {
   prisma: PrismaClient;              // Your Prisma client instance
   secretHeaderName?: string;         // Header name for auth (default: "x-error-tracker-token")
-  secretHeaderToken?: string;        // Expected token value
-  sourceMapDir?: string;             // Path to source maps (e.g., ".next/static")
-  deduplicationWindowMs?: number;    // Dedup window (default: 3600000)
+  secretHeaderToken?: string;        // Expected token value; omit for open access (dev only)
+  sourceMapDir?: string;             // Path to source maps (default: ".next/static/chunks")
+  deduplicationWindowMs?: number;    // Dedup window in ms (default: 86400000 = 24 hours)
   rateLimiter?: {
     windowMs: number;                // Time window in ms
-    maxRequests: number;             // Max requests per window
+    maxRequests: number;             // Max requests per IP per window
   };
 }
 ```
 
-#### Returns
+Returns:
 
 ```typescript
 {
-  POST: (request: Request) => Promise<Response>;  // POST /api/errors
-  GET: (request: Request) => Promise<Response>;   // GET /api/errors
+  POST: (request: Request) => Promise<Response>;  // Ingestion endpoint
+  GET: (request: Request) => Promise<Response>;    // Query endpoint
 }
 ```
 
 ### `ErrorBoundary`
 
-React component that catches render errors.
-
-```tsx
-<ErrorBoundary fallback={<ErrorFallback />}>
-  <YourComponent />
-</ErrorBoundary>
-```
+React class component that catches render errors. When used via the factory (`createErrorTracker`), config is pre-bound. When used directly, pass `config` explicitly.
 
 Props:
-- `children`: React elements to wrap
-- `fallback?`: Fallback UI (default: generic error message)
-- `onError?`: Callback when error occurs
-
-### `reportError(payload)`
-
-Manually report an error to the server:
-
-```typescript
-import { reportError } from "@context-kit/error-tracker";
-
-try {
-  // ...
-} catch (error) {
-  reportError({
-    message: error instanceof Error ? error.message : String(error),
-    stack: error instanceof Error ? error.stack : undefined,
-    url: window.location.href,
-    userAgent: navigator.userAgent,
-    environment: process.env.NODE_ENV || "development",
-  });
-}
-```
+- `config?` — Error tracker configuration (pre-bound when created via factory)
+- `fallback?` — `ReactNode` or `(error: Error) => ReactNode` (default: `<div>Something went wrong.</div>`)
+- `children` — React elements to wrap
 
 ## Query API
 
-The GET `/api/errors` endpoint supports filtering and pagination:
+The GET `/api/errors` endpoint supports filtering and offset-based pagination:
 
 ```typescript
-// Fetch errors
-const response = await fetch("/api/errors?environment=production&limit=50&page=1", {
-  headers: {
-    "x-error-tracker-token": process.env.NEXT_PUBLIC_ERROR_TRACKER_TOKEN,
-  },
+const response = await fetch("/api/errors?env=production&resolved=false&limit=50&offset=0", {
+  headers: { "x-error-tracker-token": "your-token" },
 });
 
-const { errors, total, page } = await response.json();
+const { errors, total } = await response.json();
 ```
 
 Query parameters:
-- `environment?: string` — Filter by environment
-- `limit?: number` — Results per page (default: 50)
-- `page?: number` — Page number (default: 1)
+- `env` — Filter by environment (`development`, `production`)
+- `since` — ISO timestamp; return errors with `lastSeenAt >= since`
+- `fingerprint` — Filter by exact fingerprint
+- `resolved` — `"true"` or `"false"`; filter by resolution status
+- `limit` — Results per page (default: 50, max: 200)
+- `offset` — Number of results to skip (default: 0)
 
-## CLI Usage
+## Deduplication & Fingerprinting
 
-The `error-tracker` CLI command is automatically available after installation.
+Errors are deduplicated using a SHA-256 fingerprint computed from the error message and the first three stack frames (resolved frames preferred over minified):
 
-### Tail errors
+```
+SHA-256( message | file:line:col:fn | file:line:col:fn | file:line:col:fn )
+```
+
+When the same fingerprint appears within the deduplication window (default: 24 hours), the existing record's `occurrences` counter is incremented atomically instead of creating a new row.
+
+**Resolved errors:** If an error was previously marked resolved (`resolvedAt` is set), a new occurrence with the same fingerprint creates a fresh record rather than reopening the old one.
+
+**Fingerprint collisions:** Two distinct errors that share the same message and top-3 frames merge under one fingerprint. This is an acceptable tradeoff in v1. Query by fingerprint and inspect full stacks if you suspect a collision.
+
+## CLI
+
+Requires `DATABASE_URL` set in the environment and `@prisma/client` installed.
+
+### Tail recent errors
 
 ```bash
 npx error-tracker tail
-# or with a secret token
-npx error-tracker tail --token your-secret-token
+npx error-tracker tail --limit 50
+npx error-tracker tail --env production
+npx error-tracker tail --since 2024-01-01T00:00:00Z
 ```
 
-### Resolve stack traces
+### Mark an error resolved
 
 ```bash
-npx error-tracker resolve --fingerprint abc123 --source-map-dir .next/static
+npx error-tracker resolve <fingerprint>
 ```
-
-Resolved stack traces are stored in the `resolvedStack` column and can be queried via the API.
 
 ## Configuration Examples
 
-### Production with authentication
+### Production with auth and source maps
 
 ```typescript
+// Server — app/api/errors/route.ts
 const handlers = createErrorHandlers({
   prisma,
-  secretHeaderToken: process.env.ERROR_TRACKER_TOKEN, // Must match client token
-  sourceMapDir: ".next/static",
-  rateLimiter: {
-    windowMs: 60000,
-    maxRequests: 1000,
-  },
-  deduplicationWindowMs: 3600000, // 1 hour
+  secretHeaderToken: process.env.ERROR_TRACKER_TOKEN,
+  sourceMapDir: ".next/static/chunks",
+  rateLimiter: { windowMs: 60_000, maxRequests: 100 },
+  deduplicationWindowMs: 86_400_000, // 24 hours
+});
+
+// Client — app/providers.tsx
+const tracker = createErrorTracker({
+  endpoint: "/api/errors",
+  token: process.env.NEXT_PUBLIC_ERROR_TRACKER_TOKEN,
 });
 ```
 
@@ -297,35 +270,47 @@ const handlers = createErrorHandlers({
 ```typescript
 const tracker = createErrorTracker({
   endpoint: "/api/errors",
-  patchConsoleError: true, // Capture console.error calls
+  patchConsoleError: true,
 });
 ```
 
-### Custom endpoint
+### Custom header name
 
 ```typescript
+// Both client and server must agree on the header name
 const tracker = createErrorTracker({
-  endpoint: "/api/errors/custom",
+  endpoint: "/api/errors",
+  token: "my-token",
   secretHeaderName: "authorization",
+});
+
+const handlers = createErrorHandlers({
+  prisma,
+  secretHeaderName: "authorization",
+  secretHeaderToken: "my-token",
 });
 ```
 
 ## Environment Variables
 
-Set these in your `.env.local`:
-
 ```bash
-# Client-side
-NEXT_PUBLIC_ERROR_TRACKER_TOKEN=your-public-token
-NEXT_PUBLIC_ERROR_TRACKER_ENDPOINT=/api/errors
-
 # Server-side
 ERROR_TRACKER_TOKEN=your-secret-token
+DATABASE_URL=postgresql://...
+
+# Client-side (exposed to browser)
+NEXT_PUBLIC_ERROR_TRACKER_TOKEN=your-secret-token
 ```
 
-## Testing
+When no token is configured, the ingestion endpoint accepts all requests (permissive default for local dev). In production, a console warning is emitted if `token` is not set.
 
-Run the test suite:
+## Further Reading
+
+- [Source Map Resolution](docs/source-maps.md) — Next.js config, deployment requirements, caching, troubleshooting
+- [SQL Recipes](docs/sql-recipes.md) — Copy-paste queries for debugging, aggregation, and maintenance
+- [Architecture](docs/architecture.md) — Data flow, module responsibilities, and design decisions
+
+## Testing
 
 ```bash
 bun --filter @context-kit/error-tracker test

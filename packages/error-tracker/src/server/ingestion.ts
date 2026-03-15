@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { StackFrame } from "../types.js";
+import { parseFrames } from "./parse-stack.js";
 
 export interface IngestionConfig {
   // biome-ignore lint/suspicious/noExplicitAny: Prisma client type varies per consumer
@@ -10,6 +11,7 @@ export interface IngestionConfig {
 }
 
 const DEFAULT_DEDUP_WINDOW_MS = 86_400_000; // 24 hours
+const MAX_STACK_LENGTH = 10_000;
 
 export function computeFingerprint(message: string, frames: StackFrame[]): string {
   const topFrames = frames.slice(0, 3);
@@ -21,26 +23,9 @@ export function computeFingerprint(message: string, frames: StackFrame[]): strin
     .digest("hex");
 }
 
-function parseFrames(stack: string): StackFrame[] {
-  const frames: StackFrame[] = [];
-  const lines = stack.split("\n");
-  for (const line of lines) {
-    // Match "  at FunctionName (file.js:line:col)"
-    const match = line.match(/at\s+(?:(.+?)\s+\()?(.+):(\d+):(\d+)\)?/);
-    if (match) {
-      frames.push({
-        functionName: match[1] ?? undefined,
-        file: match[2],
-        line: parseInt(match[3], 10),
-        column: parseInt(match[4], 10),
-      });
-    }
-  }
-  return frames;
-}
 
 export function createIngestionHandler(config: IngestionConfig) {
-  const { prisma, secretHeaderName, secretHeaderToken, deduplicationWindowMs = DEFAULT_DEDUP_WINDOW_MS } = config;
+  const { prisma, secretHeaderName = "x-error-tracker-token", secretHeaderToken, deduplicationWindowMs = DEFAULT_DEDUP_WINDOW_MS } = config;
 
   return async function POST(request: Request): Promise<Response> {
     // Auth check
@@ -65,52 +50,81 @@ export function createIngestionHandler(config: IngestionConfig) {
     }
 
     const message = body.message as string;
-    const rawStack = typeof body.stack === "string" ? body.stack : "";
-    const resolvedStack = typeof body.resolvedStack === "string" ? body.resolvedStack : null;
+    const rawStack = typeof body.stack === "string" ? (body.stack as string).slice(0, MAX_STACK_LENGTH) : "";
+    const resolvedStack = typeof body.resolvedStack === "string" ? (body.resolvedStack as string).slice(0, MAX_STACK_LENGTH) : null;
 
     // Fix 2: use resolved frames for fingerprinting when available so the same
     // logical error from different builds produces a stable fingerprint
     const fingerprintFrames = parseFrames(resolvedStack ?? rawStack);
     const fingerprint = computeFingerprint(message, fingerprintFrames);
-    const environment = process.env.NODE_ENV ?? (typeof body.environment === "string" ? body.environment : "unknown");
+    const environment = process.env.NODE_ENV ?? "development";
     const now = new Date();
 
-    // Check for existing unresolved record within dedup window
+    // Check for existing unresolved record within dedup window.
+    // We query with lastSeenAt >= windowStart directly so the DB does the
+    // filtering — no need to re-check the timestamp in application code.
     const windowStart = new Date(now.getTime() - deduplicationWindowMs);
     const existing = await prisma.clientError.findFirst({
-      where: { fingerprint, resolvedAt: null },
+      where: { fingerprint, resolvedAt: null, lastSeenAt: { gte: windowStart } },
     });
 
-    if (existing && existing.resolvedAt === null && existing.lastSeenAt >= windowStart) {
-      // Increment occurrences
+    if (existing) {
+      // Matching unresolved record found within the window — increment in place.
+      // We update by `id` (a specific row) rather than `fingerprint` so we never
+      // touch a row that was concurrently resolved or replaced.
       await prisma.clientError.update({
         where: { id: existing.id },
         data: {
-          occurrences: existing.occurrences + 1,
+          occurrences: { increment: 1 },
           lastSeenAt: now,
-          // Fix 1: persist the resolved stack on update
           ...(resolvedStack !== null ? { resolvedStack } : {}),
         },
       });
     } else {
-      // Insert new record
-      await prisma.clientError.create({
-        data: {
-          message,
-          stack: rawStack || null,
-          componentStack: typeof body.componentStack === "string" ? body.componentStack : null,
-          // Fix 1: persist the resolved stack on create
-          resolvedStack,
-          fingerprint,
-          occurrences: 1,
-          environment,
-          url: typeof body.url === "string" ? body.url : null,
-          userAgent: typeof body.userAgent === "string" ? body.userAgent : null,
-          lastSeenAt: now,
-          createdAt: now,
-          updatedAt: now,
-        },
-      });
+      // No matching unresolved record in window — create a new one.
+      // Wrap in try/catch: under concurrent load two requests with the same
+      // fingerprint can both reach this branch simultaneously.  If the sibling
+      // request wins the INSERT first we get a P2002 unique-constraint error;
+      // handle that by falling back to an atomic updateMany so neither request
+      // is lost.
+      const newRecordData = {
+        message,
+        stack: rawStack || null,
+        componentStack: typeof body.componentStack === "string" ? body.componentStack : null,
+        resolvedStack,
+        fingerprint,
+        occurrences: 1,
+        environment,
+        url: typeof body.url === "string" ? body.url : null,
+        userAgent: typeof body.userAgent === "string" ? body.userAgent : null,
+        lastSeenAt: now,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      try {
+        await prisma.clientError.create({ data: newRecordData });
+      } catch (err: unknown) {
+        // P2002 = Prisma unique constraint violation
+        if (
+          err &&
+          typeof err === "object" &&
+          "code" in err &&
+          (err as { code: string }).code === "P2002"
+        ) {
+          // Another concurrent request just created the row — merge into it.
+          await prisma.clientError.updateMany({
+            where: { fingerprint, resolvedAt: null },
+            data: {
+              occurrences: { increment: 1 },
+              lastSeenAt: now,
+              ...(resolvedStack !== null ? { resolvedStack } : {}),
+            },
+          });
+        } else {
+          throw err;
+        }
+      }
     }
 
     return Response.json({ success: true, fingerprint });

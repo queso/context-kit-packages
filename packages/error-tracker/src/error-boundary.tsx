@@ -7,8 +7,8 @@ import { reportError } from "./reporter.js";
 type FallbackProp = React.ReactNode | ((error: Error) => React.ReactNode);
 
 interface ErrorBoundaryProps {
-  config: ErrorTrackerConfig;
-  fallback: FallbackProp;
+  config?: ErrorTrackerConfig;
+  fallback?: FallbackProp;
   children?: React.ReactNode;
 }
 
@@ -28,15 +28,17 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
 
   componentDidCatch(error: Error, info: React.ErrorInfo): void {
     try {
+      const config = this.props.config;
+      if (!config) return;
       const payload: ErrorPayload = {
         message: error.message,
         stack: error.stack,
         componentStack: info.componentStack ?? undefined,
         url: typeof window !== "undefined" ? window.location.href : "",
         userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "",
-        environment: this.props.config.environment,
+        environment: config.environment,
       };
-      reportError(this.props.config, payload);
+      reportError(config, payload);
     } catch {
       // Never let reporter errors propagate
     }
@@ -49,7 +51,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
       if (typeof fallback === "function") {
         return (fallback as (error: Error) => React.ReactNode)(error);
       }
-      return fallback;
+      return fallback ?? React.createElement("div", null, "Something went wrong.");
     }
     return this.props.children ?? null;
   }

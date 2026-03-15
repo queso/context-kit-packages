@@ -30,11 +30,25 @@ export function createRateLimiter(options?: RateLimiterOptions): RateLimiter {
   const maxRequests = options?.maxRequests ?? 60;
 
   const store = new Map<string, BucketEntry>();
+  let lastCleanup = Date.now();
+  const CLEANUP_INTERVAL = windowMs * 2; // Clean up every 2 windows
+
+  function cleanup(now: number): void {
+    if (now - lastCleanup < CLEANUP_INTERVAL) return;
+    lastCleanup = now;
+    for (const [key, entry] of store) {
+      if (now - entry.windowStart >= windowMs) {
+        store.delete(key);
+      }
+    }
+  }
 
   return {
     async check(request: Request): Promise<Response | null> {
       const ip = extractIp(request);
       const now = Date.now();
+
+      cleanup(now);
 
       const entry = store.get(ip);
 

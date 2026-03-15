@@ -15,21 +15,18 @@ export function createErrorTracker(options: CreateErrorTrackerOptions = {}) {
   const config: ErrorTrackerConfig = {
     endpoint: options.endpoint ?? "/api/errors",
     token: options.token,
-    secretHeaderName: options.secretHeaderName,
+    secretHeaderName: options.secretHeaderName ?? "x-error-tracker-token",
     environment: options.environment ?? process.env.NODE_ENV ?? "development",
     patchConsoleError: options.patchConsoleError ?? false,
   };
 
-  // Create a pre-bound ErrorBoundary class for this tracker's config
-  const BoundErrorBoundary = class extends ErrorBoundary {
-    static displayName = "BoundErrorBoundary";
-  };
-  // Override default config by capturing it in props — actually just expose the
-  // class with a known config. The config is passed as a prop, so we create a
-  // wrapper component that pre-fills the config prop.
+  // Pre-bind config into the ErrorBoundary via defaultProps so consumers
+  // can use <ErrorBoundary> without passing config explicitly.
   // biome-ignore lint/suspicious/noExplicitAny: dynamic class creation
-  const ConfiguredErrorBoundary: any = class extends ErrorBoundary {};
-  ConfiguredErrorBoundary._trackerConfig = config;
+  const ConfiguredErrorBoundary: any = class extends ErrorBoundary {
+    static displayName = "ErrorBoundary";
+    static defaultProps = { config };
+  };
 
   function init(): () => void {
     // Warn in production without token

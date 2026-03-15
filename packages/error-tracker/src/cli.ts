@@ -16,19 +16,27 @@ export interface ResolveOptions {
   exitOnComplete?: boolean;
 }
 
-function getPrisma(provided?: unknown): unknown | null {
+async function getPrisma(provided?: unknown): Promise<unknown | null> {
   if (provided) return provided;
   const url = process.env.DATABASE_URL;
   if (!url) return null;
-  // In real usage, consumers pass their own PrismaClient instance
-  return null;
+  try {
+    // Dynamic import — works when consumer has @prisma/client installed
+    // biome-ignore lint/suspicious/noExplicitAny: runtime import of consumer's PrismaClient
+    const mod = await import("@prisma/client") as any;
+    const PrismaClient = mod.PrismaClient ?? mod.default?.PrismaClient;
+    if (!PrismaClient) return null;
+    return new PrismaClient();
+  } catch {
+    return null;
+  }
 }
 
 export async function runTail(options: TailOptions): Promise<void> {
-  const prisma = getPrisma(options.prisma);
+  const prisma = await getPrisma(options.prisma);
 
   if (!prisma) {
-    console.error("Error: DATABASE_URL environment variable is not set.");
+    console.error("Error: Could not initialize Prisma client. Ensure DATABASE_URL is set and @prisma/client is installed.");
     process.exit(1);
     return;
   }
@@ -88,10 +96,10 @@ export async function runTail(options: TailOptions): Promise<void> {
 }
 
 export async function runResolve(options: ResolveOptions): Promise<void> {
-  const prisma = getPrisma(options.prisma);
+  const prisma = await getPrisma(options.prisma);
 
   if (!prisma) {
-    console.error("Error: DATABASE_URL environment variable is not set.");
+    console.error("Error: Could not initialize Prisma client. Ensure DATABASE_URL is set and @prisma/client is installed.");
     process.exit(1);
     return;
   }
