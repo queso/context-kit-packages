@@ -1,8 +1,8 @@
 "use client";
 
 import React from "react";
-import type { ErrorTrackerConfig, ErrorPayload } from "./types.js";
 import { reportError } from "./reporter.js";
+import type { ErrorPayload, ErrorTrackerConfig } from "./types.js";
 
 type FallbackProp = React.ReactNode | ((error: Error) => React.ReactNode);
 
@@ -16,7 +16,10 @@ interface ErrorBoundaryState {
   error: Error | null;
 }
 
-export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+export class ErrorBoundary extends React.Component<
+  ErrorBoundaryProps,
+  ErrorBoundaryState
+> {
   constructor(props: ErrorBoundaryProps) {
     super(props);
     this.state = { error: null };
@@ -51,7 +54,9 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
       if (typeof fallback === "function") {
         return (fallback as (error: Error) => React.ReactNode)(error);
       }
-      return fallback ?? React.createElement("div", null, "Something went wrong.");
+      return (
+        fallback ?? React.createElement("div", null, "Something went wrong.")
+      );
     }
     return this.props.children ?? null;
   }

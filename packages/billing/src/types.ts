@@ -44,7 +44,10 @@ export class UsageCapExceededError extends BillingError {
   used: number;
   limit: number;
 
-  constructor(message: string, { used, limit }: { used: number; limit: number }) {
+  constructor(
+    message: string,
+    { used, limit }: { used: number; limit: number }
+  ) {
     super(message);
     this.name = "UsageCapExceededError";
     this.used = used;
@@ -224,8 +227,14 @@ export interface BillingInstance {
   getSubscription(userId: string): Promise<SubscriptionData | null>;
   getPlan(planId: string): PlanDefinition;
   checkUsage(userId: string, metric: string): Promise<UsageResult>;
-  recordUsage(userId: string, metric: string, amount: number): Promise<UsageResult | void>;
-  createCheckoutSession(params: CheckoutSessionParams): Promise<{ url: string }>;
+  recordUsage(
+    userId: string,
+    metric: string,
+    amount: number
+  ): Promise<UsageResult | void>;
+  createCheckoutSession(
+    params: CheckoutSessionParams
+  ): Promise<{ url: string }>;
   changePlan(userId: string, params: ChangePlanParams): Promise<void>;
   cancelSubscription(userId: string, params?: CancelParams): Promise<void>;
   reactivateSubscription(userId: string): Promise<void>;

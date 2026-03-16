@@ -1,7 +1,7 @@
-import { describe, expect, test, beforeAll, afterAll } from "bun:test";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
 
@@ -92,11 +92,17 @@ describe("resolveStack", () => {
   test("does not throw when source map file is corrupt/invalid JSON", async () => {
     const corruptMapDir = join(tmpdir(), `error-tracker-corrupt-${Date.now()}`);
     mkdirSync(corruptMapDir, { recursive: true });
-    writeFileSync(join(corruptMapDir, "app.js.map"), "not-valid-json{{{{", "utf-8");
+    writeFileSync(
+      join(corruptMapDir, "app.js.map"),
+      "not-valid-json{{{{",
+      "utf-8"
+    );
 
     try {
       const rawStack = "Error\n  at fn (app.js:1:0)";
-      const result = await resolveStack(rawStack, { sourceMapDir: corruptMapDir });
+      const result = await resolveStack(rawStack, {
+        sourceMapDir: corruptMapDir,
+      });
       // Must not throw — returns fallback
       expect(typeof result).toBe("string");
     } finally {
@@ -107,7 +113,9 @@ describe("resolveStack", () => {
   test("does not propagate internal resolution errors (never throws)", async () => {
     // Pass an intentionally broken stack string
     await expect(
-      resolveStack("this is not a stack trace at all", { sourceMapDir: testMapDir })
+      resolveStack("this is not a stack trace at all", {
+        sourceMapDir: testMapDir,
+      })
     ).resolves.toBeDefined();
   });
 
@@ -128,7 +136,8 @@ describe("resolveStack", () => {
   });
 
   test("resolved output includes original error message line", async () => {
-    const rawStack = "TypeError: Cannot read 'map'\n  at Dashboard (app.js:1:0)";
+    const rawStack =
+      "TypeError: Cannot read 'map'\n  at Dashboard (app.js:1:0)";
     const result = await resolveStack(rawStack, { sourceMapDir: testMapDir });
     // The error message should survive resolution
     expect(result).toContain("TypeError");

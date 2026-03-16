@@ -1,11 +1,13 @@
-import { describe, expect, mock, test, beforeEach } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { render, screen } from "@testing-library/react";
 import React from "react";
 import type { ErrorTrackerConfig } from "../types";
 
 // ─── Mock reportError ─────────────────────────────────────────────────────────
 
-const mockReportError = mock((_config: ErrorTrackerConfig, _data: unknown) => undefined);
+const mockReportError = mock(
+  (_config: ErrorTrackerConfig, _data: unknown) => undefined
+);
 
 mock.module("../reporter", () => ({
   reportError: mockReportError,
@@ -20,10 +22,12 @@ const TEST_CONFIG: ErrorTrackerConfig = {
 };
 
 // A component that always throws during render
-function ThrowingComponent({ message = "Test render error" }: { message?: string }) {
+function ThrowingComponent({
+  message = "Test render error",
+}: {
+  message?: string;
+}) {
   throw new Error(message);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: unreachable
-  return null;
 }
 
 // A component that renders normally
@@ -74,7 +78,10 @@ describe("ErrorBoundary", () => {
 
   test("renders fallback when a child throws during render", () => {
     render(
-      <ErrorBoundary config={TEST_CONFIG} fallback={<div>something went wrong</div>}>
+      <ErrorBoundary
+        config={TEST_CONFIG}
+        fallback={<div>something went wrong</div>}
+      >
         <ThrowingComponent />
       </ErrorBoundary>
     );
@@ -131,7 +138,9 @@ describe("ErrorBoundary", () => {
     // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
     const [, payload] = (mockReportError.mock.calls as any[][])[0];
     // componentStack comes from React's componentDidCatch info argument
-    expect(payload?.componentStack !== undefined || payload?.stack !== undefined).toBe(true);
+    expect(
+      payload?.componentStack !== undefined || payload?.stack !== undefined
+    ).toBe(true);
   });
 
   test("does not throw when reportError fails internally", () => {
@@ -142,7 +151,10 @@ describe("ErrorBoundary", () => {
     // The render itself must succeed and show the fallback — not propagate the reporter error
     expect(() => {
       render(
-        <ErrorBoundary config={TEST_CONFIG} fallback={<div>fallback shown</div>}>
+        <ErrorBoundary
+          config={TEST_CONFIG}
+          fallback={<div>fallback shown</div>}
+        >
           <ThrowingComponent />
         </ErrorBoundary>
       );
@@ -190,7 +202,9 @@ describe("ErrorBoundary — fallback prop variants", () => {
     );
 
     expect(receivedError).not.toBeNull();
-    expect((receivedError as unknown as Error).message).toContain("error passed to render fn");
+    expect((receivedError as unknown as Error).message).toContain(
+      "error passed to render fn"
+    );
   });
 });
 

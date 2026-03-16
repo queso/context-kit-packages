@@ -1,4 +1,5 @@
-export type { ErrorTrackerConfig, ErrorPayload, StackFrame } from "./types.js";
-export { createErrorTracker } from "./factory.js";
-export { createErrorTracker as default } from "./factory.js";
-
+export {
+  createErrorTracker,
+  createErrorTracker as default,
+} from "./factory.js";
+export type { ErrorPayload, ErrorTrackerConfig, StackFrame } from "./types.js";

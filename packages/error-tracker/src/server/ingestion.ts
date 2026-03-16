@@ -13,19 +13,24 @@ export interface IngestionConfig {
 const DEFAULT_DEDUP_WINDOW_MS = 86_400_000; // 24 hours
 const MAX_STACK_LENGTH = 10_000;
 
-export function computeFingerprint(message: string, frames: StackFrame[]): string {
+export function computeFingerprint(
+  message: string,
+  frames: StackFrame[]
+): string {
   const topFrames = frames.slice(0, 3);
   const frameStr = topFrames
     .map((f) => `${f.file}:${f.line}:${f.column}:${f.functionName ?? ""}`)
     .join("|");
-  return createHash("sha256")
-    .update(`${message}|${frameStr}`)
-    .digest("hex");
+  return createHash("sha256").update(`${message}|${frameStr}`).digest("hex");
 }
 
-
 export function createIngestionHandler(config: IngestionConfig) {
-  const { prisma, secretHeaderName = "x-error-tracker-token", secretHeaderToken, deduplicationWindowMs = DEFAULT_DEDUP_WINDOW_MS } = config;
+  const {
+    prisma,
+    secretHeaderName = "x-error-tracker-token",
+    secretHeaderToken,
+    deduplicationWindowMs = DEFAULT_DEDUP_WINDOW_MS,
+  } = config;
 
   return async function POST(request: Request): Promise<Response> {
     // Auth check
@@ -45,13 +50,23 @@ export function createIngestionHandler(config: IngestionConfig) {
     }
 
     // Validate required fields
-    if (!body.message || typeof body.message !== "string" || body.message.trim() === "") {
+    if (
+      !body.message ||
+      typeof body.message !== "string" ||
+      body.message.trim() === ""
+    ) {
       return Response.json({ error: "message is required" }, { status: 400 });
     }
 
     const message = body.message as string;
-    const rawStack = typeof body.stack === "string" ? (body.stack as string).slice(0, MAX_STACK_LENGTH) : "";
-    const resolvedStack = typeof body.resolvedStack === "string" ? (body.resolvedStack as string).slice(0, MAX_STACK_LENGTH) : null;
+    const rawStack =
+      typeof body.stack === "string"
+        ? (body.stack as string).slice(0, MAX_STACK_LENGTH)
+        : "";
+    const resolvedStack =
+      typeof body.resolvedStack === "string"
+        ? (body.resolvedStack as string).slice(0, MAX_STACK_LENGTH)
+        : null;
 
     // Fix 2: use resolved frames for fingerprinting when available so the same
     // logical error from different builds produces a stable fingerprint
@@ -65,7 +80,11 @@ export function createIngestionHandler(config: IngestionConfig) {
     // filtering — no need to re-check the timestamp in application code.
     const windowStart = new Date(now.getTime() - deduplicationWindowMs);
     const existing = await prisma.clientError.findFirst({
-      where: { fingerprint, resolvedAt: null, lastSeenAt: { gte: windowStart } },
+      where: {
+        fingerprint,
+        resolvedAt: null,
+        lastSeenAt: { gte: windowStart },
+      },
     });
 
     if (existing) {
@@ -90,7 +109,8 @@ export function createIngestionHandler(config: IngestionConfig) {
       const newRecordData = {
         message,
         stack: rawStack || null,
-        componentStack: typeof body.componentStack === "string" ? body.componentStack : null,
+        componentStack:
+          typeof body.componentStack === "string" ? body.componentStack : null,
         resolvedStack,
         fingerprint,
         occurrences: 1,

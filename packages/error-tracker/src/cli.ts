@@ -23,7 +23,7 @@ async function getPrisma(provided?: unknown): Promise<unknown | null> {
   try {
     // Dynamic import — works when consumer has @prisma/client installed
     // biome-ignore lint/suspicious/noExplicitAny: runtime import of consumer's PrismaClient
-    const mod = await import("@prisma/client") as any;
+    const mod = (await import("@prisma/client")) as any;
     const PrismaClient = mod.PrismaClient ?? mod.default?.PrismaClient;
     if (!PrismaClient) return null;
     return new PrismaClient();
@@ -36,7 +36,9 @@ export async function runTail(options: TailOptions): Promise<void> {
   const prisma = await getPrisma(options.prisma);
 
   if (!prisma) {
-    console.error("Error: Could not initialize Prisma client. Ensure DATABASE_URL is set and @prisma/client is installed.");
+    console.error(
+      "Error: Could not initialize Prisma client. Ensure DATABASE_URL is set and @prisma/client is installed."
+    );
     process.exit(1);
     return;
   }
@@ -69,22 +71,23 @@ export async function runTail(options: TailOptions): Promise<void> {
     console.log(`\nRecent errors (${errors.length}):\n`);
     console.log(
       padRight("Fingerprint", 20) +
-      padRight("Occurrences", 12) +
-      padRight("Last Seen", 26) +
-      "Message"
+        padRight("Occurrences", 12) +
+        padRight("Last Seen", 26) +
+        "Message"
     );
     console.log("-".repeat(90));
 
     for (const err of errors) {
-      const lastSeen = err.lastSeenAt instanceof Date
-        ? err.lastSeenAt.toISOString()
-        : String(err.lastSeenAt);
+      const lastSeen =
+        err.lastSeenAt instanceof Date
+          ? err.lastSeenAt.toISOString()
+          : String(err.lastSeenAt);
       const msg = String(err.message ?? "").slice(0, 50);
       console.log(
         padRight(String(err.fingerprint ?? "").slice(0, 18), 20) +
-        padRight(String(err.occurrences ?? 0), 12) +
-        padRight(lastSeen, 26) +
-        msg
+          padRight(String(err.occurrences ?? 0), 12) +
+          padRight(lastSeen, 26) +
+          msg
       );
     }
     console.log();
@@ -99,7 +102,9 @@ export async function runResolve(options: ResolveOptions): Promise<void> {
   const prisma = await getPrisma(options.prisma);
 
   if (!prisma) {
-    console.error("Error: Could not initialize Prisma client. Ensure DATABASE_URL is set and @prisma/client is installed.");
+    console.error(
+      "Error: Could not initialize Prisma client. Ensure DATABASE_URL is set and @prisma/client is installed."
+    );
     process.exit(1);
     return;
   }
@@ -123,7 +128,9 @@ export async function runResolve(options: ResolveOptions): Promise<void> {
 }
 
 function padRight(str: string, width: number): string {
-  return str.length >= width ? str.slice(0, width) : str + " ".repeat(width - str.length);
+  return str.length >= width
+    ? str.slice(0, width)
+    : str + " ".repeat(width - str.length);
 }
 
 // CLI entry point

@@ -1,7 +1,7 @@
-import type { ErrorTrackerConfig } from "./types.js";
-import { initErrorTracker } from "./init.js";
 import { patchConsoleError } from "./console-patch.js";
 import { ErrorBoundary } from "./error-boundary.js";
+import { initErrorTracker } from "./init.js";
+import type { ErrorTrackerConfig } from "./types.js";
 
 export interface CreateErrorTrackerOptions {
   endpoint?: string;

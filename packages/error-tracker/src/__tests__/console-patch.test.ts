@@ -1,9 +1,11 @@
-import { describe, expect, mock, test, beforeEach, afterEach } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { ErrorTrackerConfig } from "../types";
 
 // ─── Mock reportError ─────────────────────────────────────────────────────────
 
-const mockReportError = mock((_config: ErrorTrackerConfig, _data: unknown) => undefined);
+const mockReportError = mock(
+  (_config: ErrorTrackerConfig, _data: unknown) => undefined
+);
 
 mock.module("../reporter", () => ({
   reportError: mockReportError,
@@ -95,7 +97,9 @@ describe("patchConsoleError — calling original first", () => {
     console.error("test original call");
     restore2();
 
-    expect(originalCalled.some((args) => args[0] === "test original call")).toBe(true);
+    expect(
+      originalCalled.some((args) => args[0] === "test original call")
+    ).toBe(true);
   });
 
   test("calls original console.error BEFORE reportError", () => {

@@ -16,28 +16,75 @@ const { Window } = await import("happy-dom");
 const happyWindow = new Window();
 const happyDocument = happyWindow.document;
 
-Object.defineProperty(globalThis, "window", { value: happyWindow, writable: true, configurable: true });
-Object.defineProperty(globalThis, "document", { value: happyDocument, writable: true, configurable: true });
-Object.defineProperty(globalThis, "navigator", { value: happyWindow.navigator, writable: true, configurable: true });
-Object.defineProperty(globalThis, "location", { value: happyWindow.location, writable: true, configurable: true });
-Object.defineProperty(globalThis, "history", { value: happyWindow.history, writable: true, configurable: true });
-Object.defineProperty(globalThis, "HTMLElement", { value: happyWindow.HTMLElement, writable: true, configurable: true });
-Object.defineProperty(globalThis, "Element", { value: happyWindow.Element, writable: true, configurable: true });
-Object.defineProperty(globalThis, "Node", { value: happyWindow.Node, writable: true, configurable: true });
-Object.defineProperty(globalThis, "Event", { value: happyWindow.Event, writable: true, configurable: true });
-Object.defineProperty(globalThis, "CustomEvent", { value: happyWindow.CustomEvent, writable: true, configurable: true });
+Object.defineProperty(globalThis, "window", {
+  value: happyWindow,
+  writable: true,
+  configurable: true,
+});
+Object.defineProperty(globalThis, "document", {
+  value: happyDocument,
+  writable: true,
+  configurable: true,
+});
+Object.defineProperty(globalThis, "navigator", {
+  value: happyWindow.navigator,
+  writable: true,
+  configurable: true,
+});
+Object.defineProperty(globalThis, "location", {
+  value: happyWindow.location,
+  writable: true,
+  configurable: true,
+});
+Object.defineProperty(globalThis, "history", {
+  value: happyWindow.history,
+  writable: true,
+  configurable: true,
+});
+Object.defineProperty(globalThis, "HTMLElement", {
+  value: happyWindow.HTMLElement,
+  writable: true,
+  configurable: true,
+});
+Object.defineProperty(globalThis, "Element", {
+  value: happyWindow.Element,
+  writable: true,
+  configurable: true,
+});
+Object.defineProperty(globalThis, "Node", {
+  value: happyWindow.Node,
+  writable: true,
+  configurable: true,
+});
+Object.defineProperty(globalThis, "Event", {
+  value: happyWindow.Event,
+  writable: true,
+  configurable: true,
+});
+Object.defineProperty(globalThis, "CustomEvent", {
+  value: happyWindow.CustomEvent,
+  writable: true,
+  configurable: true,
+});
 // Keep native ErrorEvent so bun's dispatchEvent accepts instances
-Object.defineProperty(globalThis, "ErrorEvent", { value: NativeErrorEvent ?? happyWindow.ErrorEvent, writable: true, configurable: true });
+Object.defineProperty(globalThis, "ErrorEvent", {
+  value: NativeErrorEvent ?? happyWindow.ErrorEvent,
+  writable: true,
+  configurable: true,
+});
 
 // Polyfill PromiseRejectionEvent using the native Event class so bun's
 // dispatchEvent accepts instances (happy-dom doesn't provide this).
-if (typeof (globalThis as unknown as Record<string, unknown>).PromiseRejectionEvent === "undefined") {
+if (
+  typeof (globalThis as unknown as Record<string, unknown>)
+    .PromiseRejectionEvent === "undefined"
+) {
   class PromiseRejectionEvent extends NativeEvent {
     promise: Promise<unknown>;
     reason: unknown;
     constructor(
       type: string,
-      init: { promise: Promise<unknown>; reason: unknown; cancelable?: boolean },
+      init: { promise: Promise<unknown>; reason: unknown; cancelable?: boolean }
     ) {
       super(type, { cancelable: init.cancelable ?? true });
       this.promise = init.promise;

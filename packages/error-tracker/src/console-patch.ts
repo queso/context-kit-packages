@@ -1,11 +1,14 @@
-import type { ErrorTrackerConfig, ErrorPayload } from "./types.js";
 import { reportError } from "./reporter.js";
+import type { ErrorPayload, ErrorTrackerConfig } from "./types.js";
 
 // Safe without synchronization: JS is single-threaded, and reportError (called below)
 // uses fire-and-forget fetch — the flag is set/cleared synchronously within one turn.
 let _isReporting = false;
 
-function makePayload(config: ErrorTrackerConfig, args: unknown[]): ErrorPayload {
+function makePayload(
+  config: ErrorTrackerConfig,
+  args: unknown[]
+): ErrorPayload {
   // Find the first Error in args, or stringify all args
   const firstError = args.find((a): a is Error => a instanceof Error);
 

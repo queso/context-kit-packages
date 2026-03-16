@@ -107,7 +107,8 @@ describe("createRateLimiter — check function", () => {
     const result = await limiter.check(makeRequest(ip));
 
     expect(result).not.toBeNull();
-    const retryAfter = result?.headers.get("retry-after") ?? result?.headers.get("Retry-After");
+    const retryAfter =
+      result?.headers.get("retry-after") ?? result?.headers.get("Retry-After");
     expect(retryAfter).not.toBeNull();
     // Retry-After should be a positive integer (seconds)
     const seconds = parseInt(retryAfter ?? "0", 10);

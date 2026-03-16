@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
+import type { PrismaCustomer, PrismaSubscription } from "../prisma";
 import type { PlanDefinition } from "../types";
 import { BillingError, SubscriptionStateError } from "../types";
-import type { PrismaCustomer, PrismaSubscription } from "../prisma";
 
 // ─── Shared fixtures ──────────────────────────────────────────────────────────
 
@@ -75,7 +75,9 @@ const PAST_DUE_SUBSCRIPTION: PrismaSubscription = {
 
 // ─── Mock factories ───────────────────────────────────────────────────────────
 
-function makePlansMap(plans: PlanDefinition[] = [PRO_PLAN, ENTERPRISE_PLAN]): Map<string, PlanDefinition> {
+function makePlansMap(
+  plans: PlanDefinition[] = [PRO_PLAN, ENTERPRISE_PLAN]
+): Map<string, PlanDefinition> {
   const map = new Map<string, PlanDefinition>();
   for (const p of plans) map.set(p.id, p);
   return map;
@@ -89,11 +91,17 @@ function makeMockPrisma(overrides?: {
 }): any {
   return {
     customer: {
-      findUnique: overrides?.customerFindUnique ?? ((_: any) => Promise.resolve(MOCK_CUSTOMER)),
+      findUnique:
+        overrides?.customerFindUnique ??
+        ((_: any) => Promise.resolve(MOCK_CUSTOMER)),
     },
     subscription: {
-      findFirst: overrides?.subscriptionFindFirst ?? ((_: any) => Promise.resolve(ACTIVE_SUBSCRIPTION)),
-      update: overrides?.subscriptionUpdate ?? ((_: any) => Promise.resolve(ACTIVE_SUBSCRIPTION)),
+      findFirst:
+        overrides?.subscriptionFindFirst ??
+        ((_: any) => Promise.resolve(ACTIVE_SUBSCRIPTION)),
+      update:
+        overrides?.subscriptionUpdate ??
+        ((_: any) => Promise.resolve(ACTIVE_SUBSCRIPTION)),
     },
   };
 }
@@ -105,12 +113,16 @@ function makeMockStripe(overrides?: {
 }): any {
   return {
     subscriptions: {
-      update: overrides?.subscriptionsUpdate ?? mock((_id: string, _params: any) =>
-        Promise.resolve({ id: STRIPE_SUB_ID, status: "active" })
-      ),
-      cancel: overrides?.subscriptionsCancel ?? mock((_id: string) =>
-        Promise.resolve({ id: STRIPE_SUB_ID, status: "canceled" })
-      ),
+      update:
+        overrides?.subscriptionsUpdate ??
+        mock((_id: string, _params: any) =>
+          Promise.resolve({ id: STRIPE_SUB_ID, status: "active" })
+        ),
+      cancel:
+        overrides?.subscriptionsCancel ??
+        mock((_id: string) =>
+          Promise.resolve({ id: STRIPE_SUB_ID, status: "canceled" })
+        ),
     },
   };
 }
@@ -118,7 +130,9 @@ function makeMockStripe(overrides?: {
 // ─── Import target ────────────────────────────────────────────────────────────
 
 // @ts-expect-error: module created by B.A. during implementation phase
-const { changePlan, cancelSubscription, reactivateSubscription } = await import("../manage");
+const { changePlan, cancelSubscription, reactivateSubscription } = await import(
+  "../manage"
+);
 
 // ─── changePlan ───────────────────────────────────────────────────────────────
 
@@ -128,20 +142,32 @@ describe("changePlan", () => {
       Promise.resolve({ id: STRIPE_SUB_ID, status: "active" })
     );
     const subscriptionUpdate = mock((_: any) =>
-      Promise.resolve({ ...ACTIVE_SUBSCRIPTION, planId: "enterprise", stripePriceId: "price_enterprise_monthly" })
+      Promise.resolve({
+        ...ACTIVE_SUBSCRIPTION,
+        planId: "enterprise",
+        stripePriceId: "price_enterprise_monthly",
+      })
     );
 
     const prisma = makeMockPrisma({ subscriptionUpdate });
     const stripe = makeMockStripe({ subscriptionsUpdate });
     const plans = makePlansMap();
 
-    await changePlan(USER_ID, { planId: "enterprise", interval: "monthly" }, { prisma, stripe, plans });
+    await changePlan(
+      USER_ID,
+      { planId: "enterprise", interval: "monthly" },
+      { prisma, stripe, plans }
+    );
 
     expect(subscriptionsUpdate).toHaveBeenCalledTimes(1);
     // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-    const [stripeSubId, stripeParams] = (subscriptionsUpdate.mock.calls as any[][])[0];
+    const [stripeSubId, stripeParams] = (
+      subscriptionsUpdate.mock.calls as any[][]
+    )[0];
     expect(stripeSubId).toBe(STRIPE_SUB_ID);
-    expect(stripeParams?.items?.[0]?.price ?? stripeParams?.items?.[0]?.id).toBe("price_enterprise_monthly");
+    expect(
+      stripeParams?.items?.[0]?.price ?? stripeParams?.items?.[0]?.id
+    ).toBe("price_enterprise_monthly");
 
     expect(subscriptionUpdate).toHaveBeenCalledTimes(1);
     // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
@@ -158,7 +184,11 @@ describe("changePlan", () => {
     const stripe = makeMockStripe({ subscriptionsUpdate });
     const plans = makePlansMap();
 
-    await changePlan(USER_ID, { planId: "enterprise", interval: "monthly" }, { prisma, stripe, plans });
+    await changePlan(
+      USER_ID,
+      { planId: "enterprise", interval: "monthly" },
+      { prisma, stripe, plans }
+    );
 
     // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
     const [, stripeParams] = (subscriptionsUpdate.mock.calls as any[][])[0];
@@ -232,7 +262,9 @@ describe("cancelSubscription", () => {
     await cancelSubscription(USER_ID, {}, { prisma, stripe, plans });
 
     // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-    const [stripeSubId, stripeParams] = (subscriptionsUpdate.mock.calls as any[][])[0];
+    const [stripeSubId, stripeParams] = (
+      subscriptionsUpdate.mock.calls as any[][]
+    )[0];
     expect(stripeSubId).toBe(STRIPE_SUB_ID);
     expect(stripeParams?.cancel_at_period_end).toBe(true);
 
@@ -253,7 +285,11 @@ describe("cancelSubscription", () => {
     const stripe = makeMockStripe({ subscriptionsCancel });
     const plans = makePlansMap();
 
-    await cancelSubscription(USER_ID, { immediate: true }, { prisma, stripe, plans });
+    await cancelSubscription(
+      USER_ID,
+      { immediate: true },
+      { prisma, stripe, plans }
+    );
 
     // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
     const [stripeSubId] = (subscriptionsCancel.mock.calls as any[][])[0];
@@ -273,7 +309,8 @@ describe("cancelSubscription", () => {
     );
 
     const prisma = makeMockPrisma({
-      subscriptionFindFirst: (_: any) => Promise.resolve(ALREADY_CANCELED_SUBSCRIPTION),
+      subscriptionFindFirst: (_: any) =>
+        Promise.resolve(ALREADY_CANCELED_SUBSCRIPTION),
     });
     const stripe = makeMockStripe({ subscriptionsUpdate, subscriptionsCancel });
     const plans = makePlansMap();
@@ -305,11 +342,15 @@ describe("reactivateSubscription", () => {
       Promise.resolve({ id: STRIPE_SUB_ID, cancel_at_period_end: false })
     );
     const subscriptionUpdate = mock((_: any) =>
-      Promise.resolve({ ...PENDING_CANCEL_SUBSCRIPTION, cancelAtPeriodEnd: false })
+      Promise.resolve({
+        ...PENDING_CANCEL_SUBSCRIPTION,
+        cancelAtPeriodEnd: false,
+      })
     );
 
     const prisma = makeMockPrisma({
-      subscriptionFindFirst: (_: any) => Promise.resolve(PENDING_CANCEL_SUBSCRIPTION),
+      subscriptionFindFirst: (_: any) =>
+        Promise.resolve(PENDING_CANCEL_SUBSCRIPTION),
       subscriptionUpdate,
     });
     const stripe = makeMockStripe({ subscriptionsUpdate });
@@ -318,7 +359,9 @@ describe("reactivateSubscription", () => {
     await reactivateSubscription(USER_ID, { prisma, stripe, plans });
 
     // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-    const [stripeSubId, stripeParams] = (subscriptionsUpdate.mock.calls as any[][])[0];
+    const [stripeSubId, stripeParams] = (
+      subscriptionsUpdate.mock.calls as any[][]
+    )[0];
     expect(stripeSubId).toBe(STRIPE_SUB_ID);
     expect(stripeParams?.cancel_at_period_end).toBe(false);
 
@@ -342,7 +385,8 @@ describe("reactivateSubscription", () => {
 
   test("throws SubscriptionStateError when subscription is already fully canceled", async () => {
     const prisma = makeMockPrisma({
-      subscriptionFindFirst: (_: any) => Promise.resolve(ALREADY_CANCELED_SUBSCRIPTION),
+      subscriptionFindFirst: (_: any) =>
+        Promise.resolve(ALREADY_CANCELED_SUBSCRIPTION),
     });
     const stripe = makeMockStripe();
     const plans = makePlansMap();

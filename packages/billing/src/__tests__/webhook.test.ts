@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { PlanDefinition } from "../types";
 import type { PrismaCustomer, PrismaSubscription } from "../prisma";
+import type { PlanDefinition } from "../types";
 
 // ─── Shared fixtures ──────────────────────────────────────────────────────────
 
@@ -17,7 +17,7 @@ const PRO_PLAN: PlanDefinition = {
 };
 
 const PERIOD_START_TS = 1717200000; // 2024-06-01 UTC
-const PERIOD_END_TS = 1719792000;   // 2024-07-01 UTC
+const PERIOD_END_TS = 1719792000; // 2024-07-01 UTC
 
 const MOCK_CUSTOMER: PrismaCustomer = {
   id: LOCAL_CUSTOMER_ID,
@@ -50,10 +50,12 @@ function makeStripeSubscription(overrides: Record<string, unknown> = {}) {
     customer: STRIPE_CUSTOMER_ID,
     status: "active",
     items: {
-      data: [{
-        price: { id: "price_pro_monthly" },
-        recurring: { interval: "month" },
-      }],
+      data: [
+        {
+          price: { id: "price_pro_monthly" },
+          recurring: { interval: "month" },
+        },
+      ],
     },
     current_period_start: PERIOD_START_TS,
     current_period_end: PERIOD_END_TS,
@@ -87,7 +89,9 @@ function makeInvoice(overrides: Record<string, unknown> = {}) {
 
 // ─── Mock factories ───────────────────────────────────────────────────────────
 
-function makePlansMap(plans: PlanDefinition[] = [PRO_PLAN]): Map<string, PlanDefinition> {
+function makePlansMap(
+  plans: PlanDefinition[] = [PRO_PLAN]
+): Map<string, PlanDefinition> {
   const map = new Map<string, PlanDefinition>();
   for (const p of plans) map.set(p.id, p);
   return map;
@@ -102,12 +106,20 @@ function makeMockPrisma(overrides?: {
 }): any {
   return {
     customer: {
-      findUnique: overrides?.customerFindUnique ?? ((_: any) => Promise.resolve(MOCK_CUSTOMER)),
+      findUnique:
+        overrides?.customerFindUnique ??
+        ((_: any) => Promise.resolve(MOCK_CUSTOMER)),
     },
     subscription: {
-      upsert: overrides?.subscriptionUpsert ?? ((_: any) => Promise.resolve(MOCK_LOCAL_SUB)),
-      update: overrides?.subscriptionUpdate ?? ((_: any) => Promise.resolve(MOCK_LOCAL_SUB)),
-      findFirst: overrides?.subscriptionFindFirst ?? ((_: any) => Promise.resolve(MOCK_LOCAL_SUB)),
+      upsert:
+        overrides?.subscriptionUpsert ??
+        ((_: any) => Promise.resolve(MOCK_LOCAL_SUB)),
+      update:
+        overrides?.subscriptionUpdate ??
+        ((_: any) => Promise.resolve(MOCK_LOCAL_SUB)),
+      findFirst:
+        overrides?.subscriptionFindFirst ??
+        ((_: any) => Promise.resolve(MOCK_LOCAL_SUB)),
     },
   };
 }
@@ -118,9 +130,13 @@ function makeMockStripe(overrides?: {
 }): any {
   return {
     webhooks: {
-      constructEvent: overrides?.webhooksConstructEvent ??
+      constructEvent:
+        overrides?.webhooksConstructEvent ??
         mock((payload: string, sig: string, _secret: string) => {
-          if (sig !== "valid-sig") throw new Error("No signatures found matching the expected signature for payload.");
+          if (sig !== "valid-sig")
+            throw new Error(
+              "No signatures found matching the expected signature for payload."
+            );
           return JSON.parse(payload);
         }),
     },
@@ -161,7 +177,12 @@ describe("toWebhookHandler", () => {
     const prisma = makeMockPrisma();
     const plans = makePlansMap();
 
-    const handler = toWebhookHandler({ stripe, prisma, plans, webhookSecret: WEBHOOK_SECRET });
+    const handler = toWebhookHandler({
+      stripe,
+      prisma,
+      plans,
+      webhookSecret: WEBHOOK_SECRET,
+    });
 
     expect(typeof handler).toBe("function");
   });
@@ -169,14 +190,24 @@ describe("toWebhookHandler", () => {
   test("returns 400 when Stripe signature verification fails", async () => {
     const stripe = makeMockStripe({
       webhooksConstructEvent: mock(() => {
-        throw new Error("No signatures found matching the expected signature for payload.");
+        throw new Error(
+          "No signatures found matching the expected signature for payload."
+        );
       }),
     });
     const prisma = makeMockPrisma();
     const plans = makePlansMap();
 
-    const handler = toWebhookHandler({ stripe, prisma, plans, webhookSecret: WEBHOOK_SECRET });
-    const req = makeRequest(makeEvent("checkout.session.completed", {}), "invalid-sig");
+    const handler = toWebhookHandler({
+      stripe,
+      prisma,
+      plans,
+      webhookSecret: WEBHOOK_SECRET,
+    });
+    const req = makeRequest(
+      makeEvent("checkout.session.completed", {}),
+      "invalid-sig"
+    );
 
     const response = await handler(req);
 
@@ -184,13 +215,23 @@ describe("toWebhookHandler", () => {
   });
 
   test("returns 200 for checkout.session.completed and upserts subscription", async () => {
-    const subscriptionUpsert = mock((_: any) => Promise.resolve(MOCK_LOCAL_SUB));
+    const subscriptionUpsert = mock((_: any) =>
+      Promise.resolve(MOCK_LOCAL_SUB)
+    );
     const prisma = makeMockPrisma({ subscriptionUpsert });
     const stripe = makeMockStripe();
     const plans = makePlansMap();
 
-    const event = makeEvent("checkout.session.completed", makeCheckoutSession());
-    const handler = toWebhookHandler({ stripe, prisma, plans, webhookSecret: WEBHOOK_SECRET });
+    const event = makeEvent(
+      "checkout.session.completed",
+      makeCheckoutSession()
+    );
+    const handler = toWebhookHandler({
+      stripe,
+      prisma,
+      plans,
+      webhookSecret: WEBHOOK_SECRET,
+    });
     const req = makeRequest(event);
 
     const response = await handler(req);
@@ -200,13 +241,23 @@ describe("toWebhookHandler", () => {
   });
 
   test("returns 200 for customer.subscription.created and upserts local subscription", async () => {
-    const subscriptionUpsert = mock((_: any) => Promise.resolve(MOCK_LOCAL_SUB));
+    const subscriptionUpsert = mock((_: any) =>
+      Promise.resolve(MOCK_LOCAL_SUB)
+    );
     const prisma = makeMockPrisma({ subscriptionUpsert });
     const stripe = makeMockStripe();
     const plans = makePlansMap();
 
-    const event = makeEvent("customer.subscription.created", makeStripeSubscription());
-    const handler = toWebhookHandler({ stripe, prisma, plans, webhookSecret: WEBHOOK_SECRET });
+    const event = makeEvent(
+      "customer.subscription.created",
+      makeStripeSubscription()
+    );
+    const handler = toWebhookHandler({
+      stripe,
+      prisma,
+      plans,
+      webhookSecret: WEBHOOK_SECRET,
+    });
     const req = makeRequest(event);
 
     const response = await handler(req);
@@ -215,18 +266,28 @@ describe("toWebhookHandler", () => {
     expect(subscriptionUpsert).toHaveBeenCalledTimes(1);
     // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
     const callArgs = (subscriptionUpsert.mock.calls as any[][])[0][0];
-    expect(callArgs?.where?.stripeSubscriptionId ?? callArgs?.create?.stripeSubscriptionId).toBe(STRIPE_SUB_ID);
+    expect(
+      callArgs?.where?.stripeSubscriptionId ??
+        callArgs?.create?.stripeSubscriptionId
+    ).toBe(STRIPE_SUB_ID);
   });
 
   test("returns 200 for customer.subscription.updated and syncs status change", async () => {
-    const subscriptionUpsert = mock((_: any) => Promise.resolve(MOCK_LOCAL_SUB));
+    const subscriptionUpsert = mock((_: any) =>
+      Promise.resolve(MOCK_LOCAL_SUB)
+    );
     const prisma = makeMockPrisma({ subscriptionUpsert });
     const stripe = makeMockStripe();
     const plans = makePlansMap();
 
     const updatedSub = makeStripeSubscription({ status: "past_due" });
     const event = makeEvent("customer.subscription.updated", updatedSub);
-    const handler = toWebhookHandler({ stripe, prisma, plans, webhookSecret: WEBHOOK_SECRET });
+    const handler = toWebhookHandler({
+      stripe,
+      prisma,
+      plans,
+      webhookSecret: WEBHOOK_SECRET,
+    });
     const req = makeRequest(event);
 
     const response = await handler(req);
@@ -249,17 +310,21 @@ describe("toWebhookHandler", () => {
 
     const deletedSub = makeStripeSubscription({ status: "canceled" });
     const event = makeEvent("customer.subscription.deleted", deletedSub);
-    const handler = toWebhookHandler({ stripe, prisma, plans, webhookSecret: WEBHOOK_SECRET });
+    const handler = toWebhookHandler({
+      stripe,
+      prisma,
+      plans,
+      webhookSecret: WEBHOOK_SECRET,
+    });
     const req = makeRequest(event);
 
     const response = await handler(req);
 
     expect(response.status).toBe(200);
     // Either upsert or update should have been called with status=canceled
-    const wasCanceled =
-      (subscriptionUpdate.mock.calls as any[][]).some(
-        ([args]) => args?.data?.status === "canceled"
-      );
+    const wasCanceled = (subscriptionUpdate.mock.calls as any[][]).some(
+      ([args]) => args?.data?.status === "canceled"
+    );
     expect(wasCanceled).toBe(true);
   });
 
@@ -269,7 +334,12 @@ describe("toWebhookHandler", () => {
     const plans = makePlansMap();
 
     const event = makeEvent("invoice.paid", makeInvoice({ status: "paid" }));
-    const handler = toWebhookHandler({ stripe, prisma, plans, webhookSecret: WEBHOOK_SECRET });
+    const handler = toWebhookHandler({
+      stripe,
+      prisma,
+      plans,
+      webhookSecret: WEBHOOK_SECRET,
+    });
     const req = makeRequest(event);
 
     const response = await handler(req);
@@ -282,8 +352,16 @@ describe("toWebhookHandler", () => {
     const stripe = makeMockStripe();
     const plans = makePlansMap();
 
-    const event = makeEvent("invoice.payment_failed", makeInvoice({ status: "open" }));
-    const handler = toWebhookHandler({ stripe, prisma, plans, webhookSecret: WEBHOOK_SECRET });
+    const event = makeEvent(
+      "invoice.payment_failed",
+      makeInvoice({ status: "open" })
+    );
+    const handler = toWebhookHandler({
+      stripe,
+      prisma,
+      plans,
+      webhookSecret: WEBHOOK_SECRET,
+    });
     const req = makeRequest(event);
 
     const response = await handler(req);
@@ -297,7 +375,12 @@ describe("toWebhookHandler", () => {
     const plans = makePlansMap();
 
     const event = makeEvent("some.unknown.event", { id: "obj_1" });
-    const handler = toWebhookHandler({ stripe, prisma, plans, webhookSecret: WEBHOOK_SECRET });
+    const handler = toWebhookHandler({
+      stripe,
+      prisma,
+      plans,
+      webhookSecret: WEBHOOK_SECRET,
+    });
     const req = makeRequest(event);
 
     const response = await handler(req);
@@ -318,8 +401,16 @@ describe("toWebhookHandler", () => {
     const stripe = makeMockStripe();
     const plans = makePlansMap();
 
-    const event = makeEvent("customer.subscription.updated", makeStripeSubscription());
-    const handler = toWebhookHandler({ stripe, prisma, plans, webhookSecret: WEBHOOK_SECRET });
+    const event = makeEvent(
+      "customer.subscription.updated",
+      makeStripeSubscription()
+    );
+    const handler = toWebhookHandler({
+      stripe,
+      prisma,
+      plans,
+      webhookSecret: WEBHOOK_SECRET,
+    });
 
     const req1 = makeRequest(event);
     const req2 = makeRequest(event);
@@ -337,7 +428,9 @@ describe("toWebhookHandler", () => {
   });
 
   test("checkout.session.completed: no-op (no db writes) when customer not found", async () => {
-    const subscriptionUpsert = mock((_: any) => Promise.resolve(MOCK_LOCAL_SUB));
+    const subscriptionUpsert = mock((_: any) =>
+      Promise.resolve(MOCK_LOCAL_SUB)
+    );
     const prisma = makeMockPrisma({
       customerFindUnique: (_: any) => Promise.resolve(null),
       subscriptionUpsert,
@@ -345,8 +438,16 @@ describe("toWebhookHandler", () => {
     const stripe = makeMockStripe();
     const plans = makePlansMap();
 
-    const event = makeEvent("checkout.session.completed", makeCheckoutSession());
-    const handler = toWebhookHandler({ stripe, prisma, plans, webhookSecret: WEBHOOK_SECRET });
+    const event = makeEvent(
+      "checkout.session.completed",
+      makeCheckoutSession()
+    );
+    const handler = toWebhookHandler({
+      stripe,
+      prisma,
+      plans,
+      webhookSecret: WEBHOOK_SECRET,
+    });
     const req = makeRequest(event);
 
     const response = await handler(req);
@@ -356,14 +457,21 @@ describe("toWebhookHandler", () => {
   });
 
   test("customer.subscription.updated syncs cancel_at_period_end flag", async () => {
-    const subscriptionUpsert = mock((_: any) => Promise.resolve(MOCK_LOCAL_SUB));
+    const subscriptionUpsert = mock((_: any) =>
+      Promise.resolve(MOCK_LOCAL_SUB)
+    );
     const prisma = makeMockPrisma({ subscriptionUpsert });
     const stripe = makeMockStripe();
     const plans = makePlansMap();
 
     const updatedSub = makeStripeSubscription({ cancel_at_period_end: true });
     const event = makeEvent("customer.subscription.updated", updatedSub);
-    const handler = toWebhookHandler({ stripe, prisma, plans, webhookSecret: WEBHOOK_SECRET });
+    const handler = toWebhookHandler({
+      stripe,
+      prisma,
+      plans,
+      webhookSecret: WEBHOOK_SECRET,
+    });
     const req = makeRequest(event);
 
     await handler(req);
@@ -371,7 +479,8 @@ describe("toWebhookHandler", () => {
     // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
     const callArgs = (subscriptionUpsert.mock.calls as any[][])[0][0];
     const cancelAtPeriodEnd =
-      callArgs?.update?.cancelAtPeriodEnd ?? callArgs?.create?.cancelAtPeriodEnd;
+      callArgs?.update?.cancelAtPeriodEnd ??
+      callArgs?.create?.cancelAtPeriodEnd;
     expect(cancelAtPeriodEnd).toBe(true);
   });
 });

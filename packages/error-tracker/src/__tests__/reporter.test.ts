@@ -1,9 +1,11 @@
-import { describe, expect, mock, test, beforeEach, afterEach } from "bun:test";
-import type { ErrorTrackerConfig, ErrorPayload } from "../types";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import type { ErrorPayload, ErrorTrackerConfig } from "../types";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function makeConfig(overrides: Partial<ErrorTrackerConfig> = {}): ErrorTrackerConfig {
+function makeConfig(
+  overrides: Partial<ErrorTrackerConfig> = {}
+): ErrorTrackerConfig {
   return {
     endpoint: "https://example.com/api/errors",
     environment: "test",
@@ -14,7 +16,8 @@ function makeConfig(overrides: Partial<ErrorTrackerConfig> = {}): ErrorTrackerCo
 function makePayload(overrides: Partial<ErrorPayload> = {}): ErrorPayload {
   return {
     message: "TypeError: Cannot read properties of undefined",
-    stack: "TypeError: Cannot read...\n  at Component (app.js:1:100)\n  at App (app.js:2:200)",
+    stack:
+      "TypeError: Cannot read...\n  at Component (app.js:1:100)\n  at App (app.js:2:200)",
     url: "https://example.com/dashboard",
     userAgent: "Mozilla/5.0",
     environment: "test",
@@ -35,7 +38,9 @@ function mockGlobalFetch(): { calls: FetchCall[]; restore: () => void } {
   // biome-ignore lint/suspicious/noExplicitAny: test mock
   (globalThis as any).fetch = (url: string, init?: RequestInit) => {
     calls.push({ url, init });
-    return Promise.resolve(new Response(JSON.stringify({ success: true }), { status: 200 }));
+    return Promise.resolve(
+      new Response(JSON.stringify({ success: true }), { status: 200 })
+    );
   };
   return {
     calls,
@@ -86,7 +91,10 @@ describe("reportError", () => {
   test("calls fetch with the configured endpoint URL", async () => {
     const fetchMock = mockGlobalFetch();
     try {
-      reportError(makeConfig({ endpoint: "https://example.com/api/errors" }), makePayload());
+      reportError(
+        makeConfig({ endpoint: "https://example.com/api/errors" }),
+        makePayload()
+      );
       // Give the microtask queue a tick to flush
       await new Promise((r) => setTimeout(r, 0));
       expect(fetchMock.calls.length).toBeGreaterThanOrEqual(1);
@@ -112,8 +120,13 @@ describe("reportError", () => {
     try {
       reportError(makeConfig(), makePayload());
       await new Promise((r) => setTimeout(r, 0));
-      const headers = fetchMock.calls[0].init?.headers as Record<string, string>;
-      expect(headers?.["content-type"] ?? headers?.["Content-Type"]).toContain("application/json");
+      const headers = fetchMock.calls[0].init?.headers as Record<
+        string,
+        string
+      >;
+      expect(headers?.["content-type"] ?? headers?.["Content-Type"]).toContain(
+        "application/json"
+      );
     } finally {
       fetchMock.restore();
     }
@@ -134,7 +147,10 @@ describe("reportError", () => {
   test("payload body includes stack field", async () => {
     const fetchMock = mockGlobalFetch();
     try {
-      reportError(makeConfig(), makePayload({ stack: "Error\n  at app.js:1:1" }));
+      reportError(
+        makeConfig(),
+        makePayload({ stack: "Error\n  at app.js:1:1" })
+      );
       await new Promise((r) => setTimeout(r, 0));
       const body = JSON.parse(fetchMock.calls[0].init?.body as string);
       expect(typeof body.stack).toBe("string");
@@ -146,7 +162,10 @@ describe("reportError", () => {
   test("payload body includes url field", async () => {
     const fetchMock = mockGlobalFetch();
     try {
-      reportError(makeConfig(), makePayload({ url: "https://example.com/page" }));
+      reportError(
+        makeConfig(),
+        makePayload({ url: "https://example.com/page" })
+      );
       await new Promise((r) => setTimeout(r, 0));
       const body = JSON.parse(fetchMock.calls[0].init?.body as string);
       expect(body.url).toBe("https://example.com/page");
@@ -175,7 +194,10 @@ describe("reportError", () => {
       const body = JSON.parse(fetchMock.calls[0].init?.body as string);
       expect(body.timestamp).toBeDefined();
       // timestamp should be a valid ISO string or number
-      const ts = typeof body.timestamp === "string" ? new Date(body.timestamp).getTime() : body.timestamp;
+      const ts =
+        typeof body.timestamp === "string"
+          ? new Date(body.timestamp).getTime()
+          : body.timestamp;
       expect(isNaN(ts)).toBe(false);
     } finally {
       fetchMock.restore();
@@ -185,7 +207,10 @@ describe("reportError", () => {
   test("payload body includes componentStack when provided", async () => {
     const fetchMock = mockGlobalFetch();
     try {
-      reportError(makeConfig(), makePayload({ componentStack: "\n  at ErrorBoundary\n  at App" }));
+      reportError(
+        makeConfig(),
+        makePayload({ componentStack: "\n  at ErrorBoundary\n  at App" })
+      );
       await new Promise((r) => setTimeout(r, 0));
       const body = JSON.parse(fetchMock.calls[0].init?.body as string);
       expect(body.componentStack).toBeDefined();
@@ -213,11 +238,17 @@ describe("reportError", () => {
     const fetchMock = mockGlobalFetch();
     try {
       reportError(
-        makeConfig({ token: "my-secret-token", secretHeaderName: "x-error-token" }),
+        makeConfig({
+          token: "my-secret-token",
+          secretHeaderName: "x-error-token",
+        }),
         makePayload()
       );
       await new Promise((r) => setTimeout(r, 0));
-      const headers = fetchMock.calls[0].init?.headers as Record<string, string>;
+      const headers = fetchMock.calls[0].init?.headers as Record<
+        string,
+        string
+      >;
       expect(headers?.["x-error-token"]).toBe("my-secret-token");
     } finally {
       fetchMock.restore();
@@ -229,7 +260,10 @@ describe("reportError", () => {
     try {
       reportError(makeConfig({ token: undefined }), makePayload());
       await new Promise((r) => setTimeout(r, 0));
-      const headers = fetchMock.calls[0].init?.headers as Record<string, string>;
+      const headers = fetchMock.calls[0].init?.headers as Record<
+        string,
+        string
+      >;
       // Should not have any auth-style header with a secret value
       const headerValues = Object.values(headers ?? {});
       expect(headerValues.some((v) => v === "my-secret-token")).toBe(false);
@@ -267,7 +301,10 @@ describe("reportError", () => {
     const fetchMock = mockGlobalFetch();
     const longComponentStack = "\n  at Component\n".repeat(700); // well over 10k chars
     try {
-      reportError(makeConfig(), makePayload({ componentStack: longComponentStack }));
+      reportError(
+        makeConfig(),
+        makePayload({ componentStack: longComponentStack })
+      );
       await new Promise((r) => setTimeout(r, 0));
       const body = JSON.parse(fetchMock.calls[0].init?.body as string);
       if (body.componentStack) {

@@ -28,7 +28,10 @@ describe("billing error classes", () => {
   });
 
   test("error subclasses are instances of BillingError and Error", () => {
-    const usageErr = new UsageCapExceededError("usage exceeded", { used: 10, limit: 5 });
+    const usageErr = new UsageCapExceededError("usage exceeded", {
+      used: 10,
+      limit: 5,
+    });
     const configErr = new InvalidConfigError("bad config");
     const webhookErr = new WebhookVerificationError("bad signature");
     const stateErr = new SubscriptionStateError("wrong state");
@@ -41,7 +44,10 @@ describe("billing error classes", () => {
   });
 
   test("UsageCapExceededError carries used and limit fields", () => {
-    const err = new UsageCapExceededError("cap exceeded", { used: 100, limit: 50 });
+    const err = new UsageCapExceededError("cap exceeded", {
+      used: 100,
+      limit: 50,
+    });
     expect(err.used).toBe(100);
     expect(err.limit).toBe(50);
     expect(err.name).toBe("UsageCapExceededError");
@@ -52,13 +58,23 @@ describe("BillingInstance interface shape", () => {
   test("mock object satisfying BillingInstance has all expected methods", () => {
     // This verifies the interface has the expected method surface at runtime
     const mockBilling: BillingInstance = {
-      getSubscription: async (_userId: string) => ({} as SubscriptionData),
-      getPlan: (_planId: string) => ({} as PlanDefinition),
-      checkUsage: async (_userId: string, _metric: string) => ({} as UsageResult),
-      recordUsage: async (_userId: string, _metric: string, _amount: number) => {},
-      createCheckoutSession: async (_params: CheckoutSessionParams) => ({ url: "https://checkout.stripe.com/session" }),
+      getSubscription: async (_userId: string) => ({}) as SubscriptionData,
+      getPlan: (_planId: string) => ({}) as PlanDefinition,
+      checkUsage: async (_userId: string, _metric: string) =>
+        ({}) as UsageResult,
+      recordUsage: async (
+        _userId: string,
+        _metric: string,
+        _amount: number
+      ) => {},
+      createCheckoutSession: async (_params: CheckoutSessionParams) => ({
+        url: "https://checkout.stripe.com/session",
+      }),
       changePlan: async (_userId: string, _params: ChangePlanParams) => {},
-      cancelSubscription: async (_userId: string, _params?: { immediate?: boolean }) => {},
+      cancelSubscription: async (
+        _userId: string,
+        _params?: { immediate?: boolean }
+      ) => {},
       reactivateSubscription: async (_userId: string) => {},
     };
 
@@ -74,7 +90,9 @@ describe("BillingInstance interface shape", () => {
     ];
 
     for (const method of methods) {
-      expect(typeof mockBilling[method as keyof BillingInstance]).toBe("function");
+      expect(typeof mockBilling[method as keyof BillingInstance]).toBe(
+        "function"
+      );
     }
   });
 });

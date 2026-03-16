@@ -134,12 +134,18 @@ describe("@context-kit/error-tracker tsup.config.ts", () => {
   });
 
   test("tsup config references index.ts entry point", () => {
-    const content = readFileSync(resolve(PACKAGE_ROOT, "tsup.config.ts"), "utf-8");
+    const content = readFileSync(
+      resolve(PACKAGE_ROOT, "tsup.config.ts"),
+      "utf-8"
+    );
     expect(content).toContain("index.ts");
   });
 
   test("tsup config references server.ts entry point", () => {
-    const content = readFileSync(resolve(PACKAGE_ROOT, "tsup.config.ts"), "utf-8");
+    const content = readFileSync(
+      resolve(PACKAGE_ROOT, "tsup.config.ts"),
+      "utf-8"
+    );
     expect(content).toContain("server.ts");
   });
 });
@@ -160,16 +166,18 @@ describe("@context-kit/error-tracker workspace registration", () => {
     const rootPkg = readJson(rootPkgPath);
     const workspaces = rootPkg.workspaces as string[];
     expect(Array.isArray(workspaces)).toBe(true);
-    expect(workspaces.some((w) => w === "packages/*" || w.startsWith("packages/"))).toBe(true);
+    expect(
+      workspaces.some((w) => w === "packages/*" || w.startsWith("packages/"))
+    ).toBe(true);
   });
 });
 
 describe("@context-kit/error-tracker build output", () => {
   test("package builds successfully", () => {
-    const result = execSync(
-      "bun --filter @context-kit/error-tracker build",
-      { cwd: MONOREPO_ROOT, stdio: "pipe" }
-    );
+    const result = execSync("bun --filter @context-kit/error-tracker build", {
+      cwd: MONOREPO_ROOT,
+      stdio: "pipe",
+    });
     expect(result).toBeDefined();
   }, 30000);
 

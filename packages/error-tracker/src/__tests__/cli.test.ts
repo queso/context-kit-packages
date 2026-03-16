@@ -1,4 +1,4 @@
-import { describe, expect, mock, test, beforeEach, afterEach } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -110,7 +110,9 @@ describe("runTail", () => {
   });
 
   test("queries clientError.findMany to fetch recent errors", async () => {
-    const clientErrorFindMany = mock((_: any) => Promise.resolve([makeErrorRecord()]));
+    const clientErrorFindMany = mock((_: any) =>
+      Promise.resolve([makeErrorRecord()])
+    );
     const prisma = makeMockPrisma({ clientErrorFindMany });
     const logs = captureLogs();
 
@@ -141,7 +143,8 @@ describe("runTail", () => {
       // Should order by lastSeenAt desc
       const isLastSeenAtDesc =
         orderBy?.lastSeenAt === "desc" ||
-        (Array.isArray(orderBy) && orderBy.some((o: any) => o?.lastSeenAt === "desc"));
+        (Array.isArray(orderBy) &&
+          orderBy.some((o: any) => o?.lastSeenAt === "desc"));
       expect(isLastSeenAtDesc).toBe(true);
     }
   });
@@ -267,7 +270,9 @@ describe("runTail", () => {
   test("prints error message in output", async () => {
     const prisma = makeMockPrisma({
       clientErrorFindMany: (_: any) =>
-        Promise.resolve([makeErrorRecord({ message: "TypeError: unique-test-message" })]),
+        Promise.resolve([
+          makeErrorRecord({ message: "TypeError: unique-test-message" }),
+        ]),
     });
     const logs = captureLogs();
 
@@ -399,7 +404,11 @@ describe("runResolve", () => {
     const logs = captureLogs();
 
     try {
-      await runResolve({ prisma, fingerprint: "fp_abc123", exitOnComplete: true });
+      await runResolve({
+        prisma,
+        fingerprint: "fp_abc123",
+        exitOnComplete: true,
+      });
     } catch {
       // process.exit throws in test environment
     } finally {
@@ -431,13 +440,18 @@ describe("runResolve", () => {
 
   test("exits with code 1 when an error occurs during update", async () => {
     const prisma = makeMockPrisma({
-      clientErrorUpdate: (_: any) => Promise.reject(new Error("DB write failed")),
+      clientErrorUpdate: (_: any) =>
+        Promise.reject(new Error("DB write failed")),
     });
     const exitMock = mockProcessExit();
     const logs = captureLogs();
 
     try {
-      await runResolve({ prisma, fingerprint: "fp_abc123", exitOnComplete: true });
+      await runResolve({
+        prisma,
+        fingerprint: "fp_abc123",
+        exitOnComplete: true,
+      });
     } catch {
       // process.exit throws in test environment
     } finally {
@@ -475,7 +489,11 @@ describe("CLI exit codes", () => {
     const logs = captureLogs();
 
     try {
-      await runResolve({ prisma, fingerprint: "fp_abc123", exitOnComplete: true });
+      await runResolve({
+        prisma,
+        fingerprint: "fp_abc123",
+        exitOnComplete: true,
+      });
     } catch {
       // process.exit throws in test environment
     } finally {

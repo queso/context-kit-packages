@@ -36,7 +36,12 @@ export async function runResync({
     stripe = new Stripe(stripeKey as string);
   }
 
-  const summary: ResyncSummary = { synced: 0, errors: 0, canceled: 0, skipped: 0 };
+  const summary: ResyncSummary = {
+    synced: 0,
+    errors: 0,
+    canceled: 0,
+    skipped: 0,
+  };
   const syncedStripeSubIds = new Set<string>();
 
   try {
@@ -76,7 +81,8 @@ export async function runResync({
 
         const item = stripeSub.items?.data?.[0];
         const priceId = item?.price?.id ?? null;
-        const interval = item?.recurring?.interval === "year" ? "yearly" : "monthly";
+        const interval =
+          item?.recurring?.interval === "year" ? "yearly" : "monthly";
         const planId = stripeSub.metadata?.planId ?? null;
 
         try {
@@ -89,7 +95,9 @@ export async function runResync({
               planId: planId ?? "unknown",
               status: stripeSub.status,
               interval,
-              currentPeriodStart: new Date(stripeSub.current_period_start * 1000),
+              currentPeriodStart: new Date(
+                stripeSub.current_period_start * 1000
+              ),
               currentPeriodEnd: new Date(stripeSub.current_period_end * 1000),
               cancelAtPeriodEnd: stripeSub.cancel_at_period_end ?? false,
             },
@@ -98,7 +106,9 @@ export async function runResync({
               planId: planId ?? "unknown",
               status: stripeSub.status,
               interval,
-              currentPeriodStart: new Date(stripeSub.current_period_start * 1000),
+              currentPeriodStart: new Date(
+                stripeSub.current_period_start * 1000
+              ),
               currentPeriodEnd: new Date(stripeSub.current_period_end * 1000),
               cancelAtPeriodEnd: stripeSub.cancel_at_period_end ?? false,
             },
@@ -114,24 +124,29 @@ export async function runResync({
     // Mark local active subscriptions not present in Stripe response as canceled
     const cancelResult = await prisma.subscription.updateMany({
       where: {
-        status: { in: ["active", "trialing", "past_due", "unpaid", "incomplete"] },
+        status: {
+          in: ["active", "trialing", "past_due", "unpaid", "incomplete"],
+        },
         stripeSubscriptionId: { notIn: Array.from(syncedStripeSubIds) },
       },
       data: { status: "canceled" },
     });
     summary.canceled = cancelResult.count ?? 0;
-
   } catch (err) {
     console.error("Fatal error during resync:", err);
     summary.errors += 1;
 
-    console.log(`Resync complete — synced: ${summary.synced}, canceled: ${summary.canceled}, skipped: ${summary.skipped}, errors: ${summary.errors}`);
+    console.log(
+      `Resync complete — synced: ${summary.synced}, canceled: ${summary.canceled}, skipped: ${summary.skipped}, errors: ${summary.errors}`
+    );
 
     if (exitOnComplete) process.exit(1);
     return summary;
   }
 
-  console.log(`Resync complete — synced: ${summary.synced}, canceled: ${summary.canceled}, skipped: ${summary.skipped}, errors: ${summary.errors}`);
+  console.log(
+    `Resync complete — synced: ${summary.synced}, canceled: ${summary.canceled}, skipped: ${summary.skipped}, errors: ${summary.errors}`
+  );
 
   if (exitOnComplete) {
     if (summary.errors > 0) {
@@ -154,9 +169,9 @@ if (import.meta.main) {
 
   console.error(
     "Error: The billing CLI requires a PrismaClient instance that cannot be auto-detected.\n" +
-    "Use the programmatic API instead:\n\n" +
-    '  import { runResync } from "@context-kit/billing/cli";\n' +
-    "  await runResync({ prisma, stripe });\n",
+      "Use the programmatic API instead:\n\n" +
+      '  import { runResync } from "@context-kit/billing/cli";\n' +
+      "  await runResync({ prisma, stripe });\n"
   );
   process.exit(1);
 }

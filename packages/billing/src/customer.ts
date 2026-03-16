@@ -3,14 +3,18 @@ import { BillingError } from "./types";
 
 type PrismaClientLike = {
   customer: {
-    findUnique: (args: { where: Record<string, string> }) => Promise<PrismaCustomer | null>;
+    findUnique: (args: {
+      where: Record<string, string>;
+    }) => Promise<PrismaCustomer | null>;
     create: (args: { data: Record<string, string> }) => Promise<PrismaCustomer>;
   };
 };
 
 type StripeClientLike = {
   customers: {
-    create: (args: { metadata: Record<string, string> }) => Promise<{ id: string }>;
+    create: (args: {
+      metadata: Record<string, string>;
+    }) => Promise<{ id: string }>;
   };
 };
 
@@ -25,26 +29,28 @@ type CustomerAndStripeDeps = {
 
 export async function getCustomerByUserId(
   userId: string,
-  { prisma }: CustomerDeps,
+  { prisma }: CustomerDeps
 ): Promise<PrismaCustomer | null> {
   return prisma.customer.findUnique({ where: { userId } });
 }
 
 export async function getCustomerByStripeId(
   stripeCustomerId: string,
-  { prisma }: CustomerDeps,
+  { prisma }: CustomerDeps
 ): Promise<PrismaCustomer | null> {
   return prisma.customer.findUnique({ where: { stripeCustomerId } });
 }
 
 export async function getOrCreateCustomer(
   userId: string,
-  { prisma, stripe }: CustomerAndStripeDeps,
+  { prisma, stripe }: CustomerAndStripeDeps
 ): Promise<PrismaCustomer> {
   const existing = await prisma.customer.findUnique({ where: { userId } });
   if (existing) return existing;
 
-  const stripeCustomer = await stripe.customers.create({ metadata: { userId } });
+  const stripeCustomer = await stripe.customers.create({
+    metadata: { userId },
+  });
 
   try {
     return await prisma.customer.create({
@@ -56,7 +62,7 @@ export async function getOrCreateCustomer(
       const recovered = await prisma.customer.findUnique({ where: { userId } });
       if (recovered) return recovered;
       throw new BillingError(
-        `Failed to create customer for user "${userId}": unique constraint violation occurred but recovery lookup returned null.`,
+        `Failed to create customer for user "${userId}": unique constraint violation occurred but recovery lookup returned null.`
       );
     }
     throw err;

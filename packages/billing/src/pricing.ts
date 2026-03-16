@@ -1,7 +1,10 @@
-import { BillingError } from "./types";
 import type { PlanDefinition } from "./types";
+import { BillingError } from "./types";
 
-export function resolvePriceId(plan: PlanDefinition, interval?: string): string {
+export function resolvePriceId(
+  plan: PlanDefinition,
+  interval?: string
+): string {
   if (interval && plan.stripePriceIds) {
     const key = interval as keyof typeof plan.stripePriceIds;
     const priceId = plan.stripePriceIds[key];
@@ -22,7 +25,5 @@ export function resolvePriceId(plan: PlanDefinition, interval?: string): string 
     );
   }
 
-  throw new BillingError(
-    `Plan "${plan.id}" has no Stripe price configured.`
-  );
+  throw new BillingError(`Plan "${plan.id}" has no Stripe price configured.`);
 }

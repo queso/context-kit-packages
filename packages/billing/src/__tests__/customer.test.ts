@@ -20,12 +20,15 @@ const EXISTING_CUSTOMER: PrismaCustomer = {
 function makeMockPrisma(overrides?: {
   customerFindUnique?: ReturnType<typeof mock>;
   customerCreate?: ReturnType<typeof mock>;
-// biome-ignore lint/suspicious/noExplicitAny: test mock
+  // biome-ignore lint/suspicious/noExplicitAny: test mock
 }): any {
   return {
     customer: {
-      findUnique: overrides?.customerFindUnique ?? mock(() => Promise.resolve(null)),
-      create: overrides?.customerCreate ?? mock(() => Promise.resolve(EXISTING_CUSTOMER)),
+      findUnique:
+        overrides?.customerFindUnique ?? mock(() => Promise.resolve(null)),
+      create:
+        overrides?.customerCreate ??
+        mock(() => Promise.resolve(EXISTING_CUSTOMER)),
     },
   };
 }
@@ -33,11 +36,12 @@ function makeMockPrisma(overrides?: {
 // biome-ignore lint/suspicious/noExplicitAny: test mock
 function makeMockStripe(overrides?: {
   customersCreate?: ReturnType<typeof mock>;
-// biome-ignore lint/suspicious/noExplicitAny: test mock
+  // biome-ignore lint/suspicious/noExplicitAny: test mock
 }): any {
   return {
     customers: {
-      create: overrides?.customersCreate ??
+      create:
+        overrides?.customersCreate ??
         mock(() => Promise.resolve({ id: STRIPE_CUSTOMER_ID })),
     },
   };
@@ -58,7 +62,9 @@ describe("getCustomerByUserId", () => {
     const result = await getCustomerByUserId(USER_ID, { prisma });
 
     expect(result).toEqual(EXISTING_CUSTOMER);
-    expect(customerFindUnique).toHaveBeenCalledWith({ where: { userId: USER_ID } });
+    expect(customerFindUnique).toHaveBeenCalledWith({
+      where: { userId: USER_ID },
+    });
   });
 
   test("returns null when no customer found", async () => {
@@ -102,7 +108,9 @@ describe("getCustomerByStripeId", () => {
 
 describe("getOrCreateCustomer", () => {
   test("returns existing customer without calling Stripe when record exists", async () => {
-    const customersCreate = mock(() => Promise.resolve({ id: STRIPE_CUSTOMER_ID }));
+    const customersCreate = mock(() =>
+      Promise.resolve({ id: STRIPE_CUSTOMER_ID })
+    );
     const prisma = makeMockPrisma({
       customerFindUnique: mock(() => Promise.resolve(EXISTING_CUSTOMER)),
     });
@@ -125,7 +133,9 @@ describe("getOrCreateCustomer", () => {
 
     const customerFindUnique = mock(() => Promise.resolve(null));
     const customerCreate = mock(() => Promise.resolve(newCustomer));
-    const customersCreate = mock(() => Promise.resolve({ id: STRIPE_CUSTOMER_ID }));
+    const customersCreate = mock(() =>
+      Promise.resolve({ id: STRIPE_CUSTOMER_ID })
+    );
 
     const prisma = makeMockPrisma({ customerFindUnique, customerCreate });
     const stripe = makeMockStripe({ customersCreate });
@@ -173,9 +183,9 @@ describe("getOrCreateCustomer", () => {
       customersCreate: mock(() => Promise.reject(stripeApiError)),
     });
 
-    await expect(getOrCreateCustomer(USER_ID, { prisma, stripe })).rejects.toThrow(
-      "Stripe API unavailable"
-    );
+    await expect(
+      getOrCreateCustomer(USER_ID, { prisma, stripe })
+    ).rejects.toThrow("Stripe API unavailable");
   });
 
   test("handles P2002 race condition: returns record created by concurrent request", async () => {
@@ -189,7 +199,9 @@ describe("getOrCreateCustomer", () => {
       updatedAt: new Date(),
     };
 
-    const uniqueConstraintError = new Error("Unique constraint failed on the fields: (`userId`)");
+    const uniqueConstraintError = new Error(
+      "Unique constraint failed on the fields: (`userId`)"
+    );
     (uniqueConstraintError as { code?: string }).code = "P2002";
 
     let findUniqueCallCount = 0;
@@ -221,7 +233,9 @@ describe("getOrCreateCustomer", () => {
     // This is an unexpected state (orphaned Stripe customer created before the
     // DB write). The implementation should surface the original error so the
     // caller knows something went wrong rather than silently returning undefined.
-    const uniqueConstraintError = new Error("Unique constraint failed on the fields: (`userId`)");
+    const uniqueConstraintError = new Error(
+      "Unique constraint failed on the fields: (`userId`)"
+    );
     (uniqueConstraintError as { code?: string }).code = "P2002";
 
     const customerFindUnique = mock(() => Promise.resolve(null));
@@ -230,9 +244,9 @@ describe("getOrCreateCustomer", () => {
     const prisma = makeMockPrisma({ customerFindUnique, customerCreate });
     const stripe = makeMockStripe();
 
-    await expect(getOrCreateCustomer(USER_ID, { prisma, stripe })).rejects.toThrow(
-      "Failed to create customer for user"
-    );
+    await expect(
+      getOrCreateCustomer(USER_ID, { prisma, stripe })
+    ).rejects.toThrow("Failed to create customer for user");
     // findUnique called twice: initial lookup + recovery fetch (both null)
     expect(customerFindUnique).toHaveBeenCalledTimes(2);
   });
@@ -246,8 +260,8 @@ describe("getOrCreateCustomer", () => {
     });
     const stripe = makeMockStripe();
 
-    await expect(getOrCreateCustomer(USER_ID, { prisma, stripe })).rejects.toThrow(
-      "Database connection lost"
-    );
+    await expect(
+      getOrCreateCustomer(USER_ID, { prisma, stripe })
+    ).rejects.toThrow("Database connection lost");
   });
 });

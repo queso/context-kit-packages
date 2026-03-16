@@ -66,8 +66,12 @@ describe("createBilling instance method wiring", () => {
       plans: [VALID_PLAN],
     });
 
-    await expect(billing.recordUsage("user-1", "api_calls", 1)).rejects.toThrow();
-    const err = await billing.recordUsage("user-1", "api_calls", 1).catch((e) => e);
+    await expect(
+      billing.recordUsage("user-1", "api_calls", 1)
+    ).rejects.toThrow();
+    const err = await billing
+      .recordUsage("user-1", "api_calls", 1)
+      .catch((e) => e);
     expect(err.message).not.toBe("Not implemented: recordUsage");
   });
 
@@ -110,8 +114,12 @@ describe("createBilling instance method wiring", () => {
       plans: [VALID_PLAN],
     });
 
-    await expect(billing.changePlan("user-1", { planId: "pro" })).rejects.toThrow();
-    const err = await billing.changePlan("user-1", { planId: "pro" }).catch((e) => e);
+    await expect(
+      billing.changePlan("user-1", { planId: "pro" })
+    ).rejects.toThrow();
+    const err = await billing
+      .changePlan("user-1", { planId: "pro" })
+      .catch((e) => e);
     expect(err.message).not.toBe("Not implemented: changePlan");
   });
 
@@ -205,7 +213,9 @@ describe("barrel exports from index.ts", () => {
       SubscriptionStateError,
     } = await import("../index");
 
-    expect(new UsageCapExceededError("x", { used: 1, limit: 0 })).toBeInstanceOf(BillingError);
+    expect(
+      new UsageCapExceededError("x", { used: 1, limit: 0 })
+    ).toBeInstanceOf(BillingError);
     expect(new InvalidConfigError("x")).toBeInstanceOf(BillingError);
     expect(new WebhookVerificationError("x")).toBeInstanceOf(BillingError);
     expect(new SubscriptionStateError("x")).toBeInstanceOf(BillingError);

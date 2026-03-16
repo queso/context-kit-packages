@@ -1,9 +1,11 @@
-import { describe, expect, mock, test, beforeEach, afterEach } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { ErrorTrackerConfig } from "../types";
 
 // ─── Mock reportError ─────────────────────────────────────────────────────────
 
-const mockReportError = mock((_config: ErrorTrackerConfig, _data: unknown) => undefined);
+const mockReportError = mock(
+  (_config: ErrorTrackerConfig, _data: unknown) => undefined
+);
 
 mock.module("../reporter", () => ({
   reportError: mockReportError,
@@ -29,8 +31,14 @@ type WindowErrorHandler = (
 
 type UnhandledRejectionHandler = (event: PromiseRejectionEvent) => void;
 
-function simulateWindowError(error: Error, source = "app.js", lineno = 1, colno = 0) {
-  const handler = (globalThis as unknown as { onerror?: WindowErrorHandler }).onerror;
+function simulateWindowError(
+  error: Error,
+  source = "app.js",
+  lineno = 1,
+  colno = 0
+) {
+  const handler = (globalThis as unknown as { onerror?: WindowErrorHandler })
+    .onerror;
   if (handler) {
     handler(error.message, source, lineno, colno, error);
   } else {
@@ -193,7 +201,8 @@ describe("initErrorTracker — window.onerror listener", () => {
 describe("initErrorTracker — existing handler chaining", () => {
   test("does not replace an existing window.onerror handler", () => {
     const originalHandler: WindowErrorHandler = mock(() => false);
-    (globalThis as unknown as { onerror: WindowErrorHandler }).onerror = originalHandler;
+    (globalThis as unknown as { onerror: WindowErrorHandler }).onerror =
+      originalHandler;
 
     const cleanup = initErrorTracker(TEST_CONFIG);
 
@@ -204,12 +213,15 @@ describe("initErrorTracker — existing handler chaining", () => {
     cleanup();
 
     // Restore
-    (globalThis as unknown as { onerror: WindowErrorHandler | undefined }).onerror = undefined;
+    (
+      globalThis as unknown as { onerror: WindowErrorHandler | undefined }
+    ).onerror = undefined;
   });
 
   test("calls through to the previous onerror handler when one exists", async () => {
     const previousHandler = mock((..._args: unknown[]) => false);
-    (globalThis as unknown as { onerror: typeof previousHandler }).onerror = previousHandler;
+    (globalThis as unknown as { onerror: typeof previousHandler }).onerror =
+      previousHandler;
 
     const cleanup = initErrorTracker(TEST_CONFIG);
     mockReportError.mockClear();
@@ -223,7 +235,9 @@ describe("initErrorTracker — existing handler chaining", () => {
     expect(previousHandler.mock.calls.length).toBeGreaterThan(0);
 
     // Restore
-    (globalThis as unknown as { onerror: typeof previousHandler | undefined }).onerror = undefined;
+    (
+      globalThis as unknown as { onerror: typeof previousHandler | undefined }
+    ).onerror = undefined;
   });
 });
 
@@ -272,7 +286,9 @@ describe("initErrorTracker — config passthrough", () => {
     if (mockReportError.mock.calls.length > 0) {
       // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
       const [calledConfig] = (mockReportError.mock.calls as any[][])[0];
-      expect(calledConfig?.endpoint).toBe("https://custom.example.com/api/errors");
+      expect(calledConfig?.endpoint).toBe(
+        "https://custom.example.com/api/errors"
+      );
     }
   });
 });

@@ -61,7 +61,7 @@ function resolveInterval(stripeSub: StripeSubscriptionObject): string {
 
 function resolvePlanId(
   stripeSub: StripeSubscriptionObject,
-  plans: Map<string, PlanDefinition>,
+  plans: Map<string, PlanDefinition>
 ): string {
   // Prefer planId from metadata if set
   if (stripeSub.metadata?.planId) return stripeSub.metadata.planId;
@@ -79,19 +79,19 @@ function resolvePlanId(
 
   if (!priceId) {
     throw new Error(
-      `resolvePlanId: subscription "${stripeSub.id}" has no price ID and no planId metadata.`,
+      `resolvePlanId: subscription "${stripeSub.id}" has no price ID and no planId metadata.`
     );
   }
 
   throw new Error(
-    `resolvePlanId: no plan found for subscription "${stripeSub.id}" with price ID "${priceId}".`,
+    `resolvePlanId: no plan found for subscription "${stripeSub.id}" with price ID "${priceId}".`
   );
 }
 
 async function upsertSubscriptionFromStripe(
   stripeSub: StripeSubscriptionObject,
   prisma: PrismaClientLike,
-  plans: Map<string, PlanDefinition>,
+  plans: Map<string, PlanDefinition>
 ): Promise<void> {
   const customer = await prisma.customer.findUnique({
     where: { stripeCustomerId: stripeSub.customer },
@@ -130,7 +130,7 @@ async function upsertSubscriptionFromStripe(
 async function handleCheckoutSessionCompleted(
   session: StripeCheckoutSession,
   prisma: PrismaClientLike,
-  plans: Map<string, PlanDefinition>,
+  plans: Map<string, PlanDefinition>
 ): Promise<void> {
   if (session.mode !== "subscription" || !session.subscription) return;
 
@@ -163,7 +163,7 @@ async function handleCheckoutSessionCompleted(
 
 async function handleSubscriptionDeleted(
   stripeSub: StripeSubscriptionObject,
-  prisma: PrismaClientLike,
+  prisma: PrismaClientLike
 ): Promise<void> {
   const customer = await prisma.customer.findUnique({
     where: { stripeCustomerId: stripeSub.customer },
@@ -184,18 +184,27 @@ async function handleSubscriptionDeleted(
   });
 }
 
-export function toWebhookHandler(
-  { stripe, prisma, plans, webhookSecret }: WebhookHandlerDeps,
-): (req: Request) => Promise<Response> {
+export function toWebhookHandler({
+  stripe,
+  prisma,
+  plans,
+  webhookSecret,
+}: WebhookHandlerDeps): (req: Request) => Promise<Response> {
   return async (req: Request): Promise<Response> => {
     const rawBody = await req.text();
     const signature = req.headers.get("stripe-signature") ?? "";
 
     let event: StripeEvent;
     try {
-      event = stripe.webhooks.constructEvent(rawBody, signature, webhookSecret) as StripeEvent;
+      event = stripe.webhooks.constructEvent(
+        rawBody,
+        signature,
+        webhookSecret
+      ) as StripeEvent;
     } catch {
-      return new Response("Webhook signature verification failed.", { status: 400 });
+      return new Response("Webhook signature verification failed.", {
+        status: 400,
+      });
     }
 
     try {
@@ -243,7 +252,11 @@ export function toWebhookHandler(
             });
             // Only mark as past_due if the subscription is still active-ish.
             // Don't overwrite canceled/incomplete_expired status.
-            if (sub && sub.status !== "canceled" && sub.status !== "incomplete_expired") {
+            if (
+              sub &&
+              sub.status !== "canceled" &&
+              sub.status !== "incomplete_expired"
+            ) {
               await prisma.subscription.update({
                 where: { id: sub.id },
                 data: { status: "past_due" },
@@ -261,9 +274,11 @@ export function toWebhookHandler(
     } catch (err) {
       console.error(
         `Webhook error [event.id=${event.id}, event.type=${event.type}]:`,
-        err instanceof Error ? err.message : err,
+        err instanceof Error ? err.message : err
       );
-      return new Response("Internal server error processing webhook.", { status: 500 });
+      return new Response("Internal server error processing webhook.", {
+        status: 500,
+      });
     }
 
     return new Response(JSON.stringify({ received: true }), {

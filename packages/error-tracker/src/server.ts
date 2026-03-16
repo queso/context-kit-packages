@@ -1,8 +1,10 @@
-export { createIngestionHandler } from "./server/ingestion.js";
+export {
+  computeFingerprint,
+  createIngestionHandler,
+} from "./server/ingestion.js";
 export { createQueryHandler } from "./server/query.js";
 export { createRateLimiter } from "./server/rate-limiter.js";
 export { resolveStack } from "./server/source-map-resolver.js";
-export { computeFingerprint } from "./server/ingestion.js";
 
 import { createIngestionHandler } from "./server/ingestion.js";
 import { createQueryHandler } from "./server/query.js";

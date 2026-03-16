@@ -8,10 +8,10 @@ const MONOREPO_ROOT = resolve(PACKAGE_ROOT, "../..");
 
 describe("@context-kit/billing scaffold", () => {
   test("package builds successfully", () => {
-    const result = execSync(
-      "bun --filter @context-kit/billing build",
-      { cwd: MONOREPO_ROOT, stdio: "pipe" }
-    );
+    const result = execSync("bun --filter @context-kit/billing build", {
+      cwd: MONOREPO_ROOT,
+      stdio: "pipe",
+    });
     // If execSync doesn't throw, exit code was 0
     expect(result).toBeDefined();
   }, 30000);

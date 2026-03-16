@@ -26,7 +26,10 @@ function makeErrorRecord(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function makeRequest(searchParams: Record<string, string> = {}, headers: Record<string, string> = {}): Request {
+function makeRequest(
+  searchParams: Record<string, string> = {},
+  headers: Record<string, string> = {}
+): Request {
   const url = new URL("https://example.com/api/errors");
   for (const [key, value] of Object.entries(searchParams)) {
     url.searchParams.set(key, value);
@@ -53,9 +56,7 @@ function makeMockPrisma(overrides?: {
       findMany:
         overrides?.clientErrorFindMany ??
         ((_: any) => Promise.resolve([makeErrorRecord()])),
-      count:
-        overrides?.clientErrorCount ??
-        ((_: any) => Promise.resolve(1)),
+      count: overrides?.clientErrorCount ?? ((_: any) => Promise.resolve(1)),
     },
   };
 }
@@ -140,7 +141,9 @@ describe("query handler — response shape", () => {
 
   test("response body has errors array", async () => {
     const handler = createQueryHandler({
-      prisma: makeMockPrisma({ clientErrorFindMany: (_: any) => Promise.resolve([makeErrorRecord()]) }),
+      prisma: makeMockPrisma({
+        clientErrorFindMany: (_: any) => Promise.resolve([makeErrorRecord()]),
+      }),
     });
     const res = await handler(makeRequest());
     const body = await res.json();
@@ -163,7 +166,9 @@ describe("query handler — response shape", () => {
   test("errors array contains records from the database", async () => {
     const record = makeErrorRecord({ fingerprint: "fp_unique_xyz" });
     const handler = createQueryHandler({
-      prisma: makeMockPrisma({ clientErrorFindMany: (_: any) => Promise.resolve([record]) }),
+      prisma: makeMockPrisma({
+        clientErrorFindMany: (_: any) => Promise.resolve([record]),
+      }),
     });
     const res = await handler(makeRequest());
     const body = await res.json();
@@ -202,7 +207,8 @@ describe("query handler — ordering", () => {
     if (orderBy) {
       const isLastSeenAtDesc =
         orderBy?.lastSeenAt === "desc" ||
-        (Array.isArray(orderBy) && orderBy.some((o: any) => o?.lastSeenAt === "desc"));
+        (Array.isArray(orderBy) &&
+          orderBy.some((o: any) => o?.lastSeenAt === "desc"));
       expect(isLastSeenAtDesc).toBe(true);
     }
   });

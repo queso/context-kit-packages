@@ -1,4 +1,4 @@
-import { describe, expect, mock, test, beforeEach, afterEach } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -28,7 +28,11 @@ const STRIPE_SUB_ACTIVE = {
   id: "sub_stripe_1",
   customer: "cus_stripe_1",
   status: "active",
-  items: { data: [{ price: { id: "price_pro_monthly" }, recurring: { interval: "month" } }] },
+  items: {
+    data: [
+      { price: { id: "price_pro_monthly" }, recurring: { interval: "month" } },
+    ],
+  },
   current_period_start: 1717200000,
   current_period_end: 1719792000,
   cancel_at_period_end: false,
@@ -39,7 +43,14 @@ const STRIPE_SUB_CANCELED = {
   id: "sub_stripe_2",
   customer: "cus_stripe_2",
   status: "canceled",
-  items: { data: [{ price: { id: "price_basic_monthly" }, recurring: { interval: "month" } }] },
+  items: {
+    data: [
+      {
+        price: { id: "price_basic_monthly" },
+        recurring: { interval: "month" },
+      },
+    ],
+  },
   current_period_start: 1717200000,
   current_period_end: 1719792000,
   cancel_at_period_end: false,
@@ -88,12 +99,20 @@ function makeMockPrisma(overrides?: {
 }): any {
   return {
     customer: {
-      findUnique: overrides?.customerFindUnique ?? ((_args: any) => Promise.resolve(null)),
+      findUnique:
+        overrides?.customerFindUnique ??
+        ((_args: any) => Promise.resolve(null)),
     },
     subscription: {
-      findFirst: overrides?.subscriptionFindFirst ?? ((_args: any) => Promise.resolve(null)),
-      upsert: overrides?.subscriptionUpsert ?? ((_args: any) => Promise.resolve(LOCAL_SUB_ACTIVE)),
-      updateMany: overrides?.subscriptionUpdateMany ?? ((_args: any) => Promise.resolve({ count: 0 })),
+      findFirst:
+        overrides?.subscriptionFindFirst ??
+        ((_args: any) => Promise.resolve(null)),
+      upsert:
+        overrides?.subscriptionUpsert ??
+        ((_args: any) => Promise.resolve(LOCAL_SUB_ACTIVE)),
+      updateMany:
+        overrides?.subscriptionUpdateMany ??
+        ((_args: any) => Promise.resolve({ count: 0 })),
     },
   };
 }
@@ -104,9 +123,10 @@ function makeMockStripe(overrides?: {
 }): any {
   return {
     subscriptions: {
-      list: overrides?.subscriptionsList ?? ((_args: any) =>
-        Promise.resolve({ data: [STRIPE_SUB_ACTIVE], has_more: false })
-      ),
+      list:
+        overrides?.subscriptionsList ??
+        ((_args: any) =>
+          Promise.resolve({ data: [STRIPE_SUB_ACTIVE], has_more: false })),
     },
   };
 }
@@ -182,7 +202,9 @@ describe("resync", () => {
   });
 
   test("successful resync: iterates Stripe subscriptions and upserts local records", async () => {
-    const subscriptionUpsert = mock((_args: any) => Promise.resolve(LOCAL_SUB_ACTIVE));
+    const subscriptionUpsert = mock((_args: any) =>
+      Promise.resolve(LOCAL_SUB_ACTIVE)
+    );
     const prisma = makeMockPrisma({
       customerFindUnique: (_args: any) => Promise.resolve(LOCAL_CUSTOMER_1),
       subscriptionUpsert,
@@ -215,7 +237,9 @@ describe("resync", () => {
   });
 
   test("marks local subscriptions as canceled when not present in Stripe response", async () => {
-    const subscriptionUpdateMany = mock((_args: any) => Promise.resolve({ count: 1 }));
+    const subscriptionUpdateMany = mock((_args: any) =>
+      Promise.resolve({ count: 1 })
+    );
     const prisma = makeMockPrisma({
       customerFindUnique: (_args: any) => Promise.resolve(LOCAL_CUSTOMER_1),
       subscriptionUpdateMany,
@@ -236,7 +260,9 @@ describe("resync", () => {
   });
 
   test("skips orphaned Stripe subscription with no matching local customer and records in summary", async () => {
-    const subscriptionUpsert = mock((_args: any) => Promise.resolve(LOCAL_SUB_ACTIVE));
+    const subscriptionUpsert = mock((_args: any) =>
+      Promise.resolve(LOCAL_SUB_ACTIVE)
+    );
     const prisma = makeMockPrisma({
       // No local customer found for this Stripe customer
       customerFindUnique: (_args: any) => Promise.resolve(null),
@@ -252,7 +278,9 @@ describe("resync", () => {
   });
 
   test("handles already-canceled Stripe subscriptions without creating local records", async () => {
-    const subscriptionUpsert = mock((_args: any) => Promise.resolve(LOCAL_SUB_ACTIVE));
+    const subscriptionUpsert = mock((_args: any) =>
+      Promise.resolve(LOCAL_SUB_ACTIVE)
+    );
     const prisma = makeMockPrisma({
       customerFindUnique: (_args: any) => Promise.resolve(LOCAL_CUSTOMER_1),
       subscriptionUpsert,
@@ -273,7 +301,8 @@ describe("resync", () => {
   test("exits with code 1 and records errors in summary when an exception occurs during sync", async () => {
     const prisma = makeMockPrisma({
       customerFindUnique: (_args: any) => Promise.resolve(LOCAL_CUSTOMER_1),
-      subscriptionUpsert: (_args: any) => Promise.reject(new Error("DB write failed")),
+      subscriptionUpsert: (_args: any) =>
+        Promise.reject(new Error("DB write failed")),
     });
     const stripe = makeMockStripe();
     const exitMock = mockProcessExit();

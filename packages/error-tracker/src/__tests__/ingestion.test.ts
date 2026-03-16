@@ -9,7 +9,8 @@ const SECRET_HEADER = "x-error-token";
 function makeValidBody(overrides: Record<string, unknown> = {}) {
   return {
     message: "TypeError: Cannot read properties of undefined",
-    stack: "TypeError\n  at Component (app.js:1:100)\n  at App (app.js:2:200)\n  at Root (app.js:3:300)",
+    stack:
+      "TypeError\n  at Component (app.js:1:100)\n  at App (app.js:2:200)\n  at Root (app.js:3:300)",
     componentStack: "\n  at ErrorBoundary\n  at App",
     url: "https://example.com/dashboard",
     userAgent: "Mozilla/5.0",
@@ -60,10 +61,17 @@ function makeMockPrisma(overrides?: {
 
   return {
     clientError: {
-      findFirst: overrides?.clientErrorFindFirst ?? ((_: any) => Promise.resolve(null)),
-      create: overrides?.clientErrorCreate ?? ((_: any) => Promise.resolve(defaultRecord)),
-      update: overrides?.clientErrorUpdate ?? ((_: any) => Promise.resolve(defaultRecord)),
-      upsert: overrides?.clientErrorUpsert ?? ((_: any) => Promise.resolve(defaultRecord)),
+      findFirst:
+        overrides?.clientErrorFindFirst ?? ((_: any) => Promise.resolve(null)),
+      create:
+        overrides?.clientErrorCreate ??
+        ((_: any) => Promise.resolve(defaultRecord)),
+      update:
+        overrides?.clientErrorUpdate ??
+        ((_: any) => Promise.resolve(defaultRecord)),
+      upsert:
+        overrides?.clientErrorUpsert ??
+        ((_: any) => Promise.resolve(defaultRecord)),
     },
   };
 }
@@ -71,7 +79,9 @@ function makeMockPrisma(overrides?: {
 // ─── Import target ────────────────────────────────────────────────────────────
 
 // @ts-expect-error: module created by B.A. during implementation phase
-const { createIngestionHandler, computeFingerprint } = await import("../server/ingestion");
+const { createIngestionHandler, computeFingerprint } = await import(
+  "../server/ingestion"
+);
 
 // ─── computeFingerprint ───────────────────────────────────────────────────────
 
@@ -133,7 +143,12 @@ describe("computeFingerprint", () => {
       { file: "app.js", line: 2, column: 2, functionName: "fn2" },
       { file: "app.js", line: 3, column: 3, functionName: "fn3" },
     ];
-    const extraFrame: StackFrame = { file: "app.js", line: 4, column: 4, functionName: "fn4" };
+    const extraFrame: StackFrame = {
+      file: "app.js",
+      line: 4,
+      column: 4,
+      functionName: "fn4",
+    };
 
     const fp1 = computeFingerprint("Error", sharedFrames);
     const fp2 = computeFingerprint("Error", [...sharedFrames, extraFrame]);
@@ -182,7 +197,9 @@ describe("ingestion handler — authentication", () => {
       secretHeaderToken: SECRET_TOKEN,
     });
 
-    const req = makeRequest(makeValidBody(), { [SECRET_HEADER]: "wrong-token" });
+    const req = makeRequest(makeValidBody(), {
+      [SECRET_HEADER]: "wrong-token",
+    });
     const res = await handler(req);
 
     expect(res.status).toBe(401);
@@ -315,8 +332,14 @@ describe("ingestion handler — success path", () => {
     if (newOccurrences !== undefined) {
       // The implementation uses Prisma's atomic increment ({ increment: 1 })
       // rather than a computed value, so we check for the atomic form.
-      if (typeof newOccurrences === "object" && newOccurrences !== null && "increment" in newOccurrences) {
-        expect((newOccurrences as { increment: number }).increment).toBeGreaterThan(0);
+      if (
+        typeof newOccurrences === "object" &&
+        newOccurrences !== null &&
+        "increment" in newOccurrences
+      ) {
+        expect(
+          (newOccurrences as { increment: number }).increment
+        ).toBeGreaterThan(0);
       } else {
         expect(newOccurrences).toBeGreaterThan(5);
       }
@@ -336,7 +359,11 @@ describe("ingestion handler — success path", () => {
     };
 
     const clientErrorCreate = mock((_: any) =>
-      Promise.resolve({ id: "err_new", fingerprint: "fp_known", occurrences: 1 })
+      Promise.resolve({
+        id: "err_new",
+        fingerprint: "fp_known",
+        occurrences: 1,
+      })
     );
     const prisma = makeMockPrisma({
       clientErrorFindFirst: (_: any) => Promise.resolve(resolvedRecord),
@@ -390,7 +417,10 @@ describe("ingestion handler — deduplication window", () => {
 
   test("accepts custom deduplicationWindowMs", () => {
     expect(() =>
-      createIngestionHandler({ prisma: makeMockPrisma(), deduplicationWindowMs: 3600_000 })
+      createIngestionHandler({
+        prisma: makeMockPrisma(),
+        deduplicationWindowMs: 3600_000,
+      })
     ).not.toThrow();
   });
 });

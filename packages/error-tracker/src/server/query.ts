@@ -6,7 +6,11 @@ export interface QueryConfig {
 }
 
 export function createQueryHandler(config: QueryConfig) {
-  const { prisma, secretHeaderName = "x-error-tracker-token", secretHeaderToken } = config;
+  const {
+    prisma,
+    secretHeaderName = "x-error-tracker-token",
+    secretHeaderToken,
+  } = config;
 
   return async function GET(request: Request): Promise<Response> {
     // Auth check

@@ -1,4 +1,4 @@
-import { describe, expect, mock, test, beforeEach, afterEach } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { ErrorTrackerConfig } from "../types";
 
 // ─── Mock dependencies ────────────────────────────────────────────────────────
@@ -7,7 +7,9 @@ const mockInitErrorTracker = mock((_config: ErrorTrackerConfig) => () => {});
 const mockPatchConsoleError = mock((_config: ErrorTrackerConfig) => () => {});
 
 mock.module("../init", () => ({ initErrorTracker: mockInitErrorTracker }));
-mock.module("../console-patch", () => ({ patchConsoleError: mockPatchConsoleError }));
+mock.module("../console-patch", () => ({
+  patchConsoleError: mockPatchConsoleError,
+}));
 
 // ─── Import target ────────────────────────────────────────────────────────────
 
@@ -82,13 +84,19 @@ describe("createErrorTracker — init()", () => {
   });
 
   test("init() does NOT call patchConsoleError when patchConsoleError is explicitly false", () => {
-    const tracker = createErrorTracker({ endpoint: "/api/errors", patchConsoleError: false });
+    const tracker = createErrorTracker({
+      endpoint: "/api/errors",
+      patchConsoleError: false,
+    });
     tracker.init();
     expect(mockPatchConsoleError).not.toHaveBeenCalled();
   });
 
   test("init() calls patchConsoleError when patchConsoleError: true", () => {
-    const tracker = createErrorTracker({ endpoint: "/api/errors", patchConsoleError: true });
+    const tracker = createErrorTracker({
+      endpoint: "/api/errors",
+      patchConsoleError: true,
+    });
     tracker.init();
     expect(mockPatchConsoleError).toHaveBeenCalledTimes(1);
   });
@@ -120,7 +128,10 @@ describe("createErrorTracker — init()", () => {
     const patchRestore = mock(() => {});
     mockPatchConsoleError.mockImplementation(() => patchRestore);
 
-    const tracker = createErrorTracker({ endpoint: "/api/errors", patchConsoleError: true });
+    const tracker = createErrorTracker({
+      endpoint: "/api/errors",
+      patchConsoleError: true,
+    });
     const cleanup = tracker.init();
     cleanup();
 
@@ -159,7 +170,10 @@ describe("createErrorTracker — environment default", () => {
 
   test("uses provided environment over NODE_ENV", () => {
     process.env.NODE_ENV = "production";
-    const tracker = createErrorTracker({ endpoint: "/api/errors", environment: "staging" });
+    const tracker = createErrorTracker({
+      endpoint: "/api/errors",
+      environment: "staging",
+    });
     tracker.init();
     // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
     const [calledConfig] = (mockInitErrorTracker.mock.calls as any[][])[0];
@@ -202,7 +216,10 @@ describe("createErrorTracker — production warning", () => {
 
   test("does not warn when NODE_ENV=production and a token is configured", () => {
     process.env.NODE_ENV = "production";
-    const tracker = createErrorTracker({ endpoint: "/api/errors", token: "my-secret" });
+    const tracker = createErrorTracker({
+      endpoint: "/api/errors",
+      token: "my-secret",
+    });
     tracker.init();
     expect(warnCalls.length).toBe(0);
   });
@@ -261,4 +278,8 @@ describe("src/index.ts barrel exports", () => {
 });
 
 // Type-level compile check: imports below must resolve or this file won't compile
-import type { ErrorTrackerConfig as _Config, ErrorPayload as _Payload, StackFrame as _Frame } from "../index";
+import type {
+  ErrorTrackerConfig as _Config,
+  StackFrame as _Frame,
+  ErrorPayload as _Payload,
+} from "../index";

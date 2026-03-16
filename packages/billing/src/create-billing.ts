@@ -1,6 +1,10 @@
 import Stripe from "stripe";
 import { createCheckoutSession } from "./checkout.js";
-import { changePlan, cancelSubscription, reactivateSubscription } from "./manage.js";
+import {
+  cancelSubscription,
+  changePlan,
+  reactivateSubscription,
+} from "./manage.js";
 import { getSubscription } from "./subscription.js";
 import type {
   BillingConfig,
@@ -31,7 +35,8 @@ export function createBilling(config: BillingConfig): BillingInstance {
   }
 
   // Resolve Stripe secret key
-  const stripeSecretKey = config.stripeSecretKey ?? process.env.STRIPE_SECRET_KEY;
+  const stripeSecretKey =
+    config.stripeSecretKey ?? process.env.STRIPE_SECRET_KEY;
   if (!stripeSecretKey) {
     throw new InvalidConfigError(
       "A Stripe secret key is required. Set STRIPE_SECRET_KEY as an environment variable or pass `stripeSecretKey` in config."
@@ -110,31 +115,63 @@ export function createBilling(config: BillingConfig): BillingInstance {
     },
 
     async getSubscription(userId: string): Promise<SubscriptionData | null> {
-      return getSubscription(userId, { prisma: ctx.prisma, plans: ctx.planMap, freeTier: config.freeTier });
+      return getSubscription(userId, {
+        prisma: ctx.prisma,
+        plans: ctx.planMap,
+        freeTier: config.freeTier,
+      });
     },
 
     async checkUsage(userId: string, feature: string) {
-      return checkUsage(userId, feature, { prisma: ctx.prisma, plans: ctx.planMap, freeTier: config.freeTier });
+      return checkUsage(userId, feature, {
+        prisma: ctx.prisma,
+        plans: ctx.planMap,
+        freeTier: config.freeTier,
+      });
     },
 
-    async recordUsage(userId: string, feature: string, quantity: number): Promise<UsageResult | void> {
-      return recordUsage(userId, feature, quantity, { prisma: ctx.prisma, plans: ctx.planMap, freeTier: config.freeTier });
+    async recordUsage(
+      userId: string,
+      feature: string,
+      quantity: number
+    ): Promise<UsageResult | void> {
+      return recordUsage(userId, feature, quantity, {
+        prisma: ctx.prisma,
+        plans: ctx.planMap,
+        freeTier: config.freeTier,
+      });
     },
 
     async createCheckoutSession(params: CheckoutSessionParams) {
-      return createCheckoutSession(params, { prisma: ctx.prisma, stripe: ctx.stripe, plans: ctx.planMap });
+      return createCheckoutSession(params, {
+        prisma: ctx.prisma,
+        stripe: ctx.stripe,
+        plans: ctx.planMap,
+      });
     },
 
     async changePlan(userId: string, params: ChangePlanParams) {
-      return changePlan(userId, params, { prisma: ctx.prisma, stripe: ctx.stripe, plans: ctx.planMap });
+      return changePlan(userId, params, {
+        prisma: ctx.prisma,
+        stripe: ctx.stripe,
+        plans: ctx.planMap,
+      });
     },
 
     async cancelSubscription(userId: string, params?: CancelParams) {
-      return cancelSubscription(userId, params ?? {}, { prisma: ctx.prisma, stripe: ctx.stripe, plans: ctx.planMap });
+      return cancelSubscription(userId, params ?? {}, {
+        prisma: ctx.prisma,
+        stripe: ctx.stripe,
+        plans: ctx.planMap,
+      });
     },
 
     async reactivateSubscription(userId: string) {
-      return reactivateSubscription(userId, { prisma: ctx.prisma, stripe: ctx.stripe, plans: ctx.planMap });
+      return reactivateSubscription(userId, {
+        prisma: ctx.prisma,
+        stripe: ctx.stripe,
+        plans: ctx.planMap,
+      });
     },
   };
 }

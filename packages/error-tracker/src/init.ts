@@ -1,5 +1,5 @@
-import type { ErrorTrackerConfig, ErrorPayload } from "./types.js";
 import { reportError } from "./reporter.js";
+import type { ErrorPayload, ErrorTrackerConfig } from "./types.js";
 
 type WindowErrorHandler = (
   event: string | Event,
@@ -9,7 +9,11 @@ type WindowErrorHandler = (
   error?: Error
 ) => boolean | void;
 
-function makePayload(config: ErrorTrackerConfig, message: string, stack?: string): ErrorPayload {
+function makePayload(
+  config: ErrorTrackerConfig,
+  message: string,
+  stack?: string
+): ErrorPayload {
   return {
     message,
     stack,
@@ -39,7 +43,8 @@ export function initErrorTracker(config: ErrorTrackerConfig): () => void {
   const previousOnError = g.onerror as WindowErrorHandler | undefined;
 
   const onError: WindowErrorHandler = (event, source, lineno, colno, error) => {
-    const message = error?.message ?? (typeof event === "string" ? event : "Unknown error");
+    const message =
+      error?.message ?? (typeof event === "string" ? event : "Unknown error");
     const stack = error?.stack;
     reportError(config, makePayload(config, message, stack));
 

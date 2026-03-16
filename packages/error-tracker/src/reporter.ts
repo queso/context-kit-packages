@@ -1,4 +1,4 @@
-import type { ErrorTrackerConfig, ErrorPayload } from "./types.js";
+import type { ErrorPayload, ErrorTrackerConfig } from "./types.js";
 
 const MAX_STACK_LENGTH = 10_000;
 const LOOP_GUARD = "@context-kit/error-tracker";
@@ -7,7 +7,10 @@ function truncate(str: string): string {
   return str.length > MAX_STACK_LENGTH ? str.slice(0, MAX_STACK_LENGTH) : str;
 }
 
-export function reportError(config: ErrorTrackerConfig, data: ErrorPayload): void {
+export function reportError(
+  config: ErrorTrackerConfig,
+  data: ErrorPayload
+): void {
   // Loop prevention: skip if the stack references the error-tracker itself
   if (data.stack && data.stack.includes(LOOP_GUARD)) {
     return;

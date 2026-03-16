@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
+import type { PrismaCustomer } from "../prisma";
 import type { PlanDefinition } from "../types";
 import { BillingError } from "../types";
-import type { PrismaCustomer } from "../prisma";
 
 // ─── Shared fixtures ──────────────────────────────────────────────────────────
 
@@ -43,7 +43,9 @@ const MOCK_CUSTOMER: PrismaCustomer = {
 
 // ─── Mock factories ───────────────────────────────────────────────────────────
 
-function makePlansMap(plans: PlanDefinition[] = [PRO_PLAN_SINGLE_PRICE]): Map<string, PlanDefinition> {
+function makePlansMap(
+  plans: PlanDefinition[] = [PRO_PLAN_SINGLE_PRICE]
+): Map<string, PlanDefinition> {
   const map = new Map<string, PlanDefinition>();
   for (const plan of plans) {
     map.set(plan.id, plan);
@@ -58,8 +60,11 @@ function makeMockPrisma(overrides?: {
 }): any {
   return {
     customer: {
-      findUnique: overrides?.customerFindUnique ?? mock(() => Promise.resolve(MOCK_CUSTOMER)),
-      create: overrides?.customerCreate ?? mock(() => Promise.resolve(MOCK_CUSTOMER)),
+      findUnique:
+        overrides?.customerFindUnique ??
+        mock(() => Promise.resolve(MOCK_CUSTOMER)),
+      create:
+        overrides?.customerCreate ?? mock(() => Promise.resolve(MOCK_CUSTOMER)),
     },
   };
 }
@@ -71,13 +76,17 @@ function makeMockStripe(overrides?: {
 }): any {
   return {
     customers: {
-      create: overrides?.customersCreate ?? mock(() => Promise.resolve({ id: STRIPE_CUSTOMER_ID })),
+      create:
+        overrides?.customersCreate ??
+        mock(() => Promise.resolve({ id: STRIPE_CUSTOMER_ID })),
     },
     checkout: {
       sessions: {
-        create: overrides?.checkoutSessionsCreate ?? mock(() =>
-          Promise.resolve({ id: STRIPE_SESSION_ID, url: STRIPE_SESSION_URL })
-        ),
+        create:
+          overrides?.checkoutSessionsCreate ??
+          mock(() =>
+            Promise.resolve({ id: STRIPE_SESSION_ID, url: STRIPE_SESSION_URL })
+          ),
       },
     },
   };
@@ -97,7 +106,12 @@ describe("createCheckoutSession", () => {
     const plans = makePlansMap();
 
     const result = await createCheckoutSession(
-      { userId: USER_ID, planId: "pro", successUrl: SUCCESS_URL, cancelUrl: CANCEL_URL },
+      {
+        userId: USER_ID,
+        planId: "pro",
+        successUrl: SUCCESS_URL,
+        cancelUrl: CANCEL_URL,
+      },
       { prisma, stripe, plans }
     );
 
@@ -114,7 +128,12 @@ describe("createCheckoutSession", () => {
     const plans = makePlansMap();
 
     await createCheckoutSession(
-      { userId: USER_ID, planId: "pro", successUrl: SUCCESS_URL, cancelUrl: CANCEL_URL },
+      {
+        userId: USER_ID,
+        planId: "pro",
+        successUrl: SUCCESS_URL,
+        cancelUrl: CANCEL_URL,
+      },
       { prisma, stripe, plans }
     );
 
@@ -141,7 +160,13 @@ describe("createCheckoutSession", () => {
     const plans = makePlansMap([PRO_PLAN_MULTI_PRICE]);
 
     await createCheckoutSession(
-      { userId: USER_ID, planId: "pro_multi", interval: "yearly", successUrl: SUCCESS_URL, cancelUrl: CANCEL_URL },
+      {
+        userId: USER_ID,
+        planId: "pro_multi",
+        interval: "yearly",
+        successUrl: SUCCESS_URL,
+        cancelUrl: CANCEL_URL,
+      },
       { prisma, stripe, plans }
     );
 
@@ -153,19 +178,28 @@ describe("createCheckoutSession", () => {
   test("calls getOrCreateCustomer to ensure Stripe customer exists", async () => {
     const customerFindUnique = mock(() => Promise.resolve(null));
     const customerCreate = mock(() => Promise.resolve(MOCK_CUSTOMER));
-    const customersCreate = mock(() => Promise.resolve({ id: STRIPE_CUSTOMER_ID }));
+    const customersCreate = mock(() =>
+      Promise.resolve({ id: STRIPE_CUSTOMER_ID })
+    );
 
     const prisma = makeMockPrisma({ customerFindUnique, customerCreate });
     const stripe = makeMockStripe({ customersCreate });
     const plans = makePlansMap();
 
     await createCheckoutSession(
-      { userId: USER_ID, planId: "pro", successUrl: SUCCESS_URL, cancelUrl: CANCEL_URL },
+      {
+        userId: USER_ID,
+        planId: "pro",
+        successUrl: SUCCESS_URL,
+        cancelUrl: CANCEL_URL,
+      },
       { prisma, stripe, plans }
     );
 
     // Customer didn't exist, so Stripe customer creation was triggered
-    expect(customersCreate).toHaveBeenCalledWith({ metadata: { userId: USER_ID } });
+    expect(customersCreate).toHaveBeenCalledWith({
+      metadata: { userId: USER_ID },
+    });
   });
 
   test("throws BillingError when planId does not exist in plans map", async () => {
@@ -175,7 +209,12 @@ describe("createCheckoutSession", () => {
 
     await expect(
       createCheckoutSession(
-        { userId: USER_ID, planId: "nonexistent", successUrl: SUCCESS_URL, cancelUrl: CANCEL_URL },
+        {
+          userId: USER_ID,
+          planId: "nonexistent",
+          successUrl: SUCCESS_URL,
+          cancelUrl: CANCEL_URL,
+        },
         { prisma, stripe, plans }
       )
     ).rejects.toBeInstanceOf(BillingError);
@@ -188,7 +227,12 @@ describe("createCheckoutSession", () => {
 
     await expect(
       createCheckoutSession(
-        { userId: USER_ID, planId: "free", successUrl: SUCCESS_URL, cancelUrl: CANCEL_URL },
+        {
+          userId: USER_ID,
+          planId: "free",
+          successUrl: SUCCESS_URL,
+          cancelUrl: CANCEL_URL,
+        },
         { prisma, stripe, plans }
       )
     ).rejects.toThrow("Cannot checkout a free plan");
@@ -206,7 +250,13 @@ describe("createCheckoutSession", () => {
 
     await expect(
       createCheckoutSession(
-        { userId: USER_ID, planId: "basic", interval: "yearly", successUrl: SUCCESS_URL, cancelUrl: CANCEL_URL },
+        {
+          userId: USER_ID,
+          planId: "basic",
+          interval: "yearly",
+          successUrl: SUCCESS_URL,
+          cancelUrl: CANCEL_URL,
+        },
         { prisma, stripe, plans }
       )
     ).rejects.toBeInstanceOf(BillingError);
@@ -223,7 +273,12 @@ describe("createCheckoutSession", () => {
 
     await expect(
       createCheckoutSession(
-        { userId: USER_ID, planId: "broken", successUrl: SUCCESS_URL, cancelUrl: CANCEL_URL },
+        {
+          userId: USER_ID,
+          planId: "broken",
+          successUrl: SUCCESS_URL,
+          cancelUrl: CANCEL_URL,
+        },
         { prisma, stripe, plans }
       )
     ).rejects.toBeInstanceOf(BillingError);
@@ -251,7 +306,13 @@ describe("createCheckoutSession", () => {
     const plans = makePlansMap([planWithBoth]);
 
     await createCheckoutSession(
-      { userId: USER_ID, planId: "pro_both", interval: "yearly", successUrl: SUCCESS_URL, cancelUrl: CANCEL_URL },
+      {
+        userId: USER_ID,
+        planId: "pro_both",
+        interval: "yearly",
+        successUrl: SUCCESS_URL,
+        cancelUrl: CANCEL_URL,
+      },
       { prisma, stripe, plans }
     );
 
@@ -272,7 +333,12 @@ describe("createCheckoutSession", () => {
 
     await expect(
       createCheckoutSession(
-        { userId: USER_ID, planId: "nonexistent", successUrl: SUCCESS_URL, cancelUrl: CANCEL_URL },
+        {
+          userId: USER_ID,
+          planId: "nonexistent",
+          successUrl: SUCCESS_URL,
+          cancelUrl: CANCEL_URL,
+        },
         { prisma, stripe, plans }
       )
     ).rejects.toBeInstanceOf(BillingError);

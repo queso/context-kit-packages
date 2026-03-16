@@ -1,7 +1,11 @@
 import { describe, expect, mock, test } from "bun:test";
+import type {
+  PrismaCustomer,
+  PrismaSubscription,
+  PrismaUsageRecord,
+} from "../prisma";
 import type { FreeTierConfig, PlanDefinition } from "../types";
 import { BillingError, UsageCapExceededError } from "../types";
-import type { PrismaCustomer, PrismaSubscription, PrismaUsageRecord } from "../prisma";
 
 // ─── Shared fixtures ──────────────────────────────────────────────────────────
 
@@ -79,7 +83,9 @@ function makeUsageRecord(used: number): PrismaUsageRecord {
 
 // ─── Mock factories ───────────────────────────────────────────────────────────
 
-function makePlansMap(plans: PlanDefinition[] = [PRO_PLAN]): Map<string, PlanDefinition> {
+function makePlansMap(
+  plans: PlanDefinition[] = [PRO_PLAN]
+): Map<string, PlanDefinition> {
   const map = new Map<string, PlanDefinition>();
   for (const p of plans) map.set(p.id, p);
   return map;
@@ -95,15 +101,25 @@ function makeMockPrisma(overrides?: {
 }): any {
   return {
     customer: {
-      findUnique: overrides?.customerFindUnique ?? ((_: any) => Promise.resolve(MOCK_CUSTOMER)),
+      findUnique:
+        overrides?.customerFindUnique ??
+        ((_: any) => Promise.resolve(MOCK_CUSTOMER)),
     },
     subscription: {
-      findFirst: overrides?.subscriptionFindFirst ?? ((_: any) => Promise.resolve(ACTIVE_SUBSCRIPTION)),
+      findFirst:
+        overrides?.subscriptionFindFirst ??
+        ((_: any) => Promise.resolve(ACTIVE_SUBSCRIPTION)),
     },
     usageRecord: {
-      findFirst: overrides?.usageRecordFindFirst ?? ((_: any) => Promise.resolve(makeUsageRecord(0))),
-      upsert: overrides?.usageRecordUpsert ?? ((_: any) => Promise.resolve(makeUsageRecord(0))),
-      update: overrides?.usageRecordUpdate ?? ((_: any) => Promise.resolve(makeUsageRecord(1))),
+      findFirst:
+        overrides?.usageRecordFindFirst ??
+        ((_: any) => Promise.resolve(makeUsageRecord(0))),
+      upsert:
+        overrides?.usageRecordUpsert ??
+        ((_: any) => Promise.resolve(makeUsageRecord(0))),
+      update:
+        overrides?.usageRecordUpdate ??
+        ((_: any) => Promise.resolve(makeUsageRecord(1))),
     },
   };
 }
@@ -160,7 +176,10 @@ describe("checkUsage", () => {
   });
 
   test("returns limit: Infinity and allowed: true when plan has no cap for feature", async () => {
-    const unlimitedSub: PrismaSubscription = { ...ACTIVE_SUBSCRIPTION, planId: "unlimited" };
+    const unlimitedSub: PrismaSubscription = {
+      ...ACTIVE_SUBSCRIPTION,
+      planId: "unlimited",
+    };
     const prisma = makeMockPrisma({
       subscriptionFindFirst: (_: any) => Promise.resolve(unlimitedSub),
       usageRecordFindFirst: (_: any) => Promise.resolve(makeUsageRecord(9999)),
@@ -169,14 +188,18 @@ describe("checkUsage", () => {
 
     const result = await checkUsage(USER_ID, FEATURE, { prisma, plans });
 
-    expect(result.limit).toBe(null);   // or Infinity — accept both representations
+    expect(result.limit).toBe(null); // or Infinity — accept both representations
     expect(result.allowed).toBe(true);
   });
 
   test("uses free tier usageCaps with calendar month boundaries when no subscription", async () => {
     const now = new Date();
-    const expectedStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-    const expectedEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+    const expectedStart = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)
+    );
+    const expectedEnd = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)
+    );
 
     let capturedArgs: any = null;
     const prisma = makeMockPrisma({
@@ -189,7 +212,11 @@ describe("checkUsage", () => {
     });
     const plans = makePlansMap([FREE_PLAN]);
 
-    const result = await checkUsage(USER_ID, FEATURE, { prisma, plans, freeTier: FREE_TIER_CONFIG });
+    const result = await checkUsage(USER_ID, FEATURE, {
+      prisma,
+      plans,
+      freeTier: FREE_TIER_CONFIG,
+    });
 
     expect(result.limit).toBe(50);
     expect(result.used).toBe(10);
@@ -197,10 +224,15 @@ describe("checkUsage", () => {
 
     // The period boundaries used for the usage lookup should match calendar month
     if (capturedArgs) {
-      const periodStart = capturedArgs?.where?.periodStart ?? capturedArgs?.where?.periodStart?.gte;
-      const periodEnd = capturedArgs?.where?.periodEnd ?? capturedArgs?.where?.periodEnd?.lte;
-      if (periodStart) expect(new Date(periodStart).getTime()).toBe(expectedStart.getTime());
-      if (periodEnd) expect(new Date(periodEnd).getTime()).toBe(expectedEnd.getTime());
+      const periodStart =
+        capturedArgs?.where?.periodStart ??
+        capturedArgs?.where?.periodStart?.gte;
+      const periodEnd =
+        capturedArgs?.where?.periodEnd ?? capturedArgs?.where?.periodEnd?.lte;
+      if (periodStart)
+        expect(new Date(periodStart).getTime()).toBe(expectedStart.getTime());
+      if (periodEnd)
+        expect(new Date(periodEnd).getTime()).toBe(expectedEnd.getTime());
     }
   });
 
@@ -259,7 +291,9 @@ describe("checkUsage", () => {
 
 describe("recordUsage", () => {
   test("increments UsageRecord.used by 1 (default quantity)", async () => {
-    const usageRecordUpdate = mock((_: any) => Promise.resolve(makeUsageRecord(41)));
+    const usageRecordUpdate = mock((_: any) =>
+      Promise.resolve(makeUsageRecord(41))
+    );
     const prisma = makeMockPrisma({
       subscriptionFindFirst: (_: any) => Promise.resolve(ACTIVE_SUBSCRIPTION),
       usageRecordFindFirst: (_: any) => Promise.resolve(makeUsageRecord(40)),
@@ -276,7 +310,9 @@ describe("recordUsage", () => {
   });
 
   test("increments by specified quantity", async () => {
-    const usageRecordUpdate = mock((_: any) => Promise.resolve(makeUsageRecord(45)));
+    const usageRecordUpdate = mock((_: any) =>
+      Promise.resolve(makeUsageRecord(45))
+    );
     const prisma = makeMockPrisma({
       subscriptionFindFirst: (_: any) => Promise.resolve(ACTIVE_SUBSCRIPTION),
       usageRecordFindFirst: (_: any) => Promise.resolve(makeUsageRecord(40)),
@@ -323,7 +359,9 @@ describe("recordUsage", () => {
   });
 
   test("soft mode records usage and returns allowed: false without throwing", async () => {
-    const usageRecordUpdate = mock((_: any) => Promise.resolve(makeUsageRecord(101)));
+    const usageRecordUpdate = mock((_: any) =>
+      Promise.resolve(makeUsageRecord(101))
+    );
     const prisma = makeMockPrisma({
       subscriptionFindFirst: (_: any) => Promise.resolve(ACTIVE_SUBSCRIPTION),
       usageRecordFindFirst: (_: any) => Promise.resolve(makeUsageRecord(100)),
@@ -331,15 +369,24 @@ describe("recordUsage", () => {
     });
     const plans = makePlansMap();
 
-    const result = await recordUsage(USER_ID, FEATURE, 1, { prisma, plans, soft: true });
+    const result = await recordUsage(USER_ID, FEATURE, 1, {
+      prisma,
+      plans,
+      soft: true,
+    });
 
     expect(usageRecordUpdate).toHaveBeenCalledTimes(1);
     expect(result?.allowed).toBe(false);
   });
 
   test("does not throw and does not record when plan has no cap (unlimited)", async () => {
-    const usageRecordUpdate = mock((_: any) => Promise.resolve(makeUsageRecord(10001)));
-    const unlimitedSub: PrismaSubscription = { ...ACTIVE_SUBSCRIPTION, planId: "unlimited" };
+    const usageRecordUpdate = mock((_: any) =>
+      Promise.resolve(makeUsageRecord(10001))
+    );
+    const unlimitedSub: PrismaSubscription = {
+      ...ACTIVE_SUBSCRIPTION,
+      planId: "unlimited",
+    };
     const prisma = makeMockPrisma({
       subscriptionFindFirst: (_: any) => Promise.resolve(unlimitedSub),
       usageRecordFindFirst: (_: any) => Promise.resolve(makeUsageRecord(9999)),
@@ -354,7 +401,9 @@ describe("recordUsage", () => {
   });
 
   test("upserts UsageRecord when none exists for the current period", async () => {
-    const usageRecordUpsert = mock((_: any) => Promise.resolve(makeUsageRecord(1)));
+    const usageRecordUpsert = mock((_: any) =>
+      Promise.resolve(makeUsageRecord(1))
+    );
     const prisma = makeMockPrisma({
       subscriptionFindFirst: (_: any) => Promise.resolve(ACTIVE_SUBSCRIPTION),
       usageRecordFindFirst: (_: any) => Promise.resolve(null),

@@ -1,11 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type {
-  ErrorTrackerConfig,
-  ErrorPayload,
-  StackFrame,
-} from "../types";
+import type { ErrorPayload, ErrorTrackerConfig, StackFrame } from "../types";
 
 const PACKAGE_ROOT = resolve(import.meta.dir, "../..");
 
@@ -13,7 +9,6 @@ const PACKAGE_ROOT = resolve(import.meta.dir, "../..");
 // These declarations never execute but cause a TypeScript compile error if the
 // interfaces are missing or have the wrong shape. Tests will fail at `bun test`
 // time because the file won't compile.
-
 
 // ─── Runtime interface-shape tests ────────────────────────────────────────────
 

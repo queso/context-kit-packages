@@ -1,16 +1,21 @@
-import { readFileSync, existsSync } from "node:fs";
-import { join, basename } from "node:path";
-import { SourceMapConsumer, type BasicSourceMapConsumer, type IndexedSourceMapConsumer } from "source-map";
+import { existsSync, readFileSync } from "node:fs";
+import { basename, join } from "node:path";
+import {
+  type BasicSourceMapConsumer,
+  type IndexedSourceMapConsumer,
+  SourceMapConsumer,
+} from "source-map";
 import { parseFrameLine } from "./parse-stack.js";
 
-type SourceMapConsumerInstance = BasicSourceMapConsumer | IndexedSourceMapConsumer;
+type SourceMapConsumerInstance =
+  | BasicSourceMapConsumer
+  | IndexedSourceMapConsumer;
 
 export interface ResolveStackOptions {
   sourceMapDir?: string;
 }
 
 const DEFAULT_SOURCE_MAP_DIR = ".next/static/chunks";
-
 
 function getMapFilePath(sourceMapDir: string, fileRef: string): string | null {
   // Extract just the filename portion (last path segment)
@@ -32,7 +37,9 @@ function getMapFilePath(sourceMapDir: string, fileRef: string): string | null {
 const sourceMapCache = new Map<string, SourceMapConsumerInstance>();
 const SOURCE_MAP_CACHE_LIMIT = 20;
 
-async function getCachedConsumer(mapFilePath: string): Promise<SourceMapConsumerInstance> {
+async function getCachedConsumer(
+  mapFilePath: string
+): Promise<SourceMapConsumerInstance> {
   const cached = sourceMapCache.get(mapFilePath);
   if (cached) return cached;
 
@@ -52,7 +59,10 @@ async function getCachedConsumer(mapFilePath: string): Promise<SourceMapConsumer
   return consumer;
 }
 
-export async function resolveStack(rawStack: string, options?: ResolveStackOptions): Promise<string> {
+export async function resolveStack(
+  rawStack: string,
+  options?: ResolveStackOptions
+): Promise<string> {
   const sourceMapDir = options?.sourceMapDir ?? DEFAULT_SOURCE_MAP_DIR;
 
   try {
@@ -74,9 +84,14 @@ export async function resolveStack(rawStack: string, options?: ResolveStackOptio
 
       try {
         const consumer = await getCachedConsumer(mapFilePath);
-        const pos = consumer.originalPositionFor({ line: parsed.line, column: parsed.column });
+        const pos = consumer.originalPositionFor({
+          line: parsed.line,
+          column: parsed.column,
+        });
         if (pos.source) {
-          const sourceName = pos.name ? `${pos.name} (${pos.source}:${pos.line}:${pos.column})` : `${pos.source}:${pos.line}:${pos.column}`;
+          const sourceName = pos.name
+            ? `${pos.name} (${pos.source}:${pos.line}:${pos.column})`
+            : `${pos.source}:${pos.line}:${pos.column}`;
           resolved.push(`${parsed.prefix}${sourceName}`);
         } else {
           resolved.push(line);

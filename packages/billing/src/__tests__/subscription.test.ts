@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import type { PrismaCustomer, PrismaSubscription } from "../prisma";
 import type { FreeTierConfig, PlanDefinition } from "../types";
 import { BillingError } from "../types";
-import type { PrismaCustomer, PrismaSubscription } from "../prisma";
 
 // ─── Shared fixtures ──────────────────────────────────────────────────────────
 
@@ -62,7 +62,9 @@ const CANCELED_SUBSCRIPTION: PrismaSubscription = {
 
 // ─── Mock factories ───────────────────────────────────────────────────────────
 
-function makePlansMap(plans: PlanDefinition[] = [PRO_PLAN]): Map<string, PlanDefinition> {
+function makePlansMap(
+  plans: PlanDefinition[] = [PRO_PLAN]
+): Map<string, PlanDefinition> {
   const map = new Map<string, PlanDefinition>();
   for (const plan of plans) {
     map.set(plan.id, plan);
@@ -77,10 +79,14 @@ function makeMockPrisma(overrides?: {
 }): any {
   return {
     customer: {
-      findUnique: overrides?.customerFindUnique ?? ((_args: any) => Promise.resolve(null)),
+      findUnique:
+        overrides?.customerFindUnique ??
+        ((_args: any) => Promise.resolve(null)),
     },
     subscription: {
-      findMany: overrides?.subscriptionFindMany ?? ((_args: any) => Promise.resolve([])),
+      findMany:
+        overrides?.subscriptionFindMany ??
+        ((_args: any) => Promise.resolve([])),
     },
   };
 }
@@ -96,7 +102,8 @@ describe("getSubscription", () => {
   test("returns SubscriptionData enriched with PlanDefinition for an active subscription", async () => {
     const prisma = makeMockPrisma({
       customerFindUnique: (_args: any) => Promise.resolve(MOCK_CUSTOMER),
-      subscriptionFindMany: (_args: any) => Promise.resolve([ACTIVE_SUBSCRIPTION]),
+      subscriptionFindMany: (_args: any) =>
+        Promise.resolve([ACTIVE_SUBSCRIPTION]),
     });
     const plans = makePlansMap();
 
@@ -157,7 +164,8 @@ describe("getSubscription", () => {
     const prisma = makeMockPrisma({
       customerFindUnique: (_args: any) => Promise.resolve(MOCK_CUSTOMER),
       // Return older first to confirm the implementation sorts, not relies on order
-      subscriptionFindMany: (_args: any) => Promise.resolve([olderSub, newerSub]),
+      subscriptionFindMany: (_args: any) =>
+        Promise.resolve([olderSub, newerSub]),
     });
     const plans = makePlansMap();
 
@@ -202,7 +210,8 @@ describe("getSubscription", () => {
 
     // The query should filter to active statuses only
     expect(capturedArgs).not.toBeNull();
-    const statusFilter = capturedArgs?.where?.status?.in ?? capturedArgs?.where?.status;
+    const statusFilter =
+      capturedArgs?.where?.status?.in ?? capturedArgs?.where?.status;
     const activeStatuses = ["active", "trialing", "past_due"];
     for (const s of activeStatuses) {
       expect(statusFilter).toContain(s);
@@ -216,7 +225,8 @@ describe("getPlan", () => {
   test("returns PlanDefinition for user with an active subscription", async () => {
     const prisma = makeMockPrisma({
       customerFindUnique: (_args: any) => Promise.resolve(MOCK_CUSTOMER),
-      subscriptionFindMany: (_args: any) => Promise.resolve([ACTIVE_SUBSCRIPTION]),
+      subscriptionFindMany: (_args: any) =>
+        Promise.resolve([ACTIVE_SUBSCRIPTION]),
     });
     const plans = makePlansMap();
 
@@ -232,7 +242,11 @@ describe("getPlan", () => {
     });
     const plans = makePlansMap([PRO_PLAN, FREE_PLAN]);
 
-    const result = await getPlan(USER_ID, { prisma, plans, freeTier: FREE_TIER_CONFIG });
+    const result = await getPlan(USER_ID, {
+      prisma,
+      plans,
+      freeTier: FREE_TIER_CONFIG,
+    });
 
     expect(result).not.toBeNull();
     expect(result?.id).toBe("free");
@@ -240,8 +254,12 @@ describe("getPlan", () => {
 
     // Verify synthetic period boundaries: 1st of current month UTC to 1st of next month UTC
     const now = new Date();
-    const expectedStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-    const expectedEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+    const expectedStart = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)
+    );
+    const expectedEnd = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)
+    );
 
     expect(result?.currentPeriodStart).toEqual(expectedStart);
     expect(result?.currentPeriodEnd).toEqual(expectedEnd);

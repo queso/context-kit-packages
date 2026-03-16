@@ -27,7 +27,9 @@ function makeGetRequest(
   return new Request(url.toString(), { method: "GET", headers });
 }
 
-function makePostWithToken(body: unknown = { message: "TypeError: test" }): Request {
+function makePostWithToken(
+  body: unknown = { message: "TypeError: test" }
+): Request {
   return makePostRequest(body, { [SECRET_HEADER]: SECRET_TOKEN });
 }
 
@@ -68,11 +70,20 @@ function makeMockPrisma(overrides?: {
   const defaultRecord = makeErrorRecord();
   return {
     clientError: {
-      findFirst: overrides?.clientErrorFindFirst ?? ((_: any) => Promise.resolve(null)),
-      create: overrides?.clientErrorCreate ?? ((_: any) => Promise.resolve(defaultRecord)),
-      update: overrides?.clientErrorUpdate ?? ((_: any) => Promise.resolve(defaultRecord)),
-      upsert: overrides?.clientErrorUpsert ?? ((_: any) => Promise.resolve(defaultRecord)),
-      findMany: overrides?.clientErrorFindMany ?? ((_: any) => Promise.resolve([defaultRecord])),
+      findFirst:
+        overrides?.clientErrorFindFirst ?? ((_: any) => Promise.resolve(null)),
+      create:
+        overrides?.clientErrorCreate ??
+        ((_: any) => Promise.resolve(defaultRecord)),
+      update:
+        overrides?.clientErrorUpdate ??
+        ((_: any) => Promise.resolve(defaultRecord)),
+      upsert:
+        overrides?.clientErrorUpsert ??
+        ((_: any) => Promise.resolve(defaultRecord)),
+      findMany:
+        overrides?.clientErrorFindMany ??
+        ((_: any) => Promise.resolve([defaultRecord])),
       count: overrides?.clientErrorCount ?? ((_: any) => Promise.resolve(1)),
     },
   };
@@ -132,7 +143,9 @@ describe("createErrorHandlers — POST handler", () => {
       secretHeaderName: SECRET_HEADER,
       secretHeaderToken: SECRET_TOKEN,
     });
-    const res = await POST(makePostRequest({ message: "err" }, { [SECRET_HEADER]: "bad" }));
+    const res = await POST(
+      makePostRequest({ message: "err" }, { [SECRET_HEADER]: "bad" })
+    );
     expect(res.status).toBe(401);
   });
 
@@ -162,10 +175,12 @@ describe("createErrorHandlers — source map resolution on POST", () => {
       prisma: makeMockPrisma(),
       sourceMapDir: "/nonexistent/path/to/sourcemaps",
     });
-    const res = await POST(makePostRequest({
-      message: "TypeError: test",
-      stack: "TypeError\n  at fn (app.js:1:0)",
-    }));
+    const res = await POST(
+      makePostRequest({
+        message: "TypeError: test",
+        stack: "TypeError\n  at fn (app.js:1:0)",
+      })
+    );
     // Source map miss must not fail the request — graceful fallback
     expect(res.status).toBe(200);
   });
@@ -191,7 +206,10 @@ describe("createErrorHandlers — rate limiting on POST", () => {
 
     const ip = "10.0.0.99";
     const makeIpRequest = () =>
-      makePostRequest({ message: "rate limit test" }, { "x-forwarded-for": ip });
+      makePostRequest(
+        { message: "rate limit test" },
+        { "x-forwarded-for": ip }
+      );
 
     // Exhaust the limit
     await POST(makeIpRequest());
@@ -233,7 +251,9 @@ describe("createErrorHandlers — rate limiting on POST", () => {
     const ip = "10.0.0.55";
     // Exhaust POST limit
     await POST(makePostRequest({ message: "r" }, { "x-forwarded-for": ip }));
-    const blocked = await POST(makePostRequest({ message: "r" }, { "x-forwarded-for": ip }));
+    const blocked = await POST(
+      makePostRequest({ message: "r" }, { "x-forwarded-for": ip })
+    );
     expect(blocked.status).toBe(429);
 
     // GET should be unaffected by the POST rate limiter
@@ -315,7 +335,9 @@ describe("createErrorHandlers — deduplicationWindowMs", () => {
   });
 
   test("defaults deduplicationWindowMs to 24 hours when not provided", () => {
-    expect(() => createErrorHandlers({ prisma: makeMockPrisma() })).not.toThrow();
+    expect(() =>
+      createErrorHandlers({ prisma: makeMockPrisma() })
+    ).not.toThrow();
   });
 });
 

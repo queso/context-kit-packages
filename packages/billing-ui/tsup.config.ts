@@ -9,5 +9,11 @@ export default defineConfig({
   dts: true,
   sourcemap: true,
   clean: true,
-  external: ["react", "next", "@context-kit/billing", "@stripe/react-stripe-js", "@stripe/stripe-js"],
+  external: [
+    "react",
+    "next",
+    "@context-kit/billing",
+    "@stripe/react-stripe-js",
+    "@stripe/stripe-js",
+  ],
 });

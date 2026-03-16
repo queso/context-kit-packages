@@ -1,7 +1,7 @@
-import { BillingError, UsageCapExceededError } from "./types";
-import type { FreeTierConfig, PlanDefinition, UsageResult } from "./types";
 import type { PrismaSubscription, PrismaUsageRecord } from "./prisma";
 import { findActiveSubscription } from "./subscription-helpers";
+import type { FreeTierConfig, PlanDefinition, UsageResult } from "./types";
+import { BillingError, UsageCapExceededError } from "./types";
 
 // biome-ignore lint/suspicious/noExplicitAny: structural duck-typing for Prisma client
 type PrismaClientLike = any;
@@ -26,7 +26,9 @@ function currentCalendarMonthBounds(): PeriodBounds {
   const now = new Date();
   return {
     periodStart: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)),
-    periodEnd: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)),
+    periodEnd: new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)
+    ),
   };
 }
 
@@ -42,7 +44,7 @@ async function findUsageRecord(
   feature: string,
   subscriptionId: string | null,
   bounds: PeriodBounds,
-  prisma: PrismaClientLike,
+  prisma: PrismaClientLike
 ): Promise<PrismaUsageRecord | null> {
   return prisma.usageRecord.findFirst({
     where: {
@@ -55,7 +57,10 @@ async function findUsageRecord(
   });
 }
 
-function buildUsageResult(used: number, cap: number | null | undefined): UsageResult {
+function buildUsageResult(
+  used: number,
+  cap: number | null | undefined
+): UsageResult {
   const limit = cap ?? null;
   if (limit === null) {
     return { used, limit: null, remaining: null, allowed: true };
@@ -68,7 +73,7 @@ function buildUsageResult(used: number, cap: number | null | undefined): UsageRe
 export async function checkUsage(
   userId: string,
   feature: string,
-  { prisma, plans, freeTier }: UsageDeps,
+  { prisma, plans, freeTier }: UsageDeps
 ): Promise<UsageResult> {
   const subscription = await findActiveSubscription(userId, prisma);
 
@@ -77,7 +82,13 @@ export async function checkUsage(
     const cap = plan?.usageCaps?.[feature];
     const bounds = subscriptionPeriodBounds(subscription);
 
-    const record = await findUsageRecord(userId, feature, subscription.id, bounds, prisma);
+    const record = await findUsageRecord(
+      userId,
+      feature,
+      subscription.id,
+      bounds,
+      prisma
+    );
     const used = record?.used ?? 0;
 
     return buildUsageResult(used, cap);
@@ -85,7 +96,7 @@ export async function checkUsage(
 
   if (!freeTier) {
     throw new BillingError(
-      `User "${userId}" has no active subscription and no free tier is configured.`,
+      `User "${userId}" has no active subscription and no free tier is configured.`
     );
   }
 
@@ -105,17 +116,19 @@ export async function recordUsage(
   userId: string,
   feature: string,
   quantity: number,
-  { prisma, plans, freeTier, soft }: RecordUsageDeps,
+  { prisma, plans, freeTier, soft }: RecordUsageDeps
 ): Promise<UsageResult | void> {
   if (quantity < 0) {
-    throw new BillingError(`Usage quantity must be non-negative, got: ${quantity}`);
+    throw new BillingError(
+      `Usage quantity must be non-negative, got: ${quantity}`
+    );
   }
 
   const subscription = await findActiveSubscription(userId, prisma);
 
   if (!subscription && !freeTier) {
     throw new BillingError(
-      `User "${userId}" has no active subscription and no free tier is configured.`,
+      `User "${userId}" has no active subscription and no free tier is configured.`
     );
   }
 
@@ -136,14 +149,20 @@ export async function recordUsage(
     : currentCalendarMonthBounds();
 
   const subscriptionId = subscription?.id ?? null;
-  const record = await findUsageRecord(userId, feature, subscriptionId, bounds, prisma);
+  const record = await findUsageRecord(
+    userId,
+    feature,
+    subscriptionId,
+    bounds,
+    prisma
+  );
   const currentUsed = record?.used ?? 0;
 
   if (cap !== undefined && currentUsed >= cap) {
     if (!soft) {
       throw new UsageCapExceededError(
         `Usage cap of ${cap} exceeded for feature "${feature}".`,
-        { used: currentUsed, limit: cap },
+        { used: currentUsed, limit: cap }
       );
     }
 
@@ -155,7 +174,13 @@ export async function recordUsage(
       });
     } else {
       await prisma.usageRecord.upsert({
-        where: { userId_feature_periodStart: { userId, feature, periodStart: bounds.periodStart } },
+        where: {
+          userId_feature_periodStart: {
+            userId,
+            feature,
+            periodStart: bounds.periodStart,
+          },
+        },
         create: {
           userId,
           feature,
@@ -178,7 +203,13 @@ export async function recordUsage(
     });
   } else {
     await prisma.usageRecord.upsert({
-      where: { userId_feature_periodStart: { userId, feature, periodStart: bounds.periodStart } },
+      where: {
+        userId_feature_periodStart: {
+          userId,
+          feature,
+          periodStart: bounds.periodStart,
+        },
+      },
       create: {
         userId,
         feature,

@@ -1,7 +1,7 @@
-import { BillingError } from "./types";
-import type { PlanDefinition } from "./types";
 import { getOrCreateCustomer } from "./customer";
 import { resolvePriceId } from "./pricing";
+import type { PlanDefinition } from "./types";
+import { BillingError } from "./types";
 
 // biome-ignore lint/suspicious/noExplicitAny: structural duck-typing
 type PrismaClientLike = any;
@@ -26,13 +26,15 @@ function validateUrl(url: string, fieldName: string): void {
   try {
     new URL(url);
   } catch {
-    throw new BillingError(`Invalid ${fieldName}: "${url}" is not a valid URL.`);
+    throw new BillingError(
+      `Invalid ${fieldName}: "${url}" is not a valid URL.`
+    );
   }
 }
 
 export async function createCheckoutSession(
   { userId, planId, interval, successUrl, cancelUrl }: CheckoutParams,
-  { prisma, stripe, plans }: CheckoutDeps,
+  { prisma, stripe, plans }: CheckoutDeps
 ): Promise<{ sessionId: string; url: string }> {
   validateUrl(successUrl, "successUrl");
   validateUrl(cancelUrl, "cancelUrl");
