@@ -35,27 +35,38 @@ export const testDb = new Proxy({} as LibSQLDatabase<typeof schema>, {
   },
 });
 
-let pushed: Promise<void> | undefined;
+/**
+ * Wraps an async factory so it runs at most once concurrently, caching the
+ * result on success. A rejected call is not cached: the next call clears the
+ * stale rejection and invokes the factory again.
+ */
+export function memoizeAsync<T>(fn: () => Promise<T>): () => Promise<T> {
+  let cached: Promise<T> | undefined;
+  return () => {
+    if (!cached) {
+      cached = fn().catch((err) => {
+        cached = undefined;
+        throw err;
+      });
+    }
+    return cached;
+  };
+}
 
 /**
  * Creates the auth tables in the in-memory SQLite database.
  *
- * Idempotent: the underlying push runs exactly once per process, so tests that
- * need a real database can call this freely.
+ * The underlying push runs once per process on success; a failed push (e.g. a
+ * transient drizzle-kit/api error) is not cached, so the next call retries it.
  */
-export function prepareTestDb(): Promise<void> {
-  if (!pushed) {
-    pushed = (async () => {
-      const { pushSQLiteSchema } = await import("drizzle-kit/api");
-      const { apply } = await pushSQLiteSchema(
-        schema,
-        getRealDb() as Parameters<typeof pushSQLiteSchema>[1]
-      );
-      await apply();
-    })();
-  }
-  return pushed;
-}
+export const prepareTestDb = memoizeAsync(async () => {
+  const { pushSQLiteSchema } = await import("drizzle-kit/api");
+  const { apply } = await pushSQLiteSchema(
+    schema,
+    getRealDb() as Parameters<typeof pushSQLiteSchema>[1]
+  );
+  await apply();
+});
 
 // Helper to build a minimal valid config
 export function validConfig(overrides: Partial<AuthConfig> = {}): AuthConfig {

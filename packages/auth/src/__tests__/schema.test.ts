@@ -51,7 +51,37 @@ describe("schema parity between dialects", () => {
           .sort();
       expect(dbNames(postgresSchema)).toEqual(dbNames(sqliteSchema));
     });
+
+    test(`"${key}" has the same nullability and defaults in both dialects`, () => {
+      const columnFlags = (schema: Record<string, unknown>) => {
+        const columns = getTableColumns(tableOf(schema, key));
+        return Object.fromEntries(
+          Object.entries(columns).map(([propertyKey, col]) => [
+            propertyKey,
+            { notNull: col.notNull, hasDefault: col.hasDefault },
+          ])
+        );
+      };
+      expect(columnFlags(postgresSchema)).toEqual(columnFlags(sqliteSchema));
+    });
   }
+
+  test("every updatedAt column has an insert-time default in both dialects", () => {
+    // `.$onUpdate(...)` alone sets `hasDefault: true` on the column config (it
+    // covers the value drizzle-orm's own query builder falls back to), but it
+    // does NOT add a database-level DEFAULT clause, so a raw/adapter-issued
+    // INSERT that omits `updatedAt` still hits a NOT NULL violation. A real
+    // insert-time default requires `.default(...)`/`.defaultNow()`, which is
+    // reflected in `col.default` being set.
+    for (const key of EXPECTED_TABLES) {
+      for (const schema of [sqliteSchema, postgresSchema]) {
+        const columns = getTableColumns(tableOf(schema, key));
+        const updatedAt = columns.updatedAt;
+        expect(updatedAt).toBeDefined();
+        expect(updatedAt!.default).not.toBeUndefined();
+      }
+    }
+  });
 
   test("both dialects export the relation helpers", () => {
     for (const schema of [sqliteSchema, postgresSchema]) {
