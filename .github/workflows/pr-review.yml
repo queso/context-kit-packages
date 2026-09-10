@@ -1,0 +1,35 @@
+# Nitpick PR review — thin caller over the reusable workflow shipped by queso/nitpick-flow.
+# Everything real lives there: fetch the PR diff, spider the checkout for a coupling graph +
+# related-code pack, run the Conduit flow image, post one batched review.
+#
+# Two setup steps this file depends on, neither of them in the repo:
+#   1. Repo secret FIREWORKS_AI_API_KEY → the reusable workflow's conduit_api_key.
+#   2. GHCR read grant: the PRIVATE ghcr.io/queso/nitpick-flow package must grant this repo
+#      Read under Package settings → Manage Actions access. There is no REST API for it.
+#      Without it the run dies in ~12s at "Run Nitpick flow" with
+#      `docker: Error response from daemon: denied`.
+# nitpick-flow's Actions access level is `user`, so any queso-owned repo may call it.
+#
+# Fork PRs are skipped deliberately: this repo is public, and GitHub withholds secrets from
+# fork-originated `pull_request` runs, so conduit_api_key would arrive empty and the job would
+# fail instead of reviewing anything.
+#
+# Monorepo note: the flow shards a diff on a coupling graph spidered from the checkout, so a
+# PR spanning several packages/* fans out per shard rather than reviewing the whole tree in
+# one prompt. CLAUDE.md rides along as shared reviewer context.
+name: Nitpick PR Review
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+
+jobs:
+  nitpick:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    uses: queso/nitpick-flow/.github/workflows/nitpick.yml@main
+    permissions:
+      contents: read
+      pull-requests: write
+      packages: read
+    secrets:
+      conduit_api_key: ${{ secrets.FIREWORKS_AI_API_KEY }}
