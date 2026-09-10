@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { validConfig, setupEnvGuard } from "./helpers";
+import { prepareTestDb, testDb, validConfig, setupEnvGuard } from "./helpers";
 
 setupEnvGuard();
 
@@ -27,11 +27,18 @@ describe("createAuth", () => {
     ).toThrow(/BETTER_AUTH_URL/i);
   });
 
-  test("throws a descriptive error when prisma is not provided", async () => {
+  test("throws a descriptive error when db is not provided", async () => {
     const { createAuth } = await import("../create-auth");
     expect(() =>
-      createAuth(validConfig({ prisma: null }))
-    ).toThrow(/prisma/i);
+      createAuth(validConfig({ db: null as unknown as object }))
+    ).toThrow(/db/i);
+  });
+
+  test("throws a descriptive error for an unsupported dialect", async () => {
+    const { createAuth } = await import("../create-auth");
+    expect(() =>
+      createAuth(validConfig({ dialect: "mysql" as never }))
+    ).toThrow(/sqlite[\s\S]*postgres/);
   });
 
   test("reads BETTER_AUTH_SECRET and BETTER_AUTH_URL from environment", async () => {
@@ -66,5 +73,40 @@ describe("createAuth", () => {
     expect(auth2).toBeDefined();
     // Each call returns its own instance
     expect(auth1).not.toBe(auth2);
+  });
+
+  test("signs a user up and reads the session back through the consumer's db", async () => {
+    await prepareTestDb();
+    const { createAuth } = await import("../create-auth");
+    const { user } = await import("../schema/sqlite");
+
+    // Unique per run so an in-process retry cannot collide on the email unique index.
+    const email = `roundtrip-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`;
+
+    const auth = createAuth(validConfig());
+    const res = await auth.api.signUpEmail({
+      body: { name: "Test User", email, password: "password123" },
+      asResponse: true,
+    });
+    expect(res.status).toBe(200);
+
+    const cookie = res.headers.get("set-cookie") ?? "";
+    expect(cookie).not.toBe("");
+
+    const session = await auth.api.getSession({
+      headers: new Headers({ cookie }),
+    });
+    expect(session?.user.email).toBe(email);
+    expect(session?.session.expiresAt).toBeInstanceOf(Date);
+
+    // Reading through the same Proxy-wrapped instance proves the adapter wrote
+    // to the db the consumer handed us, not to one of its own making.
+    // Filtered by email rather than asserting on the whole table: the in-memory
+    // db is a process-wide singleton, and other suites (handler.test.ts) sign up
+    // through it too.
+    const rows = await testDb.select().from(user);
+    const created = rows.filter((row) => row.email === email);
+    expect(created).toHaveLength(1);
+    expect(created[0]?.name).toBe("Test User");
   });
 });

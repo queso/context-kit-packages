@@ -1,4 +1,5 @@
 import { describe, test, expect } from "bun:test";
+import type { AuthDialect } from "../index";
 
 describe("barrel exports", () => {
   test("index module exports createAuth, toNextJsHandler, getSession, getUser", async () => {
@@ -17,5 +18,11 @@ describe("barrel exports", () => {
   test("client module exports createAuthClient", async () => {
     const clientModule = await import("../client");
     expect(typeof clientModule.createAuthClient).toBe("function");
+  });
+
+  test("index module re-exports the AuthDialect type", () => {
+    // Type-only: verified by `tsc --noEmit`, asserted here so the export is covered.
+    const dialects: AuthDialect[] = ["sqlite", "postgres"];
+    expect(dialects).toHaveLength(2);
   });
 });

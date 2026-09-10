@@ -4,6 +4,27 @@ All notable changes to `@context-kit/auth` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.0] - 2026-09-10
+
+### Breaking
+
+- The Better Auth Prisma adapter is replaced by the Drizzle adapter; `@context-kit/auth` now stores users, sessions, accounts, and verifications through the app's Drizzle instance
+- `createAuth()` config options `prisma` and `database` are replaced by `db` (the app's Drizzle instance) and `dialect` (`"sqlite" | "postgres"`)
+- The `@prisma/client` peer dependency is replaced by `drizzle-orm` >= 0.41.0
+- MySQL is no longer a supported dialect; context-kit does not support it
+
+### Added
+
+- `@context-kit/auth/schema/sqlite` and `@context-kit/auth/schema/postgres` entry points exporting the `user`, `session`, `account`, and `verification` Drizzle tables and their relations, for re-export from the app's `db/schema/<dialect>.ts`
+- `AuthDialect` type export (`"sqlite" | "postgres"`)
+- Adapter round-trip tests that sign a user up and read the session back, on an in-memory libsql database and -- via a CI job with a Postgres 17 service container -- on Postgres
+
+### Migrating from 0.1.x
+
+context-kit apps never ran the Prisma schema, so there is nothing to migrate: add the schema re-export line to `db/schema/<dialect>.ts`, run `bun run db:generate` and `bun run db:migrate`, and change `createAuth({ prisma, database })` to `createAuth({ db, dialect: getDialect() })`.
+
+If you have existing data created under the 0.1.x Prisma schema, note that its columns are camelCase (`emailVerified`, `createdAt`) while the Drizzle schema uses snake_case (`email_verified`, `created_at`). Table names are unchanged. An in-place upgrade therefore needs a column-rename migration before switching to 0.2.0.
+
 ## [0.1.0] - 2026-02-19
 
 ### Added

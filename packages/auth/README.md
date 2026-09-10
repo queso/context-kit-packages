@@ -1,6 +1,6 @@
 # @context-kit/auth
 
-Authentication for [context-kit](https://github.com/queso/context-kit) projects, powered by [Better Auth](https://www.better-auth.com/) + Prisma.
+Authentication for [context-kit](https://github.com/queso/context-kit) projects, powered by [Better Auth](https://www.better-auth.com/) + Drizzle.
 
 Pre-configured for Next.js App Router. Install it, add your env vars, wire up a route handler, and you have auth.
 
@@ -9,7 +9,7 @@ Pre-configured for Next.js App Router. Install it, add your env vars, wire up a 
 - Email/password authentication (enabled by default)
 - OAuth social providers (Google, GitHub, etc.)
 - Session management with secure cookies
-- Prisma adapter for user/session/account storage
+- Drizzle adapter for user/session/account storage, with schema modules for SQLite and Postgres
 - Server-side helpers for App Router (`getSession`, `getUser`)
 - Route-protecting middleware with pattern matching
 - Client-side React hooks via a separate entry point
@@ -27,8 +27,10 @@ bun add @context-kit/auth
 
 ### Peer Dependencies
 
-- `@prisma/client` >= 5.0.0
+- `drizzle-orm` >= 0.41.0
 - `next` >= 14.0.0 (optional -- required for `getSession`/`getUser` and middleware)
+
+Keep a single copy of `drizzle-orm` in your app. The package's tables must come from the same `drizzle-orm` your app's `db` instance was built with.
 
 ## Environment Variables
 
@@ -41,21 +43,34 @@ BETTER_AUTH_URL=http://localhost:3000
 
 Both are required. You can also pass them directly via the `secret` and `baseURL` config options, but environment variables are recommended.
 
-## Prisma Schema
+## Database Schema
 
-Better Auth requires specific models in your Prisma schema. Run the Better Auth CLI to generate them:
+The package ships the `user`, `session`, `account`, and `verification` tables as Drizzle schema modules, one per dialect. Re-export the module for your dialect from your app's schema file:
 
-```bash
-bunx @better-auth/cli generate
+```ts
+// db/schema/sqlite.ts
+export * from "@context-kit/auth/schema/sqlite";
 ```
 
-This adds the `User`, `Session`, `Account`, and `Verification` models to your schema. Then run your migrations:
-
-```bash
-bunx prisma migrate dev
+```ts
+// db/schema/postgres.ts
+export * from "@context-kit/auth/schema/postgres";
 ```
 
-See the [Better Auth Prisma docs](https://www.better-auth.com/docs/adapters/prisma) for full details.
+While your app still carries both schema files, add the line to both so the two stay in sync. Then generate and apply the migration:
+
+```bash
+bun run db:generate   # writes a plain-SQL migration creating the four tables
+bun run db:migrate
+```
+
+Your app owns the migration history. When a future version of this package changes the schema, your next `bun run db:generate` produces the diff migration -- review it and commit it like any other. That is the "fix once, inherit everywhere" model.
+
+The package passes its own schema to the Better Auth adapter, so auth works at runtime even if your `db` instance has no auth schema attached. The re-export line is still required: it is what lets drizzle-kit see the tables and generate the migration.
+
+Column names are `snake_case` and table names are singular, matching Better Auth's Drizzle CLI output.
+
+MySQL is not supported.
 
 ## Quick Start
 
@@ -65,13 +80,15 @@ Create a shared auth instance in a server-only file (e.g., `lib/auth.ts`):
 
 ```ts
 import { createAuth } from "@context-kit/auth";
-import { prisma } from "./prisma"; // your PrismaClient instance
+import { db, getDialect } from "@/db";
 
 export const auth = createAuth({
-  prisma,
-  database: "postgresql", // must match your Prisma datasource
+  db,
+  dialect: getDialect(),
 });
 ```
+
+Pass `getDialect()` rather than a literal so `dialect` cannot drift from whatever `DATABASE_URL` points at.
 
 ### 2. Wire Up the API Route Handler
 
@@ -158,8 +175,8 @@ The `createAuth` function accepts an `AuthConfig` object:
 
 | Option | Type | Required | Default | Description |
 |--------|------|----------|---------|-------------|
-| `prisma` | `PrismaClient` | Yes | -- | Your Prisma client instance |
-| `database` | `"postgresql" \| "mysql" \| "sqlite"` | Yes | -- | Must match your Prisma datasource provider |
+| `db` | `object` | Yes | -- | Your app's Drizzle database instance (`import { db } from "@/db"`) |
+| `dialect` | `AuthDialect` (`"sqlite" \| "postgres"`) | Yes | -- | Which dialect `db` talks to -- pass `getDialect()` from `@/db` |
 | `secret` | `string` | No | `process.env.BETTER_AUTH_SECRET` | Auth secret for signing tokens |
 | `baseURL` | `string` | No | `process.env.BETTER_AUTH_URL` | Base URL of your application |
 | `sessionDuration` | `number` | No | `604800` (7 days) | Session expiration in seconds |
@@ -173,8 +190,8 @@ Configure OAuth providers by passing a `socialProviders` object. Each provider r
 
 ```ts
 const auth = createAuth({
-  prisma,
-  database: "postgresql",
+  db,
+  dialect: getDialect(),
   socialProviders: {
     google: {
       clientId: process.env.GOOGLE_CLIENT_ID!,
@@ -196,8 +213,8 @@ Customize password validation:
 
 ```ts
 const auth = createAuth({
-  prisma,
-  database: "postgresql",
+  db,
+  dialect: getDialect(),
   passwordRules: {
     minLength: 12,
     maxLength: 256,
@@ -212,6 +229,8 @@ const auth = createAuth({
 | `@context-kit/auth` | `createAuth`, `toNextJsHandler`, `getSession`, `getUser`, all types | Server Components, Route Handlers |
 | `@context-kit/auth/client` | `createAuthClient` | Client Components (`"use client"`) |
 | `@context-kit/auth/middleware` | `createAuthMiddleware`, `MiddlewareConfig` | Next.js Middleware |
+| `@context-kit/auth/schema/sqlite` | `user`, `session`, `account`, `verification` tables and relations | `db/schema/sqlite.ts` |
+| `@context-kit/auth/schema/postgres` | `user`, `session`, `account`, `verification` tables and relations | `db/schema/postgres.ts` |
 
 ## TypeScript Types
 
@@ -220,6 +239,7 @@ All types are exported from the main entry point:
 ```ts
 import type {
   AuthConfig,
+  AuthDialect,
   AuthInstance,
   SessionData,
   MiddlewareConfig,
@@ -236,7 +256,7 @@ import type {
 
 - TypeScript-first with full type safety
 - Plugin architecture (2FA, organizations, roles) maps cleanly to our package model
-- Prisma adapter out of the box
+- Drizzle adapter out of the box
 - Framework-agnostic core with first-class Next.js support
 - Open source -- no vendor lock-in at the foundation layer
 
