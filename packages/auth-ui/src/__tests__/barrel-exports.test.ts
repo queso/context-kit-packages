@@ -92,12 +92,15 @@ describe("barrel exports", () => {
     });
   });
 
+  // tsup with dts takes longer than bun's 5s default on CI runners.
+  const BUILD_TIMEOUT_MS = 120_000;
+
   describe("build artifacts", () => {
     test("build produces dist/index.js and dist/client.js", () => {
       execSync("bun run build", { cwd: pkgRoot, stdio: "pipe" });
       expect(existsSync(resolve(pkgRoot, "dist/index.js"))).toBe(true);
       expect(existsSync(resolve(pkgRoot, "dist/client.js"))).toBe(true);
-    });
+    }, BUILD_TIMEOUT_MS);
 
     test("build produces declaration files dist/index.d.ts and dist/client.d.ts", () => {
       // Build already ran in previous test; just check outputs exist

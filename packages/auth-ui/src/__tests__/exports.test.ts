@@ -182,6 +182,9 @@ describe("entry point files", () => {
 });
 
 describe("build and typecheck", () => {
+  // tsup with dts and tsc both take longer than bun's 5s default on CI runners.
+  const TOOL_TIMEOUT_MS = 120_000;
+
   test("bun build succeeds", () => {
     expect(() => {
       execSync("bun run build", {
@@ -189,7 +192,7 @@ describe("build and typecheck", () => {
         stdio: "pipe",
       });
     }).not.toThrow();
-  });
+  }, TOOL_TIMEOUT_MS);
 
   test("bun typecheck succeeds", () => {
     expect(() => {
@@ -198,5 +201,5 @@ describe("build and typecheck", () => {
         stdio: "pipe",
       });
     }).not.toThrow();
-  });
+  }, TOOL_TIMEOUT_MS);
 });
