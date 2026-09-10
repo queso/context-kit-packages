@@ -20,9 +20,10 @@ describe("barrel exports", () => {
     expect(typeof clientModule.createAuthClient).toBe("function");
   });
 
-  test("index module re-exports the AuthDialect type", () => {
-    // Type-only: verified by `tsc --noEmit`, asserted here so the export is covered.
-    const dialects: AuthDialect[] = ["sqlite", "postgres"];
-    expect(dialects).toHaveLength(2);
-  });
 });
+
+// `AuthDialect` is a type-only export, so the barrel re-export is checked by
+// `tsc --noEmit`, not at runtime: the `import type` above and this `satisfies`
+// both fail to compile if `index.ts` stops exporting it. There is nothing a
+// runtime assertion could add, so none is made.
+"sqlite" satisfies AuthDialect;
