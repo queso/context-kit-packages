@@ -1,5 +1,10 @@
 import { describe, test, expect } from "bun:test";
 import { getTableColumns, getTableName, is, Table } from "drizzle-orm";
+import { getTableConfig as getPgTableConfig, PgTable } from "drizzle-orm/pg-core";
+import {
+  getTableConfig as getSqliteTableConfig,
+  SQLiteTable,
+} from "drizzle-orm/sqlite-core";
 import * as sqliteSchema from "../schema/sqlite";
 import * as postgresSchema from "../schema/postgres";
 
@@ -17,6 +22,53 @@ function tableOf(schema: Record<string, unknown>, key: string): Table {
     throw new Error(`Expected "${key}" to be a Drizzle table`);
   }
   return table;
+}
+
+/**
+ * Dialect-neutral view of the constraints drizzle-kit would emit for a table:
+ * primary key, unique columns, foreign keys (with referential actions) and
+ * indexes. Both `getTableConfig` variants expose the same shape for these.
+ */
+function constraintsOf(schema: Record<string, unknown>, key: string) {
+  const table = tableOf(schema, key);
+  const config = is(table, PgTable)
+    ? getPgTableConfig(table)
+    : is(table, SQLiteTable)
+      ? getSqliteTableConfig(table)
+      : undefined;
+  if (!config) {
+    throw new Error(`Expected "${key}" to be a pg or sqlite table`);
+  }
+  return {
+    primaryKey: config.columns.filter((c) => c.primary).map((c) => c.name),
+    unique: config.columns
+      .filter((c) => c.isUnique)
+      .map((c) => c.name)
+      .sort(),
+    foreignKeys: config.foreignKeys
+      .map((fk) => {
+        const ref = fk.reference();
+        return {
+          columns: ref.columns.map((c) => c.name),
+          foreignTable: getTableName(ref.foreignTable),
+          foreignColumns: ref.foreignColumns.map((c) => c.name),
+          // sqlite-core defaults an unset action to "no action"; pg-core leaves
+          // it undefined. Both mean the same thing, so normalize before comparing.
+          onDelete: fk.onDelete ?? "no action",
+          onUpdate: fk.onUpdate ?? "no action",
+        };
+      })
+      .sort((a, b) => a.columns.join().localeCompare(b.columns.join())),
+    indexes: config.indexes
+      .map((idx) => ({
+        name: idx.config.name ?? "",
+        columns: idx.config.columns.map((c) =>
+          "name" in c ? c.name : String(c)
+        ),
+        unique: idx.config.unique,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+  };
 }
 
 describe("schema parity between dialects", () => {
@@ -64,7 +116,37 @@ describe("schema parity between dialects", () => {
       };
       expect(columnFlags(postgresSchema)).toEqual(columnFlags(sqliteSchema));
     });
+
+    test(`"${key}" has the same keys, unique columns, foreign keys and indexes in both dialects`, () => {
+      const postgres = constraintsOf(postgresSchema, key);
+      expect(postgres).toEqual(constraintsOf(sqliteSchema, key));
+      // Every table has a primary key; guard against an empty-vs-empty pass.
+      expect(postgres.primaryKey.length).toBeGreaterThan(0);
+    });
   }
+
+  test("auth-critical constraints are present in both dialects", () => {
+    for (const schema of [sqliteSchema, postgresSchema]) {
+      expect(constraintsOf(schema, "user").unique).toEqual(["email"]);
+      expect(constraintsOf(schema, "session").unique).toEqual(["token"]);
+      for (const key of ["session", "account"]) {
+        const { foreignKeys, indexes } = constraintsOf(schema, key);
+        expect(foreignKeys).toEqual([
+          {
+            columns: ["user_id"],
+            foreignTable: "user",
+            foreignColumns: ["id"],
+            onDelete: "cascade",
+            onUpdate: "no action",
+          },
+        ]);
+        expect(indexes.map((i) => i.columns)).toEqual([["user_id"]]);
+      }
+      expect(constraintsOf(schema, "verification").indexes.map((i) => i.columns)).toEqual([
+        ["identifier"],
+      ]);
+    }
+  });
 
   test("every updatedAt column has an insert-time default in both dialects", () => {
     // `.$onUpdate(...)` alone sets `hasDefault: true` on the column config (it
