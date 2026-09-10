@@ -1,8 +1,15 @@
-import { describe, test, expect, mock, beforeEach } from "bun:test";
+import { describe, test, expect, mock, beforeEach, afterAll } from "bun:test";
 import { render, screen } from "@testing-library/react";
 import { existsSync } from "fs";
 import { resolve } from "path";
 import React from "react";
+import * as realSignInPage from "../components/pages/sign-in-page";
+import * as realSignUpPage from "../components/pages/sign-up-page";
+import * as realForgotPasswordPage from "../components/pages/forgot-password-page";
+import * as realResetPasswordPage from "../components/pages/reset-password-page";
+import * as realUserProfilePage from "../components/pages/user-profile-page";
+import * as realChangePasswordPage from "../components/pages/change-password-page";
+import * as realSessionManagementPage from "../components/pages/session-management-page";
 
 const pkgRoot = resolve(import.meta.dir, "../..");
 
@@ -56,7 +63,55 @@ mock.module("next/navigation", () => ({
 
 // ---------------------------------------------------------------------------
 // Mock page components so routing logic can be tested independently
+//
+// bun's mock.module registry is process-wide and persists across test files, so
+// these stubs would leak into any later file that imports the real pages
+// (page-components.test.tsx). The real exports are captured before mocking and
+// restored in afterAll.
 // ---------------------------------------------------------------------------
+
+const realPages = {
+  "../components/pages/sign-in-page": { SignInPage: realSignInPage.SignInPage },
+  "../components/pages/sign-up-page": { SignUpPage: realSignUpPage.SignUpPage },
+  "../components/pages/forgot-password-page": {
+    ForgotPasswordPage: realForgotPasswordPage.ForgotPasswordPage,
+  },
+  "../components/pages/reset-password-page": {
+    ResetPasswordPage: realResetPasswordPage.ResetPasswordPage,
+  },
+  "../components/pages/user-profile-page": { UserProfilePage: realUserProfilePage.UserProfilePage },
+  "../components/pages/change-password-page": {
+    ChangePasswordPage: realChangePasswordPage.ChangePasswordPage,
+  },
+  "../components/pages/session-management-page": {
+    SessionManagementPage: realSessionManagementPage.SessionManagementPage,
+  },
+};
+
+afterAll(() => {
+  mock.module("../components/pages/sign-in-page", () => realPages["../components/pages/sign-in-page"]);
+  mock.module("../components/pages/sign-up-page", () => realPages["../components/pages/sign-up-page"]);
+  mock.module(
+    "../components/pages/forgot-password-page",
+    () => realPages["../components/pages/forgot-password-page"]
+  );
+  mock.module(
+    "../components/pages/reset-password-page",
+    () => realPages["../components/pages/reset-password-page"]
+  );
+  mock.module(
+    "../components/pages/user-profile-page",
+    () => realPages["../components/pages/user-profile-page"]
+  );
+  mock.module(
+    "../components/pages/change-password-page",
+    () => realPages["../components/pages/change-password-page"]
+  );
+  mock.module(
+    "../components/pages/session-management-page",
+    () => realPages["../components/pages/session-management-page"]
+  );
+});
 
 mock.module("../components/pages/sign-in-page", () => ({
   SignInPage: (props: Record<string, unknown>) =>
