@@ -29,3 +29,37 @@ jobs:
 
       - name: Test
         run: bun run test
+
+  test-postgres:
+    name: Auth tests (Postgres)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Test auth against Postgres
+        run: bun --filter @context-kit/auth test
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
