@@ -10,6 +10,7 @@ These packages are designed to be installed into a context-kit project (or any N
 |---------|-------------|--------|
 | [`@context-kit/auth`](./packages/auth) | Authentication powered by Better Auth with Drizzle, pre-configured for Next.js App Router | 0.2.0 |
 | [`@context-kit/auth-ui`](./packages/auth-ui) | Pre-built auth UI components for Next.js App Router (forms, pages, router, CLI) | 0.1.0 |
+| [`@context-kit/error-tracker`](./packages/error-tracker) | Client-side error tracking with a self-hosted ingestion and query API, source map resolution and a CLI, stored in the app's own database via Drizzle | 0.1.0 |
 | `@context-kit/billing` | Stripe subscription management, webhook handling, and plan gating | Planned |
 
 ## Philosophy
@@ -26,7 +27,6 @@ These packages are designed to be installed into a context-kit project (or any N
 | `@context-kit/email` | Transactional email with React Email + Resend (or any provider) |
 | `@context-kit/analytics` | Privacy-friendly analytics (Plausible, PostHog, or similar) |
 | `@context-kit/rate-limit` | Rate limiting middleware for API routes |
-| `@context-kit/error-tracking` | Error tracking integration (Sentry, etc.) |
 | `@context-kit/feature-flags` | Feature flag management for gradual rollouts |
 
 ## Development
