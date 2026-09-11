@@ -49,18 +49,32 @@ export function createRateLimiter(options?: RateLimiterOptions): RateLimiter {
     }
   }
 
+  // Tracks the last time evictIfNeeded ran its full-store sweep. `null` means
+  // it has never run, so the first capacity hit always sweeps.
+  let lastCapacitySweep: number | null = null;
+
   /**
-   * Makes room for a new key when the store is at capacity. Sweeps expired
-   * entries first (a flood of unique IPs can outrun the periodic `cleanup`
-   * sweep above); if the store is still full, evicts the oldest-inserted
-   * entry by Map iteration order rather than dropping the new request.
+   * Makes room for a new key when the store is at capacity. A flood of
+   * unique IPs can outrun the periodic `cleanup` sweep above, so this used
+   * to sweep expired entries on every single capacity hit, which is an
+   * O(maxEntries) scan on the hot path once the store stays full. Instead,
+   * sweep at most once per `windowMs`: the first hit (or the first hit after
+   * a window has elapsed) does the full sweep-then-evict; any capacity hit
+   * within that window just evicts the oldest-inserted entry by Map
+   * iteration order, without scanning the whole store.
    */
   function evictIfNeeded(now: number): void {
     if (store.size < maxEntries) return;
 
-    for (const [key, entry] of store) {
-      if (now - entry.windowStart >= windowMs) {
-        store.delete(key);
+    const dueForSweep =
+      lastCapacitySweep === null || now - lastCapacitySweep >= windowMs;
+
+    if (dueForSweep) {
+      lastCapacitySweep = now;
+      for (const [key, entry] of store) {
+        if (now - entry.windowStart >= windowMs) {
+          store.delete(key);
+        }
       }
     }
 

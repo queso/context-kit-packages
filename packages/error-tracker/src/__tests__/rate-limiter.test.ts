@@ -314,6 +314,130 @@ describe("createRateLimiter — maxEntries cap", () => {
   });
 });
 
+describe("createRateLimiter — capacity sweep amortization", () => {
+  test("does not re-sweep the whole store on a second at-capacity insert within the same window", async () => {
+    const originalNow = Date.now;
+    let currentTime = 0;
+    // biome-ignore lint/suspicious/noExplicitAny: controlling time deterministically
+    (Date as any).now = () => currentTime;
+    try {
+      const windowMs = 1000;
+      const limiter = createRateLimiter({
+        windowMs,
+        maxRequests: 1,
+        maxEntries: 3,
+      });
+
+      // Fill the store to capacity with three distinct IPs.
+      currentTime = 0;
+      await limiter.check(makeRequestWithForwardedFor("1.1.1.1")); // A
+      currentTime = 10;
+      await limiter.check(makeRequestWithForwardedFor("2.2.2.2")); // B
+      currentTime = 20;
+      await limiter.check(makeRequestWithForwardedFor("3.3.3.3")); // C
+
+      // First at-capacity insert of a brand-new IP: A has expired (its
+      // window started at 0, windowMs ago) but B and C have not, so the
+      // sweep reclaims exactly A's slot. This is the existing
+      // sweep-then-evict-on-the-first-hit behavior.
+      currentTime = 1005;
+      await limiter.check(makeRequestWithForwardedFor("4.4.4.4")); // D
+
+      // B's own window has now expired too. Re-checking B is an existing-key
+      // request, so it resets B's window in place without touching the
+      // capacity/eviction path at all: B keeps its original (oldest)
+      // position in insertion order but now has a brand-new, unexpired
+      // window.
+      currentTime = 1012;
+      await limiter.check(makeRequestWithForwardedFor("2.2.2.2")); // refresh B
+
+      // Second at-capacity insert of a brand-new IP, still well inside the
+      // same windowMs since the first sweep (1005). C has been expired since
+      // 1020. A "sweep on every capacity hit" implementation would reclaim
+      // C's slot here and leave B (inside its freshly reset window) alone.
+      // Amortized to one sweep per window, this insert instead skips the
+      // sweep and evicts strictly by insertion order, so it evicts B (the
+      // oldest-inserted key) even though B is live, leaving the actually
+      // expired C sitting in the store, unreclaimed.
+      currentTime = 1500;
+      await limiter.check(makeRequestWithForwardedFor("5.5.5.5")); // E
+
+      // Prove which of B/C got reclaimed by re-checking B. maxRequests is 1
+      // and B's refreshed window (started at 1012) has not expired yet at
+      // 1501, so if B is still tracked it must be blocked (429). If B was
+      // instead evicted by the second insert, the limiter sees a brand-new
+      // key and allows it (null).
+      currentTime = 1501;
+      const probeB = await limiter.check(
+        makeRequestWithForwardedFor("2.2.2.2")
+      );
+
+      // Under the old "sweep on every capacity hit" code this is 429 (B
+      // survives; C gets reclaimed by a second sweep). Amortized to one
+      // sweep per window, B is sacrificed instead, so this must be null.
+      // This assertion fails under the pre-fix every-insert sweep.
+      expect(probeB).toBeNull();
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  test("resumes the full sweep once the window has elapsed, reclaiming stale entries left over from a skipped round", async () => {
+    const originalNow = Date.now;
+    let currentTime = 0;
+    // biome-ignore lint/suspicious/noExplicitAny: controlling time deterministically
+    (Date as any).now = () => currentTime;
+    try {
+      const windowMs = 1000;
+      const limiter = createRateLimiter({
+        windowMs,
+        maxRequests: 1,
+        maxEntries: 3,
+      });
+
+      currentTime = 0;
+      await limiter.check(makeRequestWithForwardedFor("10.0.0.1")); // A
+      currentTime = 10;
+      await limiter.check(makeRequestWithForwardedFor("10.0.0.2")); // B
+      currentTime = 20;
+      await limiter.check(makeRequestWithForwardedFor("10.0.0.3")); // C
+
+      currentTime = 1005;
+      await limiter.check(makeRequestWithForwardedFor("10.0.0.4")); // D, sweeps A
+
+      // Second at-capacity insert, still inside the same window as the last
+      // sweep: this one skips the sweep and evicts by insertion order, so B
+      // (now also expired) is what gets removed, leaving C (also expired)
+      // behind, unreclaimed, for now.
+      currentTime = 1500;
+      await limiter.check(makeRequestWithForwardedFor("10.0.0.5")); // E
+
+      // A full windowMs has now passed since the last sweep (1005), so this
+      // at-capacity insert is due for another full sweep. It should reclaim
+      // every stale entry left over from the skipped round in one pass, not
+      // just one at a time.
+      currentTime = 2010;
+      await limiter.check(makeRequestWithForwardedFor("10.0.0.6")); // F
+
+      // If that sweep genuinely freed more than one slot, the very next new
+      // IP is admitted without needing to evict anyone else.
+      currentTime = 2011;
+      await limiter.check(makeRequestWithForwardedFor("10.0.0.7")); // G
+
+      // E (maxRequests 1, window started at 1500) must still be tracked and
+      // blocked here: it was never expired, and nothing should have touched
+      // it once the sweep correctly reclaimed only the stale entries.
+      currentTime = 2012;
+      const probeE = await limiter.check(
+        makeRequestWithForwardedFor("10.0.0.5")
+      );
+      expect(probeE?.status).toBe(429);
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+});
+
 describe("createRateLimiter — window reset", () => {
   test("stale entries outside the window do not count against the limit", async () => {
     // Use a very short window so we can test expiry

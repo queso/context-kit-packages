@@ -258,6 +258,77 @@ describe("createErrorHandlers source map resolution", () => {
     );
   });
 
+  test("returns 413 and never reaches the store when the body exceeds the cap and carries no content-length header", async () => {
+    const { POST } = createErrorHandlers({ ...sqliteConfig(), sourceMapDir });
+
+    // A ReadableStream body has no computed content-length header, so the
+    // pre-resolution path can only catch this by streaming with a cap.
+    const encoder = new TextEncoder();
+    const payload = JSON.stringify(
+      validBody({ message: "M".repeat(70 * 1024) })
+    );
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(payload));
+        controller.close();
+      },
+    });
+    const request = new Request("https://example.com/api/errors", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: stream,
+      duplex: "half",
+    } as RequestInit);
+    expect(request.headers.get("content-length")).toBeNull();
+
+    const res = await POST(request);
+    expect(res.status).toBe(413);
+    expect(await readClientErrors()).toHaveLength(0);
+  });
+
+  test("stops pulling the body once it is over the cap, instead of buffering it to completion", async () => {
+    // Distinguishes a size-capped stream read from `request.clone().json()`:
+    // the latter has no choice but to read a stream through to its end
+    // before it can even attempt to parse, so it would pull every chunk
+    // regardless of size. A source that lazily produces far more than the
+    // cap proves the read stopped early rather than merely rejecting late.
+    const { POST } = createErrorHandlers({ ...sqliteConfig(), sourceMapDir });
+
+    const encoder = new TextEncoder();
+    const chunkText = "a".repeat(1_000);
+    const chunkCount = 200; // 200,000 bytes total, well past the 64 KiB cap
+    let pulls = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        if (pulls > chunkCount) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(encoder.encode(chunkText));
+      },
+    });
+    const request = new Request("https://example.com/api/errors", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: stream,
+      duplex: "half",
+    } as RequestInit);
+
+    const res = await POST(request);
+    expect(res.status).toBe(413);
+    expect(pulls).toBeLessThan(chunkCount);
+  });
+
+  test("accepts a request when content-length is non-numeric and the body is small", async () => {
+    const { POST } = createErrorHandlers({ ...sqliteConfig(), sourceMapDir });
+
+    const res = await POST(
+      errorRequest(validBody(), { "content-length": "not-a-number" })
+    );
+    expect(res.status).toBe(200);
+  });
+
   test("still returns 400 on an unparseable body when resolution is configured", async () => {
     const { POST } = createErrorHandlers({ ...sqliteConfig(), sourceMapDir });
     const res = await POST(
@@ -372,6 +443,21 @@ describe("createErrorHandlers unauthenticated production warning", () => {
     try {
       const out = await captureWarnings(() => {
         createErrorHandlers(sqliteConfig());
+      });
+      expect(out).toContain("no secretHeaderToken configured");
+    } finally {
+      restore();
+    }
+  });
+
+  test("warns when only queryHeaderToken is set and no secretHeaderToken is configured", async () => {
+    const restore = stubEnv("NODE_ENV", "production");
+    try {
+      const out = await captureWarnings(() => {
+        createErrorHandlers({
+          ...sqliteConfig(),
+          queryHeaderToken: "query-only-token",
+        });
       });
       expect(out).toContain("no secretHeaderToken configured");
     } finally {

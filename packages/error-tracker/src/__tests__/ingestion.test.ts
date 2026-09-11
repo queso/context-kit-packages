@@ -3,6 +3,7 @@ import { tokenMatches } from "../server/auth";
 import {
   computeFingerprint,
   createIngestionHandler,
+  readBodyWithCap,
 } from "../server/ingestion";
 import { parseFrames } from "../server/parse-stack";
 import type { StackFrame } from "../types";
@@ -391,6 +392,39 @@ describe("ingestion handler body size limit", () => {
     const res = await handler(errorRequest(body));
     expect(res.status).toBe(200);
     expect(await readClientErrors()).toHaveLength(1);
+  });
+});
+
+describe("readBodyWithCap", () => {
+  /** A request whose body is a stream, so no content-length header is set. */
+  function streamRequest(chunks: string[]): Request {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) {
+          controller.enqueue(encoder.encode(chunk));
+        }
+        controller.close();
+      },
+    });
+    return new Request("https://example.com/api/errors", {
+      method: "POST",
+      body: stream,
+      // Streaming request bodies require duplex on this runtime's fetch impl.
+      duplex: "half",
+    } as RequestInit);
+  }
+
+  test("rejects once the accumulated chunks exceed the cap", async () => {
+    const chunks = ["a".repeat(40), "b".repeat(40), "c".repeat(40)];
+    const result = await readBodyWithCap(streamRequest(chunks), 50);
+    expect(result).toEqual({ ok: false });
+  });
+
+  test("decodes the accumulated text when it stays under the cap", async () => {
+    const chunks = ["hello ", "world"];
+    const result = await readBodyWithCap(streamRequest(chunks), 1024);
+    expect(result).toEqual({ ok: true, text: "hello world" });
   });
 });
 

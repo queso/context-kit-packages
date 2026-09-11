@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
 import { eq } from "drizzle-orm";
 import type { LibSQLDatabase } from "drizzle-orm/libsql";
 import * as schema from "../schema/sqlite";
@@ -9,6 +9,7 @@ import {
   connectFromDatabaseUrl,
   hasSupportedScheme,
   parseDatabaseUrl,
+  sqliteFileUrl,
 } from "../server/connect";
 
 let workDir: string;
@@ -121,6 +122,28 @@ describe("hasSupportedScheme", () => {
     // supported scheme but names an authority SQLite cannot open.
     expect(hasSupportedScheme("sqlite://host/app.db")).toBe(true);
     expect(() => parseDatabaseUrl("sqlite://host/app.db")).toThrow();
+  });
+});
+
+describe("sqliteFileUrl", () => {
+  test(":memory: is returned unchanged", () => {
+    // The libsql client treats ":memory:" as a magic value, not a path -- it
+    // must never be run through path resolution or URL conversion.
+    expect(sqliteFileUrl(":memory:")).toBe(":memory:");
+  });
+
+  test("a relative path resolves to a file:/// URL ending in the resolved absolute path", () => {
+    const absolute = resolvePath(process.cwd(), "./local.db");
+    // `file://` plus an absolute posix path (which already starts with "/")
+    // yields the three-slash "file:///..." form pathToFileURL produces.
+    expect(sqliteFileUrl("./local.db")).toBe(`file://${absolute}`);
+  });
+
+  test("a path with a space is percent-encoded", () => {
+    const absolute = resolvePath(process.cwd(), "./My Data/app.db");
+    expect(sqliteFileUrl("./My Data/app.db")).toBe(
+      `file://${absolute.replace(/ /g, "%20")}`
+    );
   });
 });
 

@@ -18,6 +18,60 @@ const MAX_USER_AGENT_LENGTH = 1_024;
 /** Requests whose body is larger than this are rejected with 413 before parsing. */
 export const MAX_BODY_BYTES = 64 * 1024;
 
+/**
+ * Reads `request`'s body, rejecting once it is known (or found) to exceed
+ * `maxBytes`.
+ *
+ * A numeric content-length above the cap is rejected without touching the
+ * body. Otherwise the body is streamed chunk by chunk, since a chunked
+ * request (no content-length) or a garbage header cannot be trusted to
+ * declare its own size: the running total is checked after every chunk, and
+ * the reader is cancelled as soon as it is exceeded, so an oversized body is
+ * never buffered or parsed in full. A null body (no body at all) reads as
+ * empty text.
+ */
+export async function readBodyWithCap(
+  request: Request,
+  maxBytes: number
+): Promise<{ ok: true; text: string } | { ok: false }> {
+  const contentLength = request.headers.get("content-length");
+  if (contentLength && Number(contentLength) > maxBytes) {
+    return { ok: false };
+  }
+
+  const body = request.body;
+  if (!body) {
+    return { ok: true, text: "" };
+  }
+
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    total += value.byteLength;
+    if (total > maxBytes) {
+      // Stop pulling more of the body once it is already over the cap rather
+      // than reading it to completion just to discard it.
+      await reader.cancel();
+      return { ok: false };
+    }
+    chunks.push(value);
+  }
+
+  const combined = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return { ok: true, text: new TextDecoder().decode(combined) };
+}
+
 export function computeFingerprint(
   message: string,
   frames: StackFrame[]
@@ -48,25 +102,19 @@ export function createIngestionHandler(config: IngestionConfig) {
       }
     }
 
-    // Reject an oversized body before buffering it, when the caller declares
-    // its size up front.
-    const contentLength = request.headers.get("content-length");
-    if (contentLength && Number(contentLength) > MAX_BODY_BYTES) {
-      return Response.json({ error: "Payload too large" }, { status: 413 });
-    }
-
-    // Read as text first so a body with no (or an understated) content-length
-    // header still gets the same size check before it is parsed.
-    let text: string;
+    // Reject an oversized body, whether the caller declares its size up front
+    // or not: a missing/non-numeric content-length falls through to the
+    // size-capped stream read instead of skipping the check.
+    let capped: Awaited<ReturnType<typeof readBodyWithCap>>;
     try {
-      text = await request.text();
+      capped = await readBodyWithCap(request, MAX_BODY_BYTES);
     } catch {
       return Response.json({ error: "Invalid JSON" }, { status: 400 });
     }
-
-    if (Buffer.byteLength(text) > MAX_BODY_BYTES) {
+    if (!capped.ok) {
       return Response.json({ error: "Payload too large" }, { status: 413 });
     }
+    const text = capped.text;
 
     let body: Record<string, unknown>;
     try {

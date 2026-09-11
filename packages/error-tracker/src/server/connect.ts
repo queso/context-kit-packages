@@ -15,6 +15,7 @@
  */
 
 import { resolve as resolvePath } from "node:path";
+import { pathToFileURL } from "node:url";
 import * as postgresSchema from "../schema/postgres.js";
 import * as sqliteSchema from "../schema/sqlite.js";
 import type { ErrorTrackerDialect } from "../types.js";
@@ -91,6 +92,18 @@ export function parseDatabaseUrl(url: string): ParsedDatabaseUrl {
   );
 }
 
+/**
+ * Converts a sqlite path (as parsed from a DATABASE_URL) into the URL form
+ * the libsql client expects. `${resolvePath(...)}` interpolated straight
+ * into a `file:` string breaks on Windows, where an absolute path looks like
+ * `C:\Users\...` and produces an invalid URL (and mangles any path with a
+ * space, on any platform). `pathToFileURL` handles both correctly.
+ */
+export function sqliteFileUrl(path: string): string {
+  if (path === SQLITE_MEMORY_PATH) return SQLITE_MEMORY_PATH;
+  return pathToFileURL(resolvePath(process.cwd(), path)).href;
+}
+
 async function connectSqlite(path: string): Promise<DatabaseConnection> {
   let createClient: typeof import("@libsql/client").createClient;
   let drizzle: typeof import("drizzle-orm/libsql").drizzle;
@@ -103,11 +116,10 @@ async function connectSqlite(path: string): Promise<DatabaseConnection> {
     );
   }
 
-  const inMemory = path === SQLITE_MEMORY_PATH;
   // Relative paths are resolved against the working directory the CLI was run
   // from, which is what the app does with the same URL.
   const client = createClient({
-    url: inMemory ? SQLITE_MEMORY_PATH : `file:${resolvePath(process.cwd(), path)}`,
+    url: sqliteFileUrl(path),
   });
   const db = drizzle(client, { schema: sqliteSchema });
 
