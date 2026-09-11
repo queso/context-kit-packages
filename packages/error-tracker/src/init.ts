@@ -51,7 +51,7 @@ export function initErrorTracker(config: ErrorTrackerConfig): () => void {
   const onError: WindowErrorHandler = (event, source, lineno, colno, error) => {
     if (!active) {
       return typeof previousOnError === "function"
-        ? previousOnError(event, source, lineno, colno, error)
+        ? previousOnError.call(globalThis, event, source, lineno, colno, error)
         : false;
     }
     const message =
@@ -61,7 +61,7 @@ export function initErrorTracker(config: ErrorTrackerConfig): () => void {
 
     // Chain to previous handler
     if (typeof previousOnError === "function") {
-      return previousOnError(event, source, lineno, colno, error);
+      return previousOnError.call(globalThis, event, source, lineno, colno, error);
     }
     return false;
   };

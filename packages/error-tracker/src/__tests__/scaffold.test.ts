@@ -155,6 +155,13 @@ describe("@context-kit/error-tracker build output", () => {
   );
 });
 
+describe("src/index.ts barrel exports", () => {
+  test("ErrorBoundary is exported from src/index", async () => {
+    const mod = await import("../index");
+    expect(typeof mod.ErrorBoundary).toBe("function");
+  });
+});
+
 describe("@context-kit/error-tracker workspace registration", () => {
   test("the workspace glob covers the package directory", () => {
     const rootPkg = JSON.parse(

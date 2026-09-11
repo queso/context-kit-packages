@@ -17,6 +17,15 @@ import type { DatabaseConfig } from "./types.js";
 export interface ErrorHandlersConfig extends DatabaseConfig {
   secretHeaderName?: string;
   secretHeaderToken?: string;
+  /**
+   * Token required by the GET query endpoint. Defaults to `secretHeaderToken`
+   * when not set. The ingestion token is commonly bundled into client
+   * JavaScript (e.g. as `NEXT_PUBLIC_ERROR_TRACKER_TOKEN`) so it can accompany
+   * browser-side error reports; set `queryHeaderToken` to a different,
+   * server-only value so that browser-visible token cannot be used to read
+   * stored errors back out.
+   */
+  queryHeaderToken?: string;
   sourceMapDir?: string;
   rateLimiter?: { windowMs: number; maxRequests: number };
 }
@@ -27,6 +36,7 @@ export function createErrorHandlers(config: ErrorHandlersConfig) {
     dialect,
     secretHeaderName,
     secretHeaderToken,
+    queryHeaderToken,
     sourceMapDir,
     rateLimiter: rateLimiterOptions,
   } = config;
@@ -42,7 +52,7 @@ export function createErrorHandlers(config: ErrorHandlersConfig) {
     db,
     dialect,
     secretHeaderName,
-    secretHeaderToken,
+    secretHeaderToken: queryHeaderToken ?? secretHeaderToken,
   });
 
   const limiter = rateLimiterOptions
@@ -103,6 +113,12 @@ export function createErrorHandlers(config: ErrorHandlersConfig) {
   }
 
   async function GET(request: Request): Promise<Response> {
+    // Rate limit check before anything else, same as POST.
+    if (limiter) {
+      const limitResponse = await limiter.check(request);
+      if (limitResponse) return limitResponse;
+    }
+
     return queryHandler(request);
   }
 

@@ -89,9 +89,13 @@ export function createIngestionHandler(config: IngestionConfig) {
       typeof body.stack === "string"
         ? (body.stack as string).slice(0, MAX_STACK_LENGTH)
         : "";
+    // An empty string is treated the same as absent: otherwise
+    // `resolvedStack ?? rawStack` below would pick "" over a real rawStack,
+    // collapsing the fingerprint to the message alone and storing "" instead
+    // of NULL in the resolved_stack column.
     const resolvedStack =
       typeof body.resolvedStack === "string"
-        ? (body.resolvedStack as string).slice(0, MAX_STACK_LENGTH)
+        ? (body.resolvedStack as string).slice(0, MAX_STACK_LENGTH) || null
         : null;
     const componentStack =
       typeof body.componentStack === "string"

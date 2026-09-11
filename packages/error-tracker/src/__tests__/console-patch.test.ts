@@ -266,8 +266,10 @@ describe("patchConsoleError — idempotency", () => {
     restore2();
     restore1();
 
-    // Should be called at most once (or twice at most — must not cascade infinitely)
-    expect(mockReportError.mock.calls.length).toBeLessThanOrEqual(2);
+    // The outer wrapper's original.apply reaches the inner wrapper, which
+    // must see the same in-flight flag and only forward to its own original
+    // instead of reporting again.
+    expect(mockReportError.mock.calls.length).toBe(1);
   });
 
   test("calling restore twice does not throw", () => {
@@ -276,6 +278,32 @@ describe("patchConsoleError — idempotency", () => {
       restore();
       restore();
     }).not.toThrow();
+  });
+
+  test("cleaning up two patches in installation order leaves no live patch behind", () => {
+    const realCalls: unknown[][] = [];
+    const realConsoleError = console.error;
+    // biome-ignore lint/suspicious/noExplicitAny: test mock
+    console.error = (...args: any[]) => {
+      realCalls.push(args);
+    };
+
+    const restore1 = patchConsoleError(TEST_CONFIG);
+    const restore2 = patchConsoleError(TEST_CONFIG);
+
+    // Clean up in installation order: restore1 runs first, so it restores
+    // console.error to patch2's wrapper. Without the per-patch active flag,
+    // that surviving wrapper still reports after "both" cleanups.
+    restore1();
+    restore2();
+
+    mockReportError.mockClear();
+    console.error("after both cleanups");
+
+    expect(mockReportError).not.toHaveBeenCalled();
+    expect(realCalls).toEqual([["after both cleanups"]]);
+
+    console.error = realConsoleError;
   });
 });
 

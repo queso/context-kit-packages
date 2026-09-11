@@ -77,6 +77,22 @@ describe("parseDatabaseUrl", () => {
       expect(() => parseDatabaseUrl(url)).toThrow(/sqlite/i);
     }
   );
+
+  test.each([
+    ["a sqlite URL with a host and credentials", "sqlite://user:s3cret@host/app.db"],
+    ["an unsupported scheme with credentials", "mysql://user:s3cret@host/app"],
+  ])("does not leak credentials from %s into the error message", (_label, url) => {
+    // Both throw sites in parseDatabaseUrl used to interpolate the full URL,
+    // which put credentials in CLI and CI logs. Only the scheme is safe to echo.
+    let message = "";
+    try {
+      parseDatabaseUrl(url);
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message.length).toBeGreaterThan(0);
+    expect(message).not.toContain("s3cret");
+  });
 });
 
 describe("hasSupportedScheme", () => {

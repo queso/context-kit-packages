@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import fsp from "node:fs/promises";
 import { basename, join } from "node:path";
 import {
@@ -38,6 +37,23 @@ function rememberMiss(mapPath: string): void {
   negativeMapCache.add(mapPath);
 }
 
+// A missing-file error from the read itself (not a corrupt map, not a
+// permissions issue), the case the negative cache exists for. Anything else
+// (EISDIR, EACCES, transient I/O errors) is left out of the cache so it gets
+// retried on the next lookup instead of being remembered as a permanent miss.
+function isMissingFileError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err.code === "ENOENT" || err.code === "ENOTDIR")
+  );
+}
+
+// Pure: validates the filename and builds the candidate map path. Performs no
+// filesystem I/O — existence is discovered by the read in loadConsumer(), not
+// probed here, so callers must check the negative cache themselves before
+// attempting a load.
 function getMapFilePath(sourceMapDir: string, fileRef: string): string | null {
   // Extract just the filename portion (last path segment)
   let fileName: string;
@@ -54,15 +70,7 @@ function getMapFilePath(sourceMapDir: string, fileRef: string): string | null {
     return null;
   }
 
-  const mapPath = join(sourceMapDir, `${fileName}.map`);
-  if (negativeMapCache.has(mapPath)) {
-    return null;
-  }
-  if (!existsSync(mapPath)) {
-    rememberMiss(mapPath);
-    return null;
-  }
-  return mapPath;
+  return join(sourceMapDir, `${fileName}.map`);
 }
 
 // Cache parsed source maps to avoid re-reading from disk on repeated errors.
@@ -80,7 +88,19 @@ const inFlightLoads = new Map<string, Promise<SourceMapConsumerInstance>>();
 async function loadConsumer(
   mapFilePath: string
 ): Promise<SourceMapConsumerInstance> {
-  const rawMap = await fsp.readFile(mapFilePath, "utf-8");
+  let rawMap: string;
+  try {
+    rawMap = await fsp.readFile(mapFilePath, "utf-8");
+  } catch (err) {
+    // A missing map file surfaces here, from the read, instead of from a
+    // separate existsSync() pre-check. Record it as a miss so the next
+    // lookup for this path skips straight to the fallback; any other error
+    // (EISDIR, EACCES, etc.) is left unrecorded so it gets retried.
+    if (isMissingFileError(err)) {
+      rememberMiss(mapFilePath);
+    }
+    throw err;
+  }
   const sourceMap = JSON.parse(rawMap);
   return await new SourceMapConsumer(sourceMap);
 }
@@ -145,7 +165,7 @@ export async function resolveStack(
       }
 
       const mapFilePath = getMapFilePath(sourceMapDir, parsed.file);
-      if (!mapFilePath) {
+      if (!mapFilePath || negativeMapCache.has(mapFilePath)) {
         resolved.push(line);
         continue;
       }

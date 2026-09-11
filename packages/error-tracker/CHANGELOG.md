@@ -13,11 +13,12 @@ First release. Client-side error tracking for Next.js App Router apps, stored in
 - `createErrorTracker()` client factory returning `init()` (installs `window.onerror` and `unhandledrejection` listeners, optionally patches `console.error`) and a config-pre-bound `ErrorBoundary`
 - `ErrorBoundary` React class component with a `ReactNode` or `(error) => ReactNode` fallback
 - Fire-and-forget reporter with loop prevention: errors thrown inside the tracker are not reported, and network failures are swallowed
-- `createErrorHandlers({ db, dialect, secretHeaderName?, secretHeaderToken?, sourceMapDir?, rateLimiter? })` producing `POST` (ingestion) and `GET` (query) route handlers, plus `createIngestionHandler` and `createQueryHandler` for mounting the two halves separately
+- `createErrorHandlers({ db, dialect, secretHeaderName?, secretHeaderToken?, queryHeaderToken?, sourceMapDir?, rateLimiter? })` producing `POST` (ingestion) and `GET` (query) route handlers, plus `createIngestionHandler` and `createQueryHandler` for mounting the two halves separately
 - `@context-kit/error-tracker/schema/sqlite` and `@context-kit/error-tracker/schema/postgres` entry points exporting the `client_error` Drizzle table, for re-export from the app's `db/schema/<dialect>.ts`. Columns are snake_case, with a unique index on `fingerprint` and plain indexes on `last_seen_at` and `environment`
 - Deduplication by SHA-256 fingerprint of the message and the top three stack frames, applied as one `insert ... on conflict (fingerprint) do update`
 - Server-side source map resolution against build-time `.map` files read from the filesystem, with an LRU cache of parsed consumers
-- Per-IP rate limiting on the ingestion endpoint, and secret-header auth on both endpoints
+- Per-IP rate limiting, applied to both the ingestion and query endpoints, and secret-header auth on both endpoints
+- `queryHeaderToken` on `createErrorHandlers` lets the query endpoint require a token separate from ingestion's `secretHeaderToken`, so a `NEXT_PUBLIC_`-prefixed ingestion token does not also authorize reading stored errors. Defaults to `secretHeaderToken` for backward compatibility
 - Query endpoint filters: `env`, `since`, `fingerprint`, `resolved`, with offset pagination capped at 200 rows
 - `npx error-tracker tail [--limit N] [--env ENV] [--since DATE]` and `npx error-tracker resolve <fingerprint>`. The CLI reads `DATABASE_URL` and loads `@libsql/client` for `sqlite:` URLs or `postgres` for `postgres://` and `postgresql://` URLs. `resolve` exits 1 on an unknown or already-resolved fingerprint
 - `runTail` and `runResolve` exported from the `@context-kit/error-tracker/cli` entry point, for programmatic use with `{ db, dialect }`

@@ -261,6 +261,59 @@ describe("createRateLimiter — in-memory Map store", () => {
   });
 });
 
+describe("createRateLimiter — maxEntries cap", () => {
+  test("evicts the oldest entry once maxEntries is reached", async () => {
+    const limiter = createRateLimiter({
+      windowMs: 60_000,
+      maxRequests: 1,
+      maxEntries: 3,
+    });
+    const ips = ["1.1.1.1", "2.2.2.2", "3.3.3.3", "4.4.4.4"];
+
+    for (const ip of ips) {
+      const result = await limiter.check(makeRequestWithForwardedFor(ip));
+      expect(result).toBeNull();
+    }
+
+    // The map can only hold 3 entries, so inserting the 4th must have evicted
+    // the oldest (the 1st). It gets a fresh quota instead of a 429.
+    const afterEviction = await limiter.check(
+      makeRequestWithForwardedFor(ips[0]!)
+    );
+    expect(afterEviction).toBeNull();
+  });
+
+  test("sweeps expired entries for room before evicting a live one", async () => {
+    const windowMs = 50;
+    const limiter = createRateLimiter({
+      windowMs,
+      maxRequests: 1,
+      maxEntries: 1,
+    });
+
+    await limiter.check(makeRequestWithForwardedFor("10.10.10.10"));
+
+    // Let the only entry's window expire before the next distinct IP arrives.
+    await new Promise((r) => setTimeout(r, windowMs + 10));
+
+    await limiter.check(makeRequestWithForwardedFor("20.20.20.20"));
+
+    // The expired entry should have been swept for room, not left in place,
+    // so it also gets a fresh quota rather than reusing a stale one.
+    const result = await limiter.check(
+      makeRequestWithForwardedFor("10.10.10.10")
+    );
+    expect(result).toBeNull();
+  });
+
+  test("defaults maxEntries to 10,000", async () => {
+    // No option provided — should not throw and should behave normally.
+    const limiter = createRateLimiter({ windowMs: 60_000, maxRequests: 5 });
+    const result = await limiter.check(makeRequestWithForwardedFor("30.30.30.30"));
+    expect(result).toBeNull();
+  });
+});
+
 describe("createRateLimiter — window reset", () => {
   test("stale entries outside the window do not count against the limit", async () => {
     // Use a very short window so we can test expiry

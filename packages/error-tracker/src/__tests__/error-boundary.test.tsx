@@ -1,5 +1,6 @@
 import {
   afterAll,
+  afterEach,
   beforeEach,
   describe,
   expect,
@@ -77,6 +78,12 @@ beforeEach(() => {
     }
     originalConsoleError(...args);
   };
+});
+
+afterEach(() => {
+  // The beforeEach above replaces console.error with a filtering stub; restore
+  // it so later test files see the real console.error rather than this stub.
+  console.error = originalConsoleError;
 });
 
 // ─── ErrorBoundary ────────────────────────────────────────────────────────────

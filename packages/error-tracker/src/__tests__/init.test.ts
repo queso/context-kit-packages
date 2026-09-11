@@ -240,6 +240,27 @@ describe("initErrorTracker — existing handler chaining", () => {
     ).onerror = undefined;
   });
 
+  test("calls the previous onerror handler with globalThis as its receiver", () => {
+    let receivedThis: unknown;
+    // A non-arrow function so `this` reflects however the handler was invoked.
+    function previousHandler(this: unknown) {
+      receivedThis = this;
+      return false;
+    }
+    (globalThis as unknown as { onerror: WindowErrorHandler }).onerror =
+      previousHandler as unknown as WindowErrorHandler;
+
+    const cleanup = initErrorTracker(TEST_CONFIG);
+    simulateWindowError(new Error("receiver test"));
+    cleanup();
+
+    expect(receivedThis).toBe(globalThis);
+
+    (
+      globalThis as unknown as { onerror: WindowErrorHandler | undefined }
+    ).onerror = undefined;
+  });
+
   test("calls through to the previous onerror handler when one exists", async () => {
     const previousHandler = mock((..._args: unknown[]) => false);
     (globalThis as unknown as { onerror: typeof previousHandler }).onerror =
@@ -264,7 +285,10 @@ describe("initErrorTracker — existing handler chaining", () => {
 });
 
 describe("initErrorTracker — idempotency", () => {
-  test("calling initErrorTracker twice does not double-report a single error", async () => {
+  test("each installed tracker reports an unhandled rejection once", async () => {
+    // Two initErrorTracker calls install two independent trackers, each with
+    // its own listener, so one rejection is reported twice. The factory's
+    // init() is the single intended entry point for de-duplication.
     mockReportError.mockClear();
     const cleanup1 = initErrorTracker(TEST_CONFIG);
     const cleanup2 = initErrorTracker(TEST_CONFIG);
@@ -272,9 +296,7 @@ describe("initErrorTracker — idempotency", () => {
     simulateUnhandledRejection(new Error("idempotency check"));
     await new Promise((r) => setTimeout(r, 0));
 
-    // The error should be reported — implementation may report once or twice
-    // but must NOT cause infinite loops or crash
-    expect(mockReportError.mock.calls.length).toBeGreaterThanOrEqual(1);
+    expect(mockReportError).toHaveBeenCalledTimes(2);
 
     cleanup1();
     cleanup2();

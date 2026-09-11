@@ -298,12 +298,18 @@ describe("createErrorHandlers rate limiting", () => {
     expect((await readOnlyClientError()).occurrences).toBe(2);
   });
 
-  test("does not rate limit GET", async () => {
-    const { POST, GET } = limited();
-    await POST(fromClient(validBody()));
-    await POST(fromClient(validBody()));
-    await POST(fromClient(validBody()));
+  test("rate limits GET the same as POST", async () => {
+    const { GET } = limited();
+    const fromGetClient = () =>
+      queryRequest({}, { "x-forwarded-for": CLIENT_IP });
 
+    expect((await GET(fromGetClient())).status).toBe(200);
+    expect((await GET(fromGetClient())).status).toBe(200);
+    expect((await GET(fromGetClient())).status).toBe(429);
+  });
+
+  test("does not rate limit GET when no limiter is configured", async () => {
+    const { GET } = createErrorHandlers(sqliteConfig());
     for (let i = 0; i < 5; i++) {
       const res = await GET(queryRequest({}, { "x-forwarded-for": CLIENT_IP }));
       expect(res.status).toBe(200);
@@ -317,6 +323,46 @@ describe("createErrorHandlers rate limiting", () => {
       expect(res.status).toBe(200);
     }
     expect((await readOnlyClientError()).occurrences).toBe(5);
+  });
+});
+
+describe("createErrorHandlers query token", () => {
+  const INGESTION_TOKEN = "ingestion-token";
+  const QUERY_TOKEN = "query-only-token";
+
+  test("GET requires the query token, not the ingestion token, when both are set", async () => {
+    const { POST, GET } = createErrorHandlers({
+      ...sqliteConfig(),
+      secretHeaderName: SECRET_HEADER,
+      secretHeaderToken: INGESTION_TOKEN,
+      queryHeaderToken: QUERY_TOKEN,
+    });
+
+    const post = await POST(
+      errorRequest(validBody(), { [SECRET_HEADER]: INGESTION_TOKEN })
+    );
+    expect(post.status).toBe(200);
+
+    const getWithIngestionToken = await GET(
+      queryRequest({}, { [SECRET_HEADER]: INGESTION_TOKEN })
+    );
+    expect(getWithIngestionToken.status).toBe(401);
+
+    const getWithQueryToken = await GET(
+      queryRequest({}, { [SECRET_HEADER]: QUERY_TOKEN })
+    );
+    expect(getWithQueryToken.status).toBe(200);
+  });
+
+  test("GET still accepts secretHeaderToken when queryHeaderToken is not set", async () => {
+    const { GET } = createErrorHandlers({
+      ...sqliteConfig(),
+      secretHeaderName: SECRET_HEADER,
+      secretHeaderToken: SECRET_TOKEN,
+    });
+
+    const res = await GET(queryRequest({}, { [SECRET_HEADER]: SECRET_TOKEN }));
+    expect(res.status).toBe(200);
   });
 });
 

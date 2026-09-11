@@ -6,7 +6,6 @@ import {
   spyOn,
   test,
 } from "bun:test";
-import * as fs from "node:fs";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -338,77 +337,104 @@ describe("resolveStack — true LRU eviction", () => {
 });
 
 describe("resolveStack — filename validation and negative cache", () => {
-  test("rejects an unsafe filename without any filesystem probe", async () => {
-    // The Bun runtime itself calls existsSync in the background (module
-    // resolution, watchers) while a test runs, so a bare call counter is
-    // noisy. Only count probes that actually mention our target filename.
-    const realExistsSync = fs.existsSync.bind(fs);
-    const spy = spyOn(fs, "existsSync");
-    let relevantCalls = 0;
-    const countRelevant = (needle: string) => {
-      spy.mockImplementation((...args: Parameters<typeof fs.existsSync>) => {
-        if (String(args[0]).includes(needle)) relevantCalls++;
-        return realExistsSync(...args);
-      });
-    };
+  test("rejects an unsafe filename without ever attempting a read", async () => {
+    // Filename validation happens before any candidate path is built, so an
+    // unsafe filename must never reach fsp.readFile.
+    const realReadFile = fsp.readFile.bind(fsp);
+    let readCount = 0;
+    const spy = spyOn(fsp, "readFile").mockImplementation((...args: any[]) => {
+      readCount++;
+      return (realReadFile as any)(...args);
+    });
 
     try {
       const traversalStack = "TypeError: test\n  at fn (../../etc/passwd:1:1)";
-      relevantCalls = 0;
-      countRelevant("passwd");
+      readCount = 0;
       const traversalResult = await resolveStack(traversalStack, {
         sourceMapDir: testMapDir,
       });
       expect(traversalResult).toBe(traversalStack);
-      expect(relevantCalls).toBe(0);
+      expect(readCount).toBe(0);
 
       const weirdNameStack = "TypeError: test\n  at fn (weird$name.js:1:1)";
-      relevantCalls = 0;
-      countRelevant("weird");
+      readCount = 0;
       const weirdNameResult = await resolveStack(weirdNameStack, {
         sourceMapDir: testMapDir,
       });
       expect(weirdNameResult).toBe(weirdNameStack);
-      expect(relevantCalls).toBe(0);
+      expect(readCount).toBe(0);
     } finally {
       spy.mockRestore();
     }
   });
 
-  test("probes a missing chunk's map file once and reuses the negative cache on repeat lookups", async () => {
+  test("reads a missing chunk's map file once and reuses the negative cache on repeat lookups", async () => {
     const missingDir = join(tmpdir(), `error-tracker-negcache-${Date.now()}`);
     mkdirSync(missingDir, { recursive: true });
-    const targetMapPath = join(missingDir, "nope.js.map");
 
-    const realExistsSync = fs.existsSync.bind(fs);
-    const spy = spyOn(fs, "existsSync");
-    let probeCount = 0;
-    spy.mockImplementation((...args: Parameters<typeof fs.existsSync>) => {
-      // Only count probes against the exact map path this test cares about;
-      // unrelated background existsSync calls from the runtime don't count.
-      if (args[0] === targetMapPath) probeCount++;
-      return realExistsSync(...args);
+    const realReadFile = fsp.readFile.bind(fsp);
+    let readCount = 0;
+    const spy = spyOn(fsp, "readFile").mockImplementation((...args: any[]) => {
+      readCount++;
+      return (realReadFile as any)(...args);
     });
 
     try {
       const rawStack = "TypeError: test\n  at fn (nope.js:1:1)";
 
+      // No pre-check: the miss is discovered by the ENOENT from the read
+      // itself, which then records the negative-cache entry.
       const result1 = await resolveStack(rawStack, {
         sourceMapDir: missingDir,
       });
       expect(result1).toBe(rawStack);
-      expect(probeCount).toBe(1);
+      expect(readCount).toBe(1);
 
       const result2 = await resolveStack(rawStack, {
         sourceMapDir: missingDir,
       });
       expect(result2).toBe(rawStack);
       // The second lookup for the same missing map path is served from the
-      // negative cache: no additional filesystem probe.
-      expect(probeCount).toBe(1);
+      // negative cache: no additional read attempt.
+      expect(readCount).toBe(1);
     } finally {
       spy.mockRestore();
       rmSync(missingDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a non-ENOENT read failure falls back to the raw line and is retried next time", async () => {
+    // Make the "map file" a directory so fsp.readFile fails with EISDIR
+    // instead of ENOENT — a transient/unexpected error, not a real miss.
+    const eisdirDir = join(tmpdir(), `error-tracker-eisdir-${Date.now()}`);
+    mkdirSync(eisdirDir, { recursive: true });
+    mkdirSync(join(eisdirDir, "weird.js.map"), { recursive: true });
+
+    const realReadFile = fsp.readFile.bind(fsp);
+    let readCount = 0;
+    const spy = spyOn(fsp, "readFile").mockImplementation((...args: any[]) => {
+      readCount++;
+      return (realReadFile as any)(...args);
+    });
+
+    try {
+      const rawStack = "TypeError: test\n  at fn (weird.js:1:1)";
+
+      const result1 = await resolveStack(rawStack, {
+        sourceMapDir: eisdirDir,
+      });
+      expect(result1).toBe(rawStack);
+      expect(readCount).toBe(1);
+
+      // Not recorded in the negative cache, so the next call retries the read.
+      const result2 = await resolveStack(rawStack, {
+        sourceMapDir: eisdirDir,
+      });
+      expect(result2).toBe(rawStack);
+      expect(readCount).toBe(2);
+    } finally {
+      spy.mockRestore();
+      rmSync(eisdirDir, { recursive: true, force: true });
     }
   });
 });

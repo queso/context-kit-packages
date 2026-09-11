@@ -11,7 +11,7 @@ Client-side error tracking for Next.js App Router apps. Captures React render cr
 - **Drizzle Schema Modules** - One `client_error` table, shipped for SQLite and Postgres, re-exported from your own schema file
 - **Source Map Resolution** - Resolves minified stack traces on the server using build-time source maps
 - **Query API** - Retrieve and filter stored errors with offset-based pagination
-- **Rate Limiting** - Per-IP rate limiting on the ingestion endpoint
+- **Rate Limiting** - Per-IP rate limiting, applied to both the ingestion and query endpoints
 - **Console Patching** - Optionally capture `console.error` calls (opt-in)
 - **Deduplication** - One row per fingerprint, with an occurrence counter the database increments
 - **CLI** - `npx error-tracker tail` and `npx error-tracker resolve <fingerprint>`
@@ -100,6 +100,7 @@ const handlers = createErrorHandlers({
   db,
   dialect: getDialect(),
   secretHeaderToken: process.env.ERROR_TRACKER_TOKEN,
+  queryHeaderToken: process.env.ERROR_TRACKER_QUERY_TOKEN,
   sourceMapDir: process.env.NODE_ENV === "production" ? ".next/static/chunks" : undefined,
   rateLimiter: { windowMs: 60_000, maxRequests: 100 },
 });
@@ -109,6 +110,8 @@ export const GET = handlers.GET;
 ```
 
 Pass `getDialect()` rather than a literal so `dialect` cannot drift from whatever `DATABASE_URL` points at.
+
+`ERROR_TRACKER_QUERY_TOKEN` is a server-only variable, never prefixed with `NEXT_PUBLIC_`. Set it to a value distinct from `ERROR_TRACKER_TOKEN`: the ingestion token ships in the client bundle, so anyone who can read the bundle can also submit reports with it. Without a separate query token, that same bundled value reads stored errors back out.
 
 ### 3. Add ErrorBoundary and initialize tracking
 
@@ -128,7 +131,7 @@ const tracker = createErrorTracker({
 export const { ErrorBoundary } = tracker;
 ```
 
-`NEXT_PUBLIC_ERROR_TRACKER_TOKEN` is bundled into client-side JavaScript, so it is visible to anyone who loads the page. It is a shared, publicly visible credential, not a secret: its purpose is to stop unsolicited reports from other origins and scripts, not to authenticate a specific caller. The protection that does not depend on the token staying secret is per-IP rate limiting on the ingestion endpoint (`rateLimiter`, configured in step 2).
+`NEXT_PUBLIC_ERROR_TRACKER_TOKEN` is bundled into client-side JavaScript, so it is visible to anyone who loads the page. It is a shared, publicly visible credential, not a secret: its purpose is to stop unsolicited reports from other origins and scripts, not to authenticate a specific caller. The protection that does not depend on the token staying secret is per-IP rate limiting, applied to both the ingestion and query endpoints (`rateLimiter`, configured in step 2).
 
 ```tsx
 
@@ -209,14 +212,17 @@ interface ErrorHandlersConfig {
   db: object;                        // Your app's Drizzle instance (import { db } from "@/db")
   dialect: "sqlite" | "postgres";    // Which dialect db talks to; pass getDialect() from "@/db"
   secretHeaderName?: string;         // Header name for auth (default: "x-error-tracker-token")
-  secretHeaderToken?: string;        // Expected token value; omit for open access (dev only)
-  sourceMapDir?: string;             // Path to source maps (default: ".next/static/chunks")
+  secretHeaderToken?: string;        // Expected token for POST (ingestion); omit for open access (dev only)
+  queryHeaderToken?: string;         // Expected token for GET (query); defaults to secretHeaderToken
+  sourceMapDir?: string;             // Omit to store raw stacks only; set to enable source map resolution (Next.js: ".next/static/chunks")
   rateLimiter?: {
     windowMs: number;                // Time window in ms
     maxRequests: number;             // Max requests per IP per window
   };
 }
 ```
+
+`queryHeaderToken` lets the query endpoint require a different token than ingestion. `NEXT_PUBLIC_ERROR_TRACKER_TOKEN` ships in the client bundle, so anyone who can read that bundle can also submit reports with it. If `queryHeaderToken` is unset, the same bundled token also authorizes the query endpoint, so anyone who loads the app can read stored errors. Set `queryHeaderToken` to a server-only value in production to keep query authorization out of the client bundle.
 
 Returns:
 
@@ -231,20 +237,28 @@ Returns:
 
 ### `ErrorBoundary`
 
-React class component that catches render errors. When used via the factory (`createErrorTracker`), config is pre-bound. When used directly, pass `config` explicitly.
+React class component that catches render errors. When used via the factory (`createErrorTracker`), config is pre-bound. For direct use, import it from the root entry point and pass `config` explicitly:
+
+```tsx
+import { ErrorBoundary } from "@context-kit/error-tracker";
+
+<ErrorBoundary config={{ endpoint: "/api/errors", token: process.env.NEXT_PUBLIC_ERROR_TRACKER_TOKEN }}>
+  {children}
+</ErrorBoundary>
+```
 
 Props:
-- `config?` - Error tracker configuration (pre-bound when created via factory)
+- `config?` - Error tracker configuration (pre-bound when created via factory, required for direct use)
 - `fallback?` - `ReactNode` or `(error: Error) => ReactNode` (default: `<div>Something went wrong.</div>`)
 - `children` - React elements to wrap
 
 ## Query API
 
-The GET `/api/errors` endpoint supports filtering and offset-based pagination:
+The GET `/api/errors` endpoint supports filtering and offset-based pagination. Requests are authorized with the query token: `queryHeaderToken` when it is configured, otherwise `secretHeaderToken`.
 
 ```ts
 const response = await fetch("/api/errors?env=production&resolved=false&limit=50&offset=0", {
-  headers: { "x-error-tracker-token": "your-token" },
+  headers: { "x-error-tracker-token": "your-query-token" },
 });
 
 const { errors, total } = await response.json();
@@ -267,6 +281,8 @@ Errors are deduplicated using a SHA-256 fingerprint computed from the error mess
 ```
 SHA-256( message | file:line:col:fn | file:line:col:fn | file:line:col:fn )
 ```
+
+An empty-string `resolvedStack` in the payload is treated as absent: the fingerprint falls back to the raw stack, and the stored `resolved_stack` is null.
 
 Ingestion is a single upsert against the unique `fingerprint` column: `insert ... on conflict (fingerprint) do update`. There is one row per fingerprint, for the life of the table.
 
@@ -349,6 +365,7 @@ const handlers = createErrorHandlers({
   db,
   dialect: getDialect(),
   secretHeaderToken: process.env.ERROR_TRACKER_TOKEN,
+  queryHeaderToken: process.env.ERROR_TRACKER_QUERY_TOKEN,
   sourceMapDir: ".next/static/chunks",
   rateLimiter: { windowMs: 60_000, maxRequests: 100 },
 });
@@ -361,6 +378,8 @@ const tracker = createErrorTracker({
 ```
 
 `secretHeaderToken` and the client `token` are the same shared value. The client copy ships in the browser bundle, so it is visible to anyone who loads the page: it screens out unsolicited reports, it does not authenticate the caller. `rateLimiter` is what keeps the endpoint safe from abuse regardless of who has read the token out of the bundle.
+
+`queryHeaderToken` is set here to `ERROR_TRACKER_QUERY_TOKEN`, a server-only variable distinct from `ERROR_TRACKER_TOKEN`. With a single shared token, anyone who can read the client bundle can also read stored errors back out through the query endpoint. Set a distinct query token in production to keep that read path server-side.
 
 ### Development with console patching
 
@@ -406,6 +425,7 @@ const handlers = createErrorHandlers({
 ```bash
 # Server-side
 ERROR_TRACKER_TOKEN=your-secret-token
+ERROR_TRACKER_QUERY_TOKEN=a-different-secret-token
 
 # Read by the CLI only; your app already has this set
 DATABASE_URL=postgres://...
@@ -419,6 +439,8 @@ NEXT_PUBLIC_ERROR_TRACKER_TOKEN=your-secret-token
 The route handlers reach the database through the `db` instance you pass them, not through `DATABASE_URL`. Only the CLI reads that variable.
 
 `ERROR_TRACKER_TOKEN` and `NEXT_PUBLIC_ERROR_TRACKER_TOKEN` should hold the same value. The `NEXT_PUBLIC_` copy ships in the client bundle and is visible to anyone who loads the page: it is a shared, publicly visible credential, not a secret. Its job is to stop unsolicited reports from other origins and scripts; it is not what keeps the endpoint safe from a determined caller. Per-IP rate limiting (`rateLimiter`) is the protection that does not depend on the token staying secret, so configure it.
+
+`ERROR_TRACKER_QUERY_TOKEN` must never carry a `NEXT_PUBLIC_` prefix: it authorizes the query endpoint and has to stay out of the client bundle. Pass it as `queryHeaderToken` to `createErrorHandlers`. With a single shared token, anyone who can read the client bundle can also read stored errors, so set a distinct query token in production.
 
 When no token is configured, the ingestion and query endpoints accept all requests (permissive default for local dev). `createErrorHandlers` logs a warning at creation time when `NODE_ENV` is `production` and no `secretHeaderToken` is set; until one is set, the endpoints accept every request.
 

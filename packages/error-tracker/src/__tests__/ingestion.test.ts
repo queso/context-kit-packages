@@ -288,6 +288,14 @@ describe("ingestion handler first report", () => {
     expect((await readOnlyClientError()).fingerprint).toBe(fingerprint);
   });
 
+  test("treats an empty-string resolvedStack as absent", async () => {
+    const res = await handler(errorRequest(validBody({ resolvedStack: "" })));
+    const { fingerprint } = (await res.json()) as { fingerprint: string };
+
+    expect(fingerprint).toBe(fingerprintFor(MESSAGE, STACK));
+    expect((await readOnlyClientError()).resolvedStack).toBeNull();
+  });
+
   test("groups two builds of the same error under one row via the resolved stack", async () => {
     const resolvedStack = "Error\n  at Component (src/Component.tsx:12:4)";
     await handler(

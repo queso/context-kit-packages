@@ -70,7 +70,7 @@ export function parseDatabaseUrl(url: string): ParsedDatabaseUrl {
         )
       ) {
         throw new Error(
-          `${UNSUPPORTED_SCHEME_MESSAGE} (got "${url}": sqlite: URLs point at a local file and cannot carry a host or credentials)`
+          `${UNSUPPORTED_SCHEME_MESSAGE} (got scheme "${scheme}": sqlite: URLs point at a local file and cannot carry a host or credentials)`
         );
       }
     }
@@ -84,7 +84,11 @@ export function parseDatabaseUrl(url: string): ParsedDatabaseUrl {
     return { dialect: "postgres", url };
   }
 
-  throw new Error(`${UNSUPPORTED_SCHEME_MESSAGE} (got "${url}")`);
+  // Echo only the scheme, never the full URL: it may carry credentials that
+  // should not land in CLI output or CI logs.
+  throw new Error(
+    `${UNSUPPORTED_SCHEME_MESSAGE} (got scheme "${scheme || "<no scheme>"}")`
+  );
 }
 
 async function connectSqlite(path: string): Promise<DatabaseConnection> {

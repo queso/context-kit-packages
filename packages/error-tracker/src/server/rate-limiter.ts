@@ -1,7 +1,12 @@
 export interface RateLimiterOptions {
   windowMs?: number;
   maxRequests?: number;
+  /** Caps how many distinct IPs the in-memory store tracks at once. */
+  maxEntries?: number;
 }
+
+/** Default cap on distinct IPs tracked at once, absent an explicit `maxEntries`. */
+const DEFAULT_MAX_ENTRIES = 10_000;
 
 interface BucketEntry {
   count: number;
@@ -28,6 +33,7 @@ function extractIp(request: Request): string {
 export function createRateLimiter(options?: RateLimiterOptions): RateLimiter {
   const windowMs = options?.windowMs ?? 60_000;
   const maxRequests = options?.maxRequests ?? 60;
+  const maxEntries = options?.maxEntries ?? DEFAULT_MAX_ENTRIES;
 
   const store = new Map<string, BucketEntry>();
   let lastCleanup = Date.now();
@@ -43,6 +49,29 @@ export function createRateLimiter(options?: RateLimiterOptions): RateLimiter {
     }
   }
 
+  /**
+   * Makes room for a new key when the store is at capacity. Sweeps expired
+   * entries first (a flood of unique IPs can outrun the periodic `cleanup`
+   * sweep above); if the store is still full, evicts the oldest-inserted
+   * entry by Map iteration order rather than dropping the new request.
+   */
+  function evictIfNeeded(now: number): void {
+    if (store.size < maxEntries) return;
+
+    for (const [key, entry] of store) {
+      if (now - entry.windowStart >= windowMs) {
+        store.delete(key);
+      }
+    }
+
+    if (store.size >= maxEntries) {
+      const oldestKey = store.keys().next().value;
+      if (oldestKey !== undefined) {
+        store.delete(oldestKey);
+      }
+    }
+  }
+
   return {
     async check(request: Request): Promise<Response | null> {
       const ip = extractIp(request);
@@ -53,7 +82,11 @@ export function createRateLimiter(options?: RateLimiterOptions): RateLimiter {
       const entry = store.get(ip);
 
       if (!entry || now - entry.windowStart >= windowMs) {
-        // New window
+        // New window. Only a genuinely new key can grow the store past
+        // maxEntries, so only evict/sweep when this key is not already in it.
+        if (!entry) {
+          evictIfNeeded(now);
+        }
         store.set(ip, { count: 1, windowStart: now });
         return null;
       }

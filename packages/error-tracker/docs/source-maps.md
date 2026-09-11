@@ -29,7 +29,7 @@ This writes `.map` files alongside the JS chunks in `.next/static/chunks/`.
 
 ## Server Configuration
 
-Pass `sourceMapDir` to `createErrorHandlers`:
+Resolution is opt-in: pass `sourceMapDir` to `createErrorHandlers` to turn it on. When `sourceMapDir` is omitted, `createErrorHandlers`'s `POST` handler skips resolution entirely and stores the raw stack, so a default install never probes the filesystem on every report.
 
 ```ts
 import { db, getDialect } from "@/db";
@@ -41,7 +41,9 @@ const handlers = createErrorHandlers({
 });
 ```
 
-The default path (when not configured) is `.next/static/chunks`, which matches the standard Next.js output directory for self-hosted deployments.
+For Next.js, set `sourceMapDir` to `.next/static/chunks`, the standard output directory for self-hosted deployments.
+
+`resolveStack`, exported from `@context-kit/error-tracker/server` for calling directly, is different: when called without a directory argument, it defaults to `.next/static/chunks`. That default applies only to `resolveStack` itself, not to `createErrorHandlers`, which resolves nothing unless `sourceMapDir` is set.
 
 ## Deployment Requirements
 
