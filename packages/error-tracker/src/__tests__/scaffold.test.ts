@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -114,11 +114,15 @@ describe("@context-kit/error-tracker build output", () => {
   // produced rather than only checking that config files exist.
   // execFileSync throws when tsup exits non-zero, so the whole block fails
   // rather than asserting against stale dist/ output from an earlier run.
-  execFileSync("bun", ["--filter", "@context-kit/error-tracker", "build"], {
-    cwd: MONOREPO_ROOT,
-    encoding: "utf-8",
-    stdio: "pipe",
-  });
+  // Run inside beforeAll so the build happens when the block's tests run, not
+  // as a side effect of collecting the test file.
+  beforeAll(() => {
+    execFileSync("bun", ["--filter", "@context-kit/error-tracker", "build"], {
+      cwd: MONOREPO_ROOT,
+      encoding: "utf-8",
+      stdio: "pipe",
+    });
+  }, 60_000);
 
   test.each([
     "dist/index.js",

@@ -115,7 +115,7 @@ describe("resolveStack — deferred destroy() on cache eviction", () => {
     const GRACE_MS = 40;
     const frameFor = (i: number) => `TypeError: test\n    at defer${i}.js:1:0`;
     const expectedFor = (i: number) =>
-      `TypeError: test\n    at deferFn${i} (DeferOriginal${i}.tsx:1:0)`;
+      `TypeError: test\n    at deferFn${i} (DeferOriginal${i}.tsx:1:1)`;
 
     // Spying on a probe instance's prototype reaches every BasicSourceMapConsumer
     // instance the resolver creates: source-map's factory always returns the
@@ -190,7 +190,7 @@ describe("resolveStack — deferred destroy() on cache eviction", () => {
     const GRACE_MS = 40;
     const frameFor = (i: number) => `TypeError: test\n    at defer${i}.js:1:0`;
     const expectedFor = (i: number) =>
-      `TypeError: test\n    at deferFn${i} (DeferOriginal${i}.tsx:1:0)`;
+      `TypeError: test\n    at deferFn${i} (DeferOriginal${i}.tsx:1:1)`;
 
     const realReadFile = fsp.readFile.bind(fsp);
     let readCount = 0;
@@ -351,7 +351,7 @@ describe("resolveStack", () => {
     const rawStack = `TypeError: test\n    at http://localhost:3000/_next/static/chunks/app.js:1:0`;
     const result = await resolveStack(rawStack, { sourceMapDir: testMapDir });
     expect(result).toBe(
-      "TypeError: test\n    at handleClick (../src/components/Dashboard.tsx:5:0)"
+      "TypeError: test\n    at handleClick (../src/components/Dashboard.tsx:5:1)"
     );
   });
 
@@ -361,7 +361,7 @@ describe("resolveStack", () => {
     });
     const lines = result.split("\n");
     expect(lines[1]).toBe(
-      "    at handleClick (../src/components/Dashboard.tsx:5:0)"
+      "    at handleClick (../src/components/Dashboard.tsx:5:1)"
     );
     expect(lines[2]).toBe(
       "    at processTicksAndRejections (node:internal/process/task_queues:95:5)"
@@ -419,7 +419,7 @@ describe("resolveStack — async read with in-flight dedup", () => {
     try {
       const rawStack = `TypeError: test\n    at http://localhost:3000/_next/static/chunks/app.js:1:0`;
       const expected =
-        "TypeError: test\n    at handleClick (../src/components/Dashboard.tsx:5:0)";
+        "TypeError: test\n    at handleClick (../src/components/Dashboard.tsx:5:1)";
 
       // Five concurrent resolutions all miss the cache for the same map file.
       // Without in-flight dedup, each would perform its own read and parse.
@@ -507,7 +507,7 @@ describe("getCachedConsumer — duplicate load discard", () => {
     try {
       const rawStack = "TypeError: test\n    at dup.js:1:0";
       const expected =
-        "TypeError: test\n    at handleClick (../src/components/Dashboard.tsx:5:0)";
+        "TypeError: test\n    at handleClick (../src/components/Dashboard.tsx:5:1)";
 
       // Populate the cache for this path the normal way.
       const first = await resolveStack(rawStack, { sourceMapDir: dir });
@@ -584,7 +584,7 @@ describe("resolveStack — true LRU eviction", () => {
     const CACHE_LIMIT = 20;
     const frameFor = (i: number) => `TypeError: test\n    at lru${i}.js:1:0`;
     const expectedFor = (i: number) =>
-      `TypeError: test\n    at fn${i} (Original${i}.tsx:1:0)`;
+      `TypeError: test\n    at fn${i} (Original${i}.tsx:1:1)`;
 
     try {
       for (let i = 0; i < CACHE_LIMIT; i++) {
@@ -635,6 +635,89 @@ describe("resolveStack — true LRU eviction", () => {
       expect(survivorResult).toBe(expectedFor(0));
     } finally {
       rmSync(lruDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("resolveStack — column translation (1-based to 0-based)", () => {
+  test("translates a 1-based stack column to the 0-based mapping and formats the result back as 1-based", async () => {
+    // JavaScript stack traces report 1-based columns; SourceMapConsumer
+    // expects and returns 0-based columns. This fixture's only mapping sits
+    // at a non-zero generated column so the translation is actually exercised
+    // (a mapping at column 0 would still hit after Math.max(0, col - 1)).
+    const colDir = join(tmpdir(), `error-tracker-column-${Date.now()}`);
+    mkdirSync(colDir, { recursive: true });
+    const generator = new SourceMapGenerator({ file: "app.js" });
+    generator.addMapping({
+      generated: { line: 1, column: 41 },
+      original: { line: 7, column: 13 },
+      source: "Column.tsx",
+      name: "onClick",
+    });
+    writeFileSync(join(colDir, "app.js.map"), generator.toString(), "utf-8");
+
+    try {
+      // Stack column 42 (1-based) translates to lookup column 41 (0-based),
+      // which hits the mapping. The original column 13 (0-based) comes back
+      // formatted as 14 (1-based).
+      const hit = await resolveStack("TypeError: test\n    at app.js:1:42", {
+        sourceMapDir: colDir,
+      });
+      expect(hit).toBe("TypeError: test\n    at onClick (Column.tsx:7:14)");
+
+      // Stack column 41 (1-based) translates to lookup column 40, one short
+      // of the mapping at column 41. Under GREATEST_LOWER_BOUND bias that
+      // finds no mapping, proving the -1 translation is applied on input
+      // rather than skipped (untranslated, column 41 would hit directly).
+      const miss = await resolveStack("TypeError: test\n    at app.js:1:41", {
+        sourceMapDir: colDir,
+      });
+      expect(miss).toBe("TypeError: test\n    at app.js:1:41");
+    } finally {
+      rmSync(colDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("resolveStack — negative-caches corrupt maps", () => {
+  test("a corrupt map is read once, then the negative cache is reused on repeat lookups", async () => {
+    const corruptDir = join(
+      tmpdir(),
+      `error-tracker-corrupt-negcache-${Date.now()}`
+    );
+    mkdirSync(corruptDir, { recursive: true });
+    writeFileSync(
+      join(corruptDir, "app.js.map"),
+      "not-valid-json{{{{",
+      "utf-8"
+    );
+
+    const realReadFile = fsp.readFile.bind(fsp);
+    let readCount = 0;
+    const spy = spyOn(fsp, "readFile").mockImplementation((...args: any[]) => {
+      readCount++;
+      return (realReadFile as any)(...args);
+    });
+
+    try {
+      const rawStack = "TypeError: test\n  at fn (app.js:1:1)";
+
+      const result1 = await resolveStack(rawStack, {
+        sourceMapDir: corruptDir,
+      });
+      expect(result1).toBe(rawStack);
+      expect(readCount).toBe(1);
+
+      const result2 = await resolveStack(rawStack, {
+        sourceMapDir: corruptDir,
+      });
+      expect(result2).toBe(rawStack);
+      // A corrupt map is a stable condition: the second lookup for the same
+      // path is served from the negative cache, no additional read attempt.
+      expect(readCount).toBe(1);
+    } finally {
+      spy.mockRestore();
+      rmSync(corruptDir, { recursive: true, force: true });
     }
   });
 });

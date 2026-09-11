@@ -78,7 +78,9 @@ function buildSourceMap(): string {
 
 const MINIFIED_STACK = [
   MESSAGE,
-  "    at http://localhost:3000/_next/static/chunks/app.js:1:100",
+  // 1-based stack column 101 translates to the 0-based generated column 100
+  // the fixture map above maps from.
+  "    at http://localhost:3000/_next/static/chunks/app.js:1:101",
 ].join("\n");
 
 let sourceMapDir: string;
@@ -217,7 +219,7 @@ describe("createErrorHandlers source map resolution", () => {
     const row = await readOnlyClientError();
     const resolvedStack = String(row.resolvedStack);
     expect(resolvedStack).toContain(
-      "handleClick (../src/components/Dashboard.tsx:42:8)"
+      "handleClick (../src/components/Dashboard.tsx:42:9)"
     );
     expect(row.stack).toBe(MINIFIED_STACK);
     expect(fingerprint).toBe(
@@ -254,7 +256,7 @@ describe("createErrorHandlers source map resolution", () => {
 
     const row = await readOnlyClientError();
     expect(String(row.resolvedStack)).toContain(
-      "handleClick (../src/components/Dashboard.tsx:42:8)"
+      "handleClick (../src/components/Dashboard.tsx:42:9)"
     );
   });
 

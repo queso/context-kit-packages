@@ -118,8 +118,17 @@ async function loadConsumer(
     }
     throw err;
   }
-  const sourceMap = JSON.parse(rawMap);
-  return await new SourceMapConsumer(sourceMap);
+  try {
+    const sourceMap = JSON.parse(rawMap);
+    return await new SourceMapConsumer(sourceMap);
+  } catch (err) {
+    // A corrupt map (bad JSON, or content SourceMapConsumer itself rejects)
+    // is a stable condition, not a transient read failure: remember it so
+    // the next lookup for this path skips straight to the fallback instead
+    // of re-reading and re-parsing the same garbage on every request.
+    rememberMiss(mapFilePath);
+    throw err;
+  }
 }
 
 async function getCachedConsumer(
@@ -243,14 +252,23 @@ export async function resolveStack(
 
       try {
         const consumer = await getCachedConsumer(mapFilePath);
+        // Stack traces report 1-based columns; SourceMapConsumer expects and
+        // returns 0-based columns. Translate at this boundary rather than
+        // anywhere else, so every other line in this module can treat
+        // "column" as whichever convention its own source uses.
         const pos = consumer.originalPositionFor({
           line: parsed.line,
-          column: parsed.column,
+          column: Math.max(0, parsed.column - 1),
         });
         if (pos.source) {
+          // pos.column is typed nullable even though source-map only leaves
+          // it null alongside a null source; formatting it unchanged (rather
+          // than `+ 1`) preserves that edge case's prior behavior.
+          const originalColumn =
+            pos.column === null ? pos.column : pos.column + 1;
           const sourceName = pos.name
-            ? `${pos.name} (${pos.source}:${pos.line}:${pos.column})`
-            : `${pos.source}:${pos.line}:${pos.column}`;
+            ? `${pos.name} (${pos.source}:${pos.line}:${originalColumn})`
+            : `${pos.source}:${pos.line}:${originalColumn}`;
           resolved.push(`${parsed.prefix}${sourceName}`);
         } else {
           resolved.push(line);

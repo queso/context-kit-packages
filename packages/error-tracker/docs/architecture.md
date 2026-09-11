@@ -118,11 +118,14 @@ src/
 │   ├── sqlite.ts         # client_error table for SQLite
 │   └── postgres.ts       # client_error table for PostgreSQL
 └── server/
+    ├── auth.ts           # Constant-time token comparison + prod no-token warning
+    ├── connect.ts        # DATABASE_URL parsing and driver selection for the CLI
     ├── ingestion.ts      # POST handler + fingerprint + upsert
     ├── query.ts          # GET handler with filters
     ├── rate-limiter.ts   # Per-IP fixed-window rate limiting
     ├── source-map-resolver.ts  # Stack resolution with LRU cache
-    └── parse-stack.ts    # Shared V8 stack frame regex parser
+    ├── parse-stack.ts    # Shared V8 stack frame regex parser
+    └── store.ts          # The package's only database access point (per-dialect Drizzle store behind one interface)
 ```
 
 ## Package Exports
