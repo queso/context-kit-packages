@@ -320,6 +320,8 @@ Install whichever one your app uses. It is already there if you are running on t
 
 `--limit` must be a positive integer and `--since` must be a valid date; either one failing that check is a usage error. A flag missing its value, or immediately followed by another flag, is also a usage error. Any usage error exits 1.
 
+The binary is named `error-tracker` and is installed by the `@context-kit/error-tracker` dependency, so `npx error-tracker` (or `bunx error-tracker`) runs it from your project's `node_modules`. Run it from the project directory. Do not run it in a project that does not have the package installed: `npx` would then download whatever unrelated package owns the unscoped `error-tracker` name on npm.
+
 ### Tail recent errors
 
 ```bash
@@ -351,7 +353,7 @@ await runTail({ db, dialect: getDialect(), limit: 20, env: "production" });
 await runResolve({ db, dialect: getDialect(), fingerprint: "abc123..." });
 ```
 
-`db` and `dialect` are the same pair `createErrorHandlers` takes. Pass both or neither: with `db` omitted, the functions connect from `DATABASE_URL` the way the binary does. `runTail` also accepts `since` as a `Date`. The `exitOnComplete` flag is what the binary sets to exit the process; leave it off in a script.
+`db` and `dialect` are the same pair `createErrorHandlers` takes. Pass both or neither: with `db` omitted, the functions connect from `DATABASE_URL` the way the binary does. Failures are thrown, not printed: invalid options throw `CliUsageError`, a missing `DATABASE_URL` or `dialect` throws `CliConfigError`, and `runResolve` with no open error for the fingerprint throws `NotFoundError`. All three classes are exported from the same entry point. Only the binary turns them into messages and exit code 1. `runTail` also accepts `since` as a `Date`. The `exitOnComplete` flag is what the binary sets to exit the process; leave it off in a script.
 
 ## Configuration Examples
 

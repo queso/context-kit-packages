@@ -22,19 +22,45 @@ const DEFAULT_SOURCE_MAP_DIR = ".next/static/chunks";
 // (e.g. "../../etc/passwd") and anything outside word/dot/dash characters.
 const SAFE_MAP_FILENAME_RE = /^[\w.-]+\.(m?js)$/;
 
-// Map file paths that were probed and did not exist. Bounded so repeated
-// misses for the same chunk (a very common case — most frames belong to
-// chunks with no source map at all) skip re-probing the filesystem. Cleared
-// wholesale on overflow rather than evicting individually: it is a cheap
-// negative cache, not a source of truth.
-const negativeMapCache = new Set<string>();
+// Map file paths that were probed and did not exist, keyed to the timestamp
+// of the miss. Bounded so repeated misses for the same chunk (a very common
+// case — most frames belong to chunks with no source map at all) skip
+// re-probing the filesystem. Cleared wholesale on overflow rather than
+// evicting individually: it is a cheap negative cache, not a source of
+// truth. Entries expire after NEGATIVE_CACHE_TTL_MS so a map file added by a
+// later deploy gets picked up instead of being remembered as missing forever.
+const negativeMapCache = new Map<string, number>();
 const NEGATIVE_CACHE_LIMIT = 200;
+const DEFAULT_NEGATIVE_CACHE_TTL_MS = 60_000;
+let negativeCacheTtlMs = DEFAULT_NEGATIVE_CACHE_TTL_MS;
+
+// Test-only: shortens (or restores) the negative-cache TTL so tests don't
+// have to wait out the real 60s window. Never called from production code.
+export function __setNegativeCacheTtlMs(ms?: number): void {
+  negativeCacheTtlMs = ms ?? DEFAULT_NEGATIVE_CACHE_TTL_MS;
+}
 
 function rememberMiss(mapPath: string): void {
   if (negativeMapCache.size >= NEGATIVE_CACHE_LIMIT) {
     negativeMapCache.clear();
   }
-  negativeMapCache.add(mapPath);
+  negativeMapCache.set(mapPath, Date.now());
+}
+
+// A path counts as a remembered miss only while its stamp is within the TTL.
+// A stale entry is deleted here (rather than left for rememberMiss to
+// overwrite) so it stops occupying a slot in the bounded cache the moment it
+// expires, and so the caller falls through to probing the filesystem again.
+function isRecentMiss(mapPath: string): boolean {
+  const stamp = negativeMapCache.get(mapPath);
+  if (stamp === undefined) {
+    return false;
+  }
+  if (Date.now() - stamp < negativeCacheTtlMs) {
+    return true;
+  }
+  negativeMapCache.delete(mapPath);
+  return false;
 }
 
 // A missing-file error from the read itself (not a corrupt map, not a
@@ -245,7 +271,7 @@ export async function resolveStack(
       }
 
       const mapFilePath = getMapFilePath(sourceMapDir, parsed.file);
-      if (!mapFilePath || negativeMapCache.has(mapFilePath)) {
+      if (!mapFilePath || isRecentMiss(mapFilePath)) {
         resolved.push(line);
         continue;
       }

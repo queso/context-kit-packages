@@ -75,12 +75,21 @@ function simulateWindowError(
   }
 }
 
-function simulateUnhandledRejection(reason: unknown) {
+function simulateUnhandledRejection(reason: unknown): PromiseRejectionEvent {
+  const promise = Promise.reject(reason);
+  // Bun (like a browser) can independently notice this real promise was never
+  // handled and treat it as an unhandled rejection of its own, separate from
+  // the synthetic event dispatched below. That used to be masked by the
+  // listener's unconditional `preventDefault()`; now that preventDefault is
+  // gated on config.patchConsoleError, an ungated test would otherwise fail
+  // the run over a promise no test code actually cares about catching.
+  promise.catch(() => {});
   const event = new PromiseRejectionEvent("unhandledrejection", {
-    promise: Promise.reject(reason),
+    promise,
     reason,
   });
   globalThis.dispatchEvent(event);
+  return event;
 }
 
 // ─── Import target ────────────────────────────────────────────────────────────
@@ -360,5 +369,32 @@ describe("initErrorTracker — config passthrough", () => {
     expect(calledConfig?.endpoint).toBe(
       "https://custom.example.com/api/errors"
     );
+  });
+});
+
+describe("initErrorTracker — preventDefault gating on patchConsoleError", () => {
+  test("prevents the default unhandled-rejection reporting when patchConsoleError is true", async () => {
+    mockReportError.mockClear();
+    const cleanup = initErrorTracker({
+      ...TEST_CONFIG,
+      patchConsoleError: true,
+    });
+    const event = simulateUnhandledRejection(new Error("gated rejection"));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(mockReportError).toHaveBeenCalledTimes(1);
+    cleanup();
+  });
+
+  test("leaves the runtime's default unhandled-rejection reporting alone when patchConsoleError is not set", async () => {
+    mockReportError.mockClear();
+    const cleanup = initErrorTracker(TEST_CONFIG);
+    const event = simulateUnhandledRejection(new Error("ungated rejection"));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(mockReportError).toHaveBeenCalledTimes(1);
+    cleanup();
   });
 });

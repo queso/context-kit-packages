@@ -67,8 +67,10 @@ export function initErrorTracker(config: ErrorTrackerConfig): () => void {
   };
 
   const onUnhandledRejection = (event: PromiseRejectionEvent) => {
-    // Prevent bun/browser from logging the unhandled rejection as an error
-    if (typeof event.preventDefault === "function") {
+    // Only suppress the runtime's default unhandled-rejection reporting when
+    // the adopter opted into patchConsoleError. Otherwise an app that never
+    // enabled it would see unhandled rejections vanish from the console.
+    if (config.patchConsoleError && typeof event.preventDefault === "function") {
       event.preventDefault();
     }
     const { message, stack } = serializeReason(event.reason);

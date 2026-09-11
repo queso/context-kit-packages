@@ -65,6 +65,10 @@ const { ErrorBoundary } = await import("../error-boundary");
 const originalConsoleError = console.error;
 beforeEach(() => {
   mockReportError.mockClear();
+  // Reset in case a preceding test (e.g. "does not throw when reportError
+  // fails internally") replaced the implementation and its own restore never
+  // ran because an assertion before it threw.
+  mockReportError.mockImplementation(() => undefined);
   // Suppress React's "The above error occurred in" noise during error boundary tests
   console.error = (...args: unknown[]) => {
     const msg = args[0];
@@ -185,9 +189,6 @@ describe("ErrorBoundary", () => {
     }).not.toThrow();
 
     screen.getByText("fallback shown");
-
-    // Restore
-    mockReportError.mockImplementation(() => undefined);
   });
 });
 

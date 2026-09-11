@@ -32,14 +32,15 @@ interface Session {
 
 /**
  * Resolves the database for a command: the caller's Drizzle instance when one
- * is passed, otherwise a connection opened from DATABASE_URL. Returns null
- * (after printing why) when there is nothing to connect to, so the caller can
- * exit 1 without a stack trace.
+ * is passed, otherwise a connection opened from DATABASE_URL. Throws
+ * `CliConfigError` when there is nothing to connect to, so a programmatic
+ * caller gets a catchable rejection rather than the process being killed out
+ * from under it; `main()` is the only place that turns that into `exit(1)`.
  */
-async function openSession(options: DatabaseOptions): Promise<Session | null> {
+async function openSession(options: DatabaseOptions): Promise<Session> {
   if (options.db) {
     if (!options.dialect) {
-      throw new Error(
+      throw new CliConfigError(
         'A `dialect` is required alongside `db`. Pass `getDialect()` from "@/db" with your Drizzle instance.'
       );
     }
@@ -51,10 +52,9 @@ async function openSession(options: DatabaseOptions): Promise<Session | null> {
 
   const url = process.env.DATABASE_URL;
   if (!url) {
-    console.error(
-      "Error: DATABASE_URL is not set. Set it to your database URL (e.g. sqlite:./data/dev.sqlite), or pass a Drizzle instance as the `db` option."
+    throw new CliConfigError(
+      "DATABASE_URL is not set. Set it to your database URL (e.g. sqlite:./data/dev.sqlite), or pass a Drizzle instance as the `db` option."
     );
-    return null;
   }
 
   const connection = await connectFromDatabaseUrl(url);
@@ -67,27 +67,18 @@ async function openSession(options: DatabaseOptions): Promise<Session | null> {
 export async function runTail(options: TailOptions): Promise<void> {
   // Validate before touching the database so a bad option never opens a
   // connection it is about to throw away; programmatic callers get the same
-  // protection the CLI arg parser gives `tail`.
+  // protection the CLI arg parser gives `tail`. Thrown, not printed-and-exited,
+  // so a library consumer gets a catchable rejection instead of the process
+  // being killed out from under it.
   const limit = options.limit ?? 20;
   if (!Number.isInteger(limit) || limit < 1) {
-    console.error(`Error: ${LIMIT_USAGE_ERROR}`);
-    printUsage();
-    process.exit(1);
-    return;
+    throw new CliUsageError(LIMIT_USAGE_ERROR);
   }
   if (options.since !== undefined && Number.isNaN(options.since.getTime())) {
-    console.error(`Error: ${SINCE_USAGE_ERROR}`);
-    printUsage();
-    process.exit(1);
-    return;
+    throw new CliUsageError(SINCE_USAGE_ERROR);
   }
 
   const session = await openSession(options);
-
-  if (!session) {
-    process.exit(1);
-    return;
-  }
 
   try {
     const { errors } = await session.store.list({
@@ -138,11 +129,6 @@ export async function runTail(options: TailOptions): Promise<void> {
 export async function runResolve(options: ResolveOptions): Promise<void> {
   const session = await openSession(options);
 
-  if (!session) {
-    process.exit(1);
-    return;
-  }
-
   let updated: number;
   try {
     updated = await session.store.resolve(options.fingerprint);
@@ -156,13 +142,13 @@ export async function runResolve(options: ResolveOptions): Promise<void> {
   await session.close();
 
   // The store only touches rows that are still open, so resolving an unknown
-  // or already-resolved fingerprint changes nothing and is reported as failure.
+  // or already-resolved fingerprint changes nothing and is reported as
+  // failure. Thrown, not printed-and-exited, so a library consumer gets a
+  // catchable rejection; main() adds the `Failed to resolve error:` prefix.
   if (updated === 0) {
-    console.error(
-      `Failed to resolve error: no unresolved error with fingerprint ${options.fingerprint}`
+    throw new NotFoundError(
+      `no unresolved error with fingerprint ${options.fingerprint}`
     );
-    process.exit(1);
-    return;
   }
 
   console.log(`Resolved error with fingerprint: ${options.fingerprint}`);
@@ -190,6 +176,15 @@ const SINCE_USAGE_ERROR = "--since expects a valid date";
 
 /** Thrown by `parseTailArgs` on any invalid or missing flag value. */
 export class CliUsageError extends Error {}
+
+/**
+ * Thrown by `openSession` when there is no database to run a command
+ * against: `DATABASE_URL` is unset, or `db` was passed without `dialect`.
+ */
+export class CliConfigError extends Error {}
+
+/** Thrown by `runResolve` when no unresolved error carries the given fingerprint. */
+export class NotFoundError extends Error {}
 
 export interface TailArgs {
   limit: number;
@@ -245,35 +240,61 @@ export function parseTailArgs(args: string[]): TailArgs {
   return { limit, env, since };
 }
 
-// CLI entry point
-async function main(): Promise<void> {
-  const args = process.argv.slice(2);
+/**
+ * Runs `fn` (a `tail` or `resolve` invocation) and turns the errors
+ * `runTail`/`runResolve`/`parseTailArgs` throw for programmatic callers back
+ * into the binary's original printed messages and `exit(1)`. Any other error
+ * is rethrown so the top-level `main().catch(...)` catch-all handles it.
+ */
+async function runCommand(fn: () => Promise<void>): Promise<void> {
+  try {
+    await fn();
+  } catch (err) {
+    if (err instanceof NotFoundError) {
+      console.error(`Failed to resolve error: ${err.message}`);
+    } else if (err instanceof CliUsageError) {
+      console.error(`Error: ${err.message}`);
+      printUsage();
+    } else if (err instanceof CliConfigError) {
+      console.error(`Error: ${err.message}`);
+    } else {
+      throw err;
+    }
+    process.exit(1);
+  }
+}
+
+/**
+ * The CLI's command dispatcher, given the process's `argv`. Exported (rather
+ * than only `main`) so it can be exercised directly in tests via the same
+ * `process.exit` stub the rest of the CLI tests use.
+ */
+export async function runMain(argv: string[]): Promise<void> {
+  const args = argv.slice(2);
   const command = args[0];
 
   if (command === "tail") {
-    let parsed: TailArgs;
-    try {
-      parsed = parseTailArgs(args.slice(1));
-    } catch (err) {
-      if (!(err instanceof CliUsageError)) throw err;
-      console.error(`Error: ${err.message}`);
-      printUsage();
-      process.exit(1);
-      return;
-    }
-
-    await runTail({ ...parsed, exitOnComplete: true });
+    await runCommand(async () => {
+      const parsed = parseTailArgs(args.slice(1));
+      await runTail({ ...parsed, exitOnComplete: true });
+    });
   } else if (command === "resolve") {
     const fingerprint = args[1];
     if (!fingerprint) {
       console.error("Usage: error-tracker resolve <fingerprint>");
       process.exit(1);
+      return;
     }
-    await runResolve({ fingerprint, exitOnComplete: true });
+    await runCommand(() => runResolve({ fingerprint, exitOnComplete: true }));
   } else {
     printUsage();
     process.exit(1);
   }
+}
+
+// CLI entry point
+async function main(): Promise<void> {
+  await runMain(process.argv);
 }
 
 // Only run main when executed directly as a script. Comparing file URLs

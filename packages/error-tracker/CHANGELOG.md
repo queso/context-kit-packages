@@ -32,6 +32,10 @@ First release. Client-side error tracking for Next.js App Router apps, stored in
 - Source map resolution reads maps asynchronously, dedups concurrent loads of the same file so simultaneous errors share one read, evicts its cache with true LRU (20 entries), validates chunk filenames against `[\w.-]+\.m?js` before touching the filesystem, and remembers a missing map so it is not reprobed on later reports
 - Ingestion stores the client-reported `environment` from the payload when it is a non-empty string (truncated to 64 characters), falling back to the server's `NODE_ENV` (`development` when unset) when the payload omits it
 
+- `runTail` and `runResolve` throw `CliUsageError`, `CliConfigError` or `NotFoundError` for programmatic callers; only the `error-tracker` binary prints them and exits 1
+- The `unhandledrejection` listener calls `preventDefault()` only when `patchConsoleError` is enabled, so the browser console keeps reporting rejections by default
+- Missing or corrupt source maps are remembered for 60 seconds, then re-probed
+
 ### Compared to the unreleased Prisma draft
 
 This package was drafted against Prisma and never published. The storage layer is Drizzle instead, and the dedup logic is a fix rather than a port.

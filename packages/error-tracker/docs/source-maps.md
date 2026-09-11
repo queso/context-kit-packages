@@ -65,7 +65,7 @@ When source maps are unavailable, the error-tracker stores the raw minified stac
 
 Parsed `SourceMapConsumer` instances are cached in memory (up to 20 entries, LRU eviction) to avoid re-reading and re-parsing the same `.map` files on repeated errors. This is important for error storms where the same source file produces many errors in quick succession.
 
-Map files are read asynchronously. When several errors reference the same file at once and none of them has a cached entry yet, the loads are deduped: only one read of that file happens, and every caller waits on it rather than each issuing its own read. When a map file is missing, the resolver remembers that outcome and does not check the filesystem again for the same file on later errors.
+Map files are read asynchronously. When several errors reference the same file at once and none of them has a cached entry yet, the loads are deduped: only one read of that file happens, and every caller waits on it rather than each issuing its own read. When a map file is missing, the resolver remembers that outcome and does not check the filesystem again for the same file on later errors, but that memory expires after 60 seconds so a map added by a later deploy gets picked up.
 
 ## File Resolution
 

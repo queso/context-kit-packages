@@ -73,6 +73,7 @@ const {
   resolveStack,
   __setEvictedConsumerGraceMs,
   __reconcileLoadedConsumerForTest,
+  __setNegativeCacheTtlMs,
 } = await import("../server/source-map-resolver");
 
 // ─── deferred destroy() on eviction ──────────────────────────────────────────
@@ -821,6 +822,59 @@ describe("resolveStack — filename validation and negative cache", () => {
     } finally {
       spy.mockRestore();
       rmSync(eisdirDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a negative-cache entry expires after its TTL and is re-probed", async () => {
+    const ttlDir = join(tmpdir(), `error-tracker-negcache-ttl-${Date.now()}`);
+    mkdirSync(ttlDir, { recursive: true });
+
+    const realReadFile = fsp.readFile.bind(fsp);
+    let readCount = 0;
+    const spy = spyOn(fsp, "readFile").mockImplementation((...args: any[]) => {
+      readCount++;
+      return (realReadFile as any)(...args);
+    });
+
+    const TTL_MS = 30;
+
+    try {
+      __setNegativeCacheTtlMs(TTL_MS);
+
+      const rawStack = "TypeError: test\n    at deployed-late.js:1:0";
+
+      // First lookup: no map file yet, so the read fails with ENOENT and the
+      // path is recorded as a miss.
+      const result1 = await resolveStack(rawStack, { sourceMapDir: ttlDir });
+      expect(result1).toBe(rawStack);
+      expect(readCount).toBe(1);
+
+      // Second lookup, still inside the TTL: served straight from the
+      // negative cache, no read attempted even though the miss is stale.
+      const result2 = await resolveStack(rawStack, { sourceMapDir: ttlDir });
+      expect(result2).toBe(rawStack);
+      expect(readCount).toBe(1);
+
+      // A deploy lands the previously missing map file while the negative
+      // entry is still outstanding.
+      writeFileSync(
+        join(ttlDir, "deployed-late.js.map"),
+        buildSourceMap(),
+        "utf-8"
+      );
+
+      // Wait out the TTL, then look up again: the stale miss must be
+      // discarded and the filesystem probed again, this time succeeding.
+      await new Promise((resolve) => setTimeout(resolve, TTL_MS + 20));
+      const result3 = await resolveStack(rawStack, { sourceMapDir: ttlDir });
+      expect(result3).toBe(
+        "TypeError: test\n    at handleClick (../src/components/Dashboard.tsx:5:1)"
+      );
+      expect(readCount).toBe(2);
+    } finally {
+      spy.mockRestore();
+      __setNegativeCacheTtlMs(undefined);
+      rmSync(ttlDir, { recursive: true, force: true });
     }
   });
 });

@@ -32,7 +32,7 @@ bun --filter @context-kit/error-tracker test  # run error-tracker tests
 |---------|------|--------|
 | `@context-kit/auth` | `packages/auth` | 0.2.0 — Better Auth + Drizzle |
 | `@context-kit/auth-ui` | `packages/auth-ui` | 0.1.0 — Auth UI components for Next.js App Router |
-| `@context-kit/error-tracker` | `packages/error-tracker` | 0.1.0 — Client-side error tracking stored in the app's own database via Drizzle |
+| `@context-kit/error-tracker` | `packages/error-tracker` | 0.1.0 — Client-side error tracking with a self-hosted ingestion and query API, source map resolution and a CLI, stored in the app's own database via Drizzle |
 | `@context-kit/billing` | `packages/billing` | Planned — Stripe subscriptions |
 
 ## A(i)-Team Integration

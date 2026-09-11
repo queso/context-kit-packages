@@ -10,7 +10,15 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LibSQLDatabase } from "drizzle-orm/libsql";
-import { CliUsageError, parseTailArgs, runResolve, runTail } from "../cli";
+import {
+  CliConfigError,
+  CliUsageError,
+  NotFoundError,
+  parseTailArgs,
+  runMain,
+  runResolve,
+  runTail,
+} from "../cli";
 import * as schema from "../schema/sqlite";
 import {
   captureConsole,
@@ -196,38 +204,37 @@ describe("runTail", () => {
     expect(codes).toEqual([]);
   });
 
-  test("rejects a non-finite or non-positive limit and exits 1", async () => {
-    const { out, codes } = await runCli(() =>
+  test("rejects a non-finite or non-positive limit with a catchable CliUsageError", async () => {
+    // A programmatic caller must get a rejected promise, not a killed process.
+    await expect(
       runTail({ db: testDb, dialect: DIALECT, limit: -5 })
-    );
-    expect(codes).toEqual([1]);
-    expect(out).toContain("--limit expects a positive integer");
+    ).rejects.toBeInstanceOf(CliUsageError);
+    await expect(
+      runTail({ db: testDb, dialect: DIALECT, limit: -5 })
+    ).rejects.toThrow("--limit expects a positive integer");
   });
 
-  test("rejects limit 0 and exits 1", async () => {
-    const { out, codes } = await runCli(() =>
+  test("rejects limit 0 with a catchable CliUsageError", async () => {
+    await expect(
       runTail({ db: testDb, dialect: DIALECT, limit: 0 })
-    );
-    expect(codes).toEqual([1]);
-    expect(out).toContain("--limit expects a positive integer");
+    ).rejects.toThrow("--limit expects a positive integer");
   });
 
-  test("rejects a fractional limit and exits 1", async () => {
+  test("rejects a fractional limit with a catchable CliUsageError", async () => {
     // The store hands `limit` straight to Drizzle's .limit(), which SQLite
     // and Postgres both reject for a non-integer value.
-    const { out, codes } = await runCli(() =>
+    await expect(
       runTail({ db: testDb, dialect: DIALECT, limit: 1.5 })
-    );
-    expect(codes).toEqual([1]);
-    expect(out).toContain("--limit expects a positive integer");
+    ).rejects.toThrow("--limit expects a positive integer");
   });
 
-  test("rejects an invalid `since` Date and exits 1", async () => {
-    const { out, codes } = await runCli(() =>
+  test("rejects an invalid `since` Date with a catchable CliUsageError", async () => {
+    await expect(
       runTail({ db: testDb, dialect: DIALECT, since: new Date("garbage") })
-    );
-    expect(codes).toEqual([1]);
-    expect(out).toContain("--since expects a valid date");
+    ).rejects.toBeInstanceOf(CliUsageError);
+    await expect(
+      runTail({ db: testDb, dialect: DIALECT, since: new Date("garbage") })
+    ).rejects.toThrow("--since expects a valid date");
   });
 });
 
@@ -368,33 +375,29 @@ describe("runResolve", () => {
     expect((await findClientError("fp-untouched"))?.resolvedAt).toBeNull();
   });
 
-  test("fails and exits 1 when no error carries that fingerprint", async () => {
+  test("throws a catchable NotFoundError when no error carries that fingerprint", async () => {
     await seedClientError({ fingerprint: "fp-present" });
 
-    const { out, codes } = await runCli(() =>
+    await expect(
       runResolve({ db: testDb, dialect: DIALECT, fingerprint: "fp-missing" })
-    );
-
-    expect(codes).toEqual([1]);
-    const failure = out
-      .split("\n")
-      .find((line) => line.startsWith("Failed to resolve error:"));
-    expect(failure).toContain("fp-missing");
+    ).rejects.toBeInstanceOf(NotFoundError);
+    await expect(
+      runResolve({ db: testDb, dialect: DIALECT, fingerprint: "fp-missing" })
+    ).rejects.toThrow("no unresolved error with fingerprint fp-missing");
     expect((await findClientError("fp-present"))?.resolvedAt).toBeNull();
   });
 
-  test("fails and exits 1 when the error is already resolved", async () => {
+  test("throws a catchable NotFoundError when the error is already resolved", async () => {
     const resolvedAt = new Date("2026-03-01T00:00:00.000Z");
     await seedClientError({ fingerprint: "fp-already", resolvedAt });
 
-    const { out, codes } = await runCli(() =>
-      runResolve({ db: testDb, dialect: DIALECT, fingerprint: "fp-already" })
-    );
-
-    expect(codes).toEqual([1]);
     // Only unresolved rows are eligible, so a second resolve reports failure.
-    expect(out).toContain("Failed to resolve error:");
-    expect(out).toContain("fp-already");
+    await expect(
+      runResolve({ db: testDb, dialect: DIALECT, fingerprint: "fp-already" })
+    ).rejects.toBeInstanceOf(NotFoundError);
+    await expect(
+      runResolve({ db: testDb, dialect: DIALECT, fingerprint: "fp-already" })
+    ).rejects.toThrow("no unresolved error with fingerprint fp-already");
     // The original resolution time is left alone.
     expect((await findClientError("fp-already"))?.resolvedAt).toEqual(resolvedAt);
   });
@@ -429,15 +432,32 @@ describe("CLI database connection", () => {
   test.each([
     ["runTail", () => runTail({})],
     ["runResolve", () => runResolve({ fingerprint: "fp-anything" })],
-  ])("%s exits 1 and names DATABASE_URL when it is unset", async (_name, call) => {
-    const restore = stubEnv("DATABASE_URL", undefined);
-    try {
-      const { out, codes } = await runCli(call);
-      expect(codes).toEqual([1]);
-      expect(out).toContain("DATABASE_URL");
-    } finally {
-      restore();
+  ])(
+    "%s throws a catchable CliConfigError naming DATABASE_URL when it is unset",
+    async (_name, call) => {
+      const restore = stubEnv("DATABASE_URL", undefined);
+      try {
+        await expect(call()).rejects.toBeInstanceOf(CliConfigError);
+        await expect(call()).rejects.toThrow("DATABASE_URL");
+      } finally {
+        restore();
+      }
     }
+  );
+
+  test("runTail throws a catchable CliConfigError when db is passed without dialect", async () => {
+    await expect(runTail({ db: testDb })).rejects.toBeInstanceOf(
+      CliConfigError
+    );
+    await expect(runTail({ db: testDb })).rejects.toThrow(
+      "A `dialect` is required alongside `db`"
+    );
+  });
+
+  test("runResolve throws a catchable CliConfigError when db is passed without dialect", async () => {
+    await expect(
+      runResolve({ db: testDb, fingerprint: "fp-anything" })
+    ).rejects.toBeInstanceOf(CliConfigError);
   });
 
   test("runTail reads the database DATABASE_URL points at", async () => {
@@ -520,6 +540,72 @@ describe("CLI database connection", () => {
       expect(rows[0]?.resolvedAt).toBeInstanceOf(Date);
     } finally {
       await check.close();
+    }
+  });
+});
+
+describe("runMain", () => {
+  // runMain is the thin dispatcher `main()` delegates to; these confirm it
+  // still turns a thrown CliUsageError/CliConfigError/NotFoundError (and an
+  // unknown command) into the same printed message and process.exit(1) the
+  // binary always had, now that runTail/runResolve throw instead of exiting.
+
+  test("prints usage and exits 1 for an unknown command", async () => {
+    const { out, codes } = await runCli(() =>
+      runMain(["node", "error-tracker", "bogus"])
+    );
+    expect(codes).toEqual([1]);
+    expect(out).toContain("Usage: error-tracker <tail|resolve> [options]");
+  });
+
+  test("prints Error: <message> and usage, then exits 1, for a bad flag", async () => {
+    const { out, codes } = await runCli(() =>
+      runMain(["node", "error-tracker", "tail", "--limmit", "50"])
+    );
+    expect(codes).toEqual([1]);
+    expect(out).toContain("Error: Unknown option: --limmit");
+    expect(out).toContain("Usage: error-tracker <tail|resolve> [options]");
+  });
+
+  test("prints Error: <message> and exits 1 when DATABASE_URL is unset", async () => {
+    const restore = stubEnv("DATABASE_URL", undefined);
+    try {
+      const { out, codes } = await runCli(() =>
+        runMain(["node", "error-tracker", "tail"])
+      );
+      expect(codes).toEqual([1]);
+      expect(out).toContain("Error: DATABASE_URL is not set");
+    } finally {
+      restore();
+    }
+  });
+
+  test("keeps the `Failed to resolve error:` prefix for a NotFoundError", async () => {
+    const file = join(workDir, "runmain-resolve-missing.db");
+    const { connectFromDatabaseUrl } = await import("../server/connect");
+    const { db, close } = await connectFromDatabaseUrl(`sqlite:${file}`);
+    try {
+      const { pushSQLiteSchema } = await import("drizzle-kit/api");
+      const { apply } = await pushSQLiteSchema(
+        schema,
+        db as Parameters<typeof pushSQLiteSchema>[1]
+      );
+      await apply();
+    } finally {
+      await close();
+    }
+
+    const restore = stubEnv("DATABASE_URL", `sqlite:${file}`);
+    try {
+      const { out, codes } = await runCli(() =>
+        runMain(["node", "error-tracker", "resolve", "fp-missing"])
+      );
+      expect(codes).toEqual([1]);
+      expect(out).toContain(
+        "Failed to resolve error: no unresolved error with fingerprint fp-missing"
+      );
+    } finally {
+      restore();
     }
   });
 });
