@@ -1,13 +1,13 @@
 # Source Map Resolution
 
-The error-tracker resolves minified production stack traces back to original source code on the server side. Source maps are read from the filesystem — they are never served publicly.
+The error-tracker resolves minified production stack traces back to original source code on the server side. Source maps are read from the filesystem. They are never served publicly.
 
 ## How It Works
 
 1. Client catches an error and sends the raw (minified) stack trace to `POST /api/errors`
 2. The server's `createErrorHandlers` wrapper checks if `sourceMapDir` is configured
 3. If configured, it reads each frame's file reference, finds the corresponding `.map` file, and uses the `source-map` npm package to resolve original file, line, and column
-4. The resolved stack is stored in `resolvedStack`; the raw stack is preserved in `stack`
+4. The resolved stack is stored in the `resolved_stack` column; the raw stack is preserved in `stack`
 5. If resolution fails for any frame (missing map, corrupt file), the raw frame is kept
 
 ## Next.js Configuration
@@ -25,15 +25,18 @@ export default nextConfig;
 
 This writes `.map` files alongside the JS chunks in `.next/static/chunks/`.
 
-**Important:** This only affects the build output on disk. The `.map` files are **not** served as static assets unless you explicitly configure that (don't — the error-tracker reads them from the filesystem instead).
+**Important:** This only affects the build output on disk. The `.map` files are **not** served as static assets unless you explicitly configure that. Don't: the error-tracker reads them from the filesystem instead.
 
 ## Server Configuration
 
 Pass `sourceMapDir` to `createErrorHandlers`:
 
-```typescript
+```ts
+import { db, getDialect } from "@/db";
+
 const handlers = createErrorHandlers({
-  prisma,
+  db,
+  dialect: getDialect(),
   sourceMapDir: ".next/static/chunks",
 });
 ```
@@ -44,15 +47,15 @@ The default path (when not configured) is `.next/static/chunks`, which matches t
 
 Source map resolution requires that the `.next/` build output directory is present on the server at runtime. This is true for:
 
-- **Self-hosted Node.js** (`next start`) — the standard case
-- **Docker deployments** — ensure the `.next/` directory is included in the image
-- **PM2 / systemd deployments** — the app runs from the project directory
+- **Self-hosted Node.js** (`next start`): the standard case
+- **Docker deployments**: ensure the `.next/` directory is included in the image
+- **PM2 / systemd deployments**: the app runs from the project directory
 
 This does **not** work on:
 
-- **Vercel Edge Runtime** — no filesystem access; source maps cannot be read
-- **Cloudflare Workers** — same limitation
-- **Serverless functions** with stripped build artifacts — if `.next/static/` is not deployed, resolution is silently skipped
+- **Vercel Edge Runtime**: no filesystem access, so source maps cannot be read
+- **Cloudflare Workers**: same limitation
+- **Serverless functions** with stripped build artifacts: if `.next/static/` is not deployed, resolution is skipped
 
 When source maps are unavailable, the error-tracker stores the raw minified stack trace and continues normally. No error is thrown.
 

@@ -1,68 +1,104 @@
 # @context-kit/error-tracker
 
-Client-side error tracking for Next.js App Router apps. Captures React render crashes, unhandled promise rejections, and `window.onerror` events, then stores them in your app's own Postgres database via Prisma. No external service required.
+Client-side error tracking for Next.js App Router apps. Captures React render crashes, unhandled promise rejections, and `window.onerror` events, then stores them in your app's own database through your Drizzle instance. SQLite and PostgreSQL are both supported. No external service required.
 
 ## Features
 
-- **Error Boundary** — React component that catches render errors and reports them
-- **Global Error Listeners** — Captures `window.onerror` and `unhandledrejection` events
-- **Fire-and-Forget Reporter** — Non-blocking error reporting with loop prevention
-- **Server Ingestion** — Route handler that validates, deduplicates, and stores errors
-- **Source Map Resolution** — Resolves minified stack traces on the server using build-time source maps
-- **Query API** — Retrieve and filter stored errors with offset-based pagination
-- **Rate Limiting** — Per-IP rate limiting on the ingestion endpoint
-- **Console Patching** — Optionally capture `console.error` calls (opt-in)
-- **Deduplication** — Same error fingerprints are collapsed into one row with an occurrence counter
-- **CLI** — `npx error-tracker tail` and `npx error-tracker resolve <fingerprint>`
+- **Error Boundary** - React component that catches render errors and reports them
+- **Global Error Listeners** - Captures `window.onerror` and `unhandledrejection` events
+- **Fire-and-Forget Reporter** - Non-blocking error reporting with loop prevention
+- **Server Ingestion** - Route handler that validates, fingerprints, and upserts errors
+- **Drizzle Schema Modules** - One `client_error` table, shipped for SQLite and Postgres, re-exported from your own schema file
+- **Source Map Resolution** - Resolves minified stack traces on the server using build-time source maps
+- **Query API** - Retrieve and filter stored errors with offset-based pagination
+- **Rate Limiting** - Per-IP rate limiting on the ingestion endpoint
+- **Console Patching** - Optionally capture `console.error` calls (opt-in)
+- **Deduplication** - One row per fingerprint, with an occurrence counter the database increments
+- **CLI** - `npx error-tracker tail` and `npx error-tracker resolve <fingerprint>`
 
-## Quick Start
-
-### 1. Install
+## Installation
 
 ```bash
 bun add @context-kit/error-tracker
-# or
-npm install @context-kit/error-tracker
 ```
 
-### 2. Add the Prisma model
+### Peer Dependencies
 
-Copy the model from `node_modules/@context-kit/error-tracker/prisma/error-tracker.prisma` into your schema, or paste it directly:
+- `drizzle-orm` >= 0.41.0
+- `next` >= 14.0.0, `react` >= 18.0.0, `react-dom` >= 18.0.0
+- `@libsql/client` >= 0.14.0 (optional, used only by the CLI against a `sqlite:` `DATABASE_URL`)
+- `postgres` >= 3.4.0 (optional, used only by the CLI against a `postgres://` `DATABASE_URL`)
 
-```prisma
-model ClientError {
-  id             String    @id @default(cuid())
-  message        String
-  stack          String?
-  componentStack String?
-  resolvedStack  String?
-  fingerprint    String    @unique
-  occurrences    Int       @default(1)
-  environment    String
-  url            String?
-  userAgent      String?
-  resolvedAt     DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  lastSeenAt     DateTime
-}
+Keep a single copy of `drizzle-orm` in your app. The package's table must come from the same `drizzle-orm` your app's `db` instance was built with.
+
+The two driver packages are optional because the CLI loads only the one your `DATABASE_URL` names. Your app already depends on the driver it uses, so you do not install anything extra.
+
+## Database Schema
+
+The package ships the `client_error` table as a Drizzle schema module, one per dialect. Re-export the module for your dialect from your app's schema file:
+
+```ts
+// db/schema/sqlite.ts
+export * from "@context-kit/error-tracker/schema/sqlite";
 ```
 
-Then migrate:
+```ts
+// db/schema/postgres.ts
+export * from "@context-kit/error-tracker/schema/postgres";
+```
+
+While your app still carries both schema files, add the line to both so the two stay in sync. Then generate and apply the migration:
 
 ```bash
-bunx prisma migrate dev --name add_client_errors
+bun run db:generate   # writes a plain-SQL migration creating the client_error table
+bun run db:migrate
 ```
 
-### 3. Mount route handlers
+Your app owns the migration history. When a future version of this package changes the schema, your next `bun run db:generate` produces the diff migration. Review it and commit it like any other.
 
-```typescript
+### Columns
+
+Table name is `client_error`, column names are `snake_case`.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | text, primary key | UUID, generated by the package |
+| `message` | text, not null | Error message |
+| `stack` | text, nullable | Raw stack trace as it arrived from the browser |
+| `component_stack` | text, nullable | React component stack, when the error came from the error boundary |
+| `resolved_stack` | text, nullable | Stack resolved through source maps, when `sourceMapDir` is configured |
+| `fingerprint` | text, not null, unique | SHA-256 of message plus the top three frames |
+| `occurrences` | integer, not null | Defaults to 1, incremented on every repeat |
+| `environment` | text, not null | The server's `NODE_ENV` at ingestion time (`development` when unset) |
+| `url` | text, nullable | Page URL the error happened on |
+| `user_agent` | text, nullable | Reporting browser's user agent |
+| `resolved_at` | timestamp, nullable | Null while the error is open |
+| `created_at` | timestamp, not null | First time this fingerprint was seen |
+| `updated_at` | timestamp, not null | Last write to the row |
+| `last_seen_at` | timestamp, not null | Most recent occurrence |
+
+Indexes: `client_error_last_seen_at_idx` on `last_seen_at`, `client_error_environment_idx` on `environment`. Queries in this package sort by `last_seen_at` and filter by `environment`, and the CLI does the same.
+
+Rows read back through Drizzle use the TypeScript property names, so JSON responses from the query endpoint keep camelCase keys (`lastSeenAt`, `resolvedAt`, `componentStack`, `resolvedStack`, `userAgent`).
+
+MySQL is not supported.
+
+## Quick Start
+
+### 1. Add the schema re-export and migrate
+
+See [Database Schema](#database-schema) above.
+
+### 2. Mount route handlers
+
+```ts
 // app/api/errors/route.ts
 import { createErrorHandlers } from "@context-kit/error-tracker/server";
-import { prisma } from "@/lib/prisma";
+import { db, getDialect } from "@/db";
 
 const handlers = createErrorHandlers({
-  prisma,
+  db,
+  dialect: getDialect(),
   secretHeaderToken: process.env.ERROR_TRACKER_TOKEN,
   sourceMapDir: process.env.NODE_ENV === "production" ? ".next/static/chunks" : undefined,
   rateLimiter: { windowMs: 60_000, maxRequests: 100 },
@@ -72,7 +108,9 @@ export const POST = handlers.POST;
 export const GET = handlers.GET;
 ```
 
-### 4. Add ErrorBoundary and initialize tracking
+Pass `getDialect()` rather than a literal so `dialect` cannot drift from whatever `DATABASE_URL` points at.
+
+### 3. Add ErrorBoundary and initialize tracking
 
 ```tsx
 // app/providers.tsx
@@ -117,7 +155,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 }
 ```
 
-The `ErrorBoundary` returned by `createErrorTracker` has config pre-bound — you don't need to pass a `config` prop. If you want a custom fallback:
+The `ErrorBoundary` returned by `createErrorTracker` has config pre-bound, so you do not need to pass a `config` prop. If you want a custom fallback:
 
 ```tsx
 <ErrorBoundary fallback={<div>Oops! Something broke.</div>}>
@@ -136,7 +174,7 @@ The `ErrorBoundary` returned by `createErrorTracker` has config pre-bound — yo
 
 Factory function that creates a configured error tracker instance.
 
-```typescript
+```ts
 interface CreateErrorTrackerOptions {
   endpoint?: string;           // Default: "/api/errors"
   token?: string;              // Secret token sent to the server
@@ -148,7 +186,7 @@ interface CreateErrorTrackerOptions {
 
 Returns:
 
-```typescript
+```ts
 {
   init: () => () => void;        // Install global listeners; returns cleanup function
   ErrorBoundary: React.Component // Pre-configured ErrorBoundary (config is pre-bound)
@@ -159,13 +197,13 @@ Returns:
 
 Factory function that creates Next.js App Router route handlers.
 
-```typescript
+```ts
 interface ErrorHandlersConfig {
-  prisma: PrismaClient;              // Your Prisma client instance
+  db: object;                        // Your app's Drizzle instance (import { db } from "@/db")
+  dialect: "sqlite" | "postgres";    // Which dialect db talks to; pass getDialect() from "@/db"
   secretHeaderName?: string;         // Header name for auth (default: "x-error-tracker-token")
   secretHeaderToken?: string;        // Expected token value; omit for open access (dev only)
   sourceMapDir?: string;             // Path to source maps (default: ".next/static/chunks")
-  deduplicationWindowMs?: number;    // Dedup window in ms (default: 86400000 = 24 hours)
   rateLimiter?: {
     windowMs: number;                // Time window in ms
     maxRequests: number;             // Max requests per IP per window
@@ -175,27 +213,29 @@ interface ErrorHandlersConfig {
 
 Returns:
 
-```typescript
+```ts
 {
   POST: (request: Request) => Promise<Response>;  // Ingestion endpoint
-  GET: (request: Request) => Promise<Response>;    // Query endpoint
+  GET: (request: Request) => Promise<Response>;   // Query endpoint
 }
 ```
+
+`createIngestionHandler` and `createQueryHandler` are also exported from `@context-kit/error-tracker/server` if you want to mount the two halves on different routes. They take the same `db` and `dialect` fields.
 
 ### `ErrorBoundary`
 
 React class component that catches render errors. When used via the factory (`createErrorTracker`), config is pre-bound. When used directly, pass `config` explicitly.
 
 Props:
-- `config?` — Error tracker configuration (pre-bound when created via factory)
-- `fallback?` — `ReactNode` or `(error: Error) => ReactNode` (default: `<div>Something went wrong.</div>`)
-- `children` — React elements to wrap
+- `config?` - Error tracker configuration (pre-bound when created via factory)
+- `fallback?` - `ReactNode` or `(error: Error) => ReactNode` (default: `<div>Something went wrong.</div>`)
+- `children` - React elements to wrap
 
 ## Query API
 
 The GET `/api/errors` endpoint supports filtering and offset-based pagination:
 
-```typescript
+```ts
 const response = await fetch("/api/errors?env=production&resolved=false&limit=50&offset=0", {
   headers: { "x-error-tracker-token": "your-token" },
 });
@@ -204,12 +244,14 @@ const { errors, total } = await response.json();
 ```
 
 Query parameters:
-- `env` — Filter by environment (`development`, `production`)
-- `since` — ISO timestamp; return errors with `lastSeenAt >= since`
-- `fingerprint` — Filter by exact fingerprint
-- `resolved` — `"true"` or `"false"`; filter by resolution status
-- `limit` — Results per page (default: 50, max: 200)
-- `offset` — Number of results to skip (default: 0)
+- `env` - Filter by environment (`development`, `production`)
+- `since` - ISO timestamp; return errors with `lastSeenAt >= since`
+- `fingerprint` - Filter by exact fingerprint
+- `resolved` - `"true"` or `"false"`; filter by resolution status
+- `limit` - Results per page (default: 50, max: 200)
+- `offset` - Number of results to skip (default: 0)
+
+Each entry in `errors` is a Drizzle row, so its keys are the TypeScript property names: `lastSeenAt`, `resolvedAt`, `componentStack`, `resolvedStack`, `userAgent`, and the rest.
 
 ## Deduplication & Fingerprinting
 
@@ -219,15 +261,33 @@ Errors are deduplicated using a SHA-256 fingerprint computed from the error mess
 SHA-256( message | file:line:col:fn | file:line:col:fn | file:line:col:fn )
 ```
 
-When the same fingerprint appears within the deduplication window (default: 24 hours), the existing record's `occurrences` counter is incremented atomically instead of creating a new row.
+Ingestion is a single upsert against the unique `fingerprint` column: `insert ... on conflict (fingerprint) do update`. There is one row per fingerprint, for the life of the table.
 
-**Resolved errors:** If an error was previously marked resolved (`resolvedAt` is set), a new occurrence with the same fingerprint creates a fresh record rather than reopening the old one.
+On a repeat the database:
+
+- increments `occurrences`
+- sets `last_seen_at` to now
+- keeps the stored `resolved_stack` unless the new report carries one
+- clears `resolved_at`
+
+Clearing `resolved_at` means a resolved error that happens again is reopened. It returns to `error-tracker tail` and to `resolved=false` queries, so a fix that did not hold surfaces instead of staying buried in the resolved list.
+
+Because the whole thing is one statement, two concurrent reports of the same error cannot race. The database serializes them and the counter lands at 2.
 
 **Fingerprint collisions:** Two distinct errors that share the same message and top-3 frames merge under one fingerprint. This is an acceptable tradeoff in v1. Query by fingerprint and inspect full stacks if you suspect a collision.
 
 ## CLI
 
-Requires `DATABASE_URL` set in the environment and `@prisma/client` installed.
+The CLI reads `DATABASE_URL` and picks a driver the same way context-kit does:
+
+| `DATABASE_URL` | Driver |
+|----------------|--------|
+| `sqlite:./data/app.db` | `@libsql/client` |
+| `sqlite:/var/lib/app/app.db` | `@libsql/client` |
+| `sqlite::memory:` | `@libsql/client` |
+| `postgres://...` or `postgresql://...` | `postgres` (postgres-js) |
+
+Install whichever one your app uses. It is already there if you are running on that database.
 
 ### Tail recent errors
 
@@ -235,8 +295,10 @@ Requires `DATABASE_URL` set in the environment and `@prisma/client` installed.
 npx error-tracker tail
 npx error-tracker tail --limit 50
 npx error-tracker tail --env production
-npx error-tracker tail --since 2024-01-01T00:00:00Z
+npx error-tracker tail --since 2026-01-01T00:00:00Z
 ```
+
+`tail` lists unresolved errors, most recently seen first.
 
 ### Mark an error resolved
 
@@ -244,21 +306,39 @@ npx error-tracker tail --since 2024-01-01T00:00:00Z
 npx error-tracker resolve <fingerprint>
 ```
 
+Exits 1 if the fingerprint is unknown or the error is already resolved.
+
+### Programmatic use
+
+Both commands are also exported from `@context-kit/error-tracker/cli`, for scripts that already have a Drizzle instance and should not go through `DATABASE_URL`:
+
+```ts
+import { runTail, runResolve } from "@context-kit/error-tracker/cli";
+import { db, getDialect } from "@/db";
+
+await runTail({ db, dialect: getDialect(), limit: 20, env: "production" });
+await runResolve({ db, dialect: getDialect(), fingerprint: "abc123..." });
+```
+
+`db` and `dialect` are the same pair `createErrorHandlers` takes. Pass both or neither: with `db` omitted, the functions connect from `DATABASE_URL` the way the binary does. `runTail` also accepts `since` as a `Date`. The `exitOnComplete` flag is what the binary sets to exit the process; leave it off in a script.
+
 ## Configuration Examples
 
 ### Production with auth and source maps
 
-```typescript
-// Server — app/api/errors/route.ts
+```ts
+// Server: app/api/errors/route.ts
+import { db, getDialect } from "@/db";
+
 const handlers = createErrorHandlers({
-  prisma,
+  db,
+  dialect: getDialect(),
   secretHeaderToken: process.env.ERROR_TRACKER_TOKEN,
   sourceMapDir: ".next/static/chunks",
   rateLimiter: { windowMs: 60_000, maxRequests: 100 },
-  deduplicationWindowMs: 86_400_000, // 24 hours
 });
 
-// Client — app/providers.tsx
+// Client: app/providers.tsx
 const tracker = createErrorTracker({
   endpoint: "/api/errors",
   token: process.env.NEXT_PUBLIC_ERROR_TRACKER_TOKEN,
@@ -267,7 +347,7 @@ const tracker = createErrorTracker({
 
 ### Development with console patching
 
-```typescript
+```ts
 const tracker = createErrorTracker({
   endpoint: "/api/errors",
   patchConsoleError: true,
@@ -276,7 +356,7 @@ const tracker = createErrorTracker({
 
 ### Custom header name
 
-```typescript
+```ts
 // Both client and server must agree on the header name
 const tracker = createErrorTracker({
   endpoint: "/api/errors",
@@ -285,30 +365,47 @@ const tracker = createErrorTracker({
 });
 
 const handlers = createErrorHandlers({
-  prisma,
+  db,
+  dialect: getDialect(),
   secretHeaderName: "authorization",
   secretHeaderToken: "my-token",
 });
 ```
+
+## Package Entry Points
+
+| Import Path | Contents | Use In |
+|-------------|----------|--------|
+| `@context-kit/error-tracker` | `createErrorTracker`, `ErrorBoundary`, client types | Client Components (`"use client"`) |
+| `@context-kit/error-tracker/server` | `createErrorHandlers`, `createIngestionHandler`, `createQueryHandler`, `createRateLimiter`, `resolveStack` | Route Handlers |
+| `@context-kit/error-tracker/cli` | `runTail`, `runResolve` | Scripts, tooling |
+| `@context-kit/error-tracker/schema/sqlite` | `clientError` table and its row types | `db/schema/sqlite.ts` |
+| `@context-kit/error-tracker/schema/postgres` | `clientError` table and its row types | `db/schema/postgres.ts` |
 
 ## Environment Variables
 
 ```bash
 # Server-side
 ERROR_TRACKER_TOKEN=your-secret-token
-DATABASE_URL=postgresql://...
+
+# Read by the CLI only; your app already has this set
+DATABASE_URL=postgres://...
+# or
+DATABASE_URL=sqlite:./data/app.db
 
 # Client-side (exposed to browser)
 NEXT_PUBLIC_ERROR_TRACKER_TOKEN=your-secret-token
 ```
 
+The route handlers reach the database through the `db` instance you pass them, not through `DATABASE_URL`. Only the CLI reads that variable.
+
 When no token is configured, the ingestion endpoint accepts all requests (permissive default for local dev). In production, a console warning is emitted if `token` is not set.
 
 ## Further Reading
 
-- [Source Map Resolution](docs/source-maps.md) — Next.js config, deployment requirements, caching, troubleshooting
-- [SQL Recipes](docs/sql-recipes.md) — Copy-paste queries for debugging, aggregation, and maintenance
-- [Architecture](docs/architecture.md) — Data flow, module responsibilities, and design decisions
+- [Source Map Resolution](docs/source-maps.md) - Next.js config, deployment requirements, caching, troubleshooting
+- [SQL Recipes](docs/sql-recipes.md) - Copy-paste queries for debugging, aggregation, and maintenance
+- [Architecture](docs/architecture.md) - Data flow, module responsibilities, and design decisions
 
 ## Testing
 

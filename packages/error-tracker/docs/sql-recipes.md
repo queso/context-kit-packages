@@ -1,45 +1,91 @@
 # SQL Recipes
 
-The error-tracker stores everything in your app's own Postgres database. The query API endpoint is a convenience — the real interface is SQL. These recipes work with any Postgres client, `psql`, or an AI coding assistant with database access.
+The error-tracker stores everything in your app's own database, in a table named `client_error`. The query API endpoint covers the common reads; SQL covers everything else. These recipes work from `psql`, the `sqlite3` shell, Drizzle Studio, or an AI coding assistant with database access.
+
+## Before You Start
+
+Column names are `snake_case` and all lowercase, so no identifier quoting is needed in either dialect.
+
+Timestamps are the one place the two dialects differ:
+
+- **Postgres:** `created_at`, `updated_at`, `last_seen_at`, `resolved_at` are `timestamp` columns. Compare them to timestamps and format them with the usual date functions.
+- **SQLite:** the same four columns are integers holding milliseconds since the Unix epoch (Drizzle's `timestamp_ms` mode). Divide by 1000 before handing them to `datetime()`, and multiply by 1000 when comparing against `unixepoch()`.
+
+Recipes that only select, filter on text, and order by a timestamp are identical in both. Recipes that compare or format a timestamp are given twice.
 
 ## Basic Queries
 
 ### Recent unresolved errors
 
+Both dialects:
+
 ```sql
-SELECT fingerprint, message, occurrences, environment, "lastSeenAt"
-FROM "ClientError"
-WHERE "resolvedAt" IS NULL
-ORDER BY "lastSeenAt" DESC
+SELECT fingerprint, message, occurrences, environment, last_seen_at
+FROM client_error
+WHERE resolved_at IS NULL
+ORDER BY last_seen_at DESC
 LIMIT 20;
 ```
 
-### Errors introduced after a deployment
+On SQLite, add a readable timestamp:
 
 ```sql
-SELECT fingerprint, message, occurrences, "createdAt"
-FROM "ClientError"
-WHERE "createdAt" >= '2024-03-15T00:00:00Z'
-  AND "resolvedAt" IS NULL
+SELECT fingerprint, message, occurrences, environment,
+       datetime(last_seen_at / 1000, 'unixepoch') AS last_seen
+FROM client_error
+WHERE resolved_at IS NULL
+ORDER BY last_seen_at DESC
+LIMIT 20;
+```
+
+### Errors seen since a deployment
+
+There is one row per fingerprint for the life of the table, so `created_at` is the first time an error was ever seen. An error that existed months ago and recurred this morning keeps its original `created_at`. Filter on `last_seen_at` to find what is happening now, and on `created_at` to find what is new.
+
+Postgres:
+
+```sql
+SELECT fingerprint, message, occurrences, created_at, last_seen_at
+FROM client_error
+WHERE last_seen_at >= TIMESTAMP '2026-03-15 00:00:00'
+  AND resolved_at IS NULL
 ORDER BY occurrences DESC;
 ```
 
+SQLite:
+
+```sql
+SELECT fingerprint, message, occurrences,
+       datetime(created_at / 1000, 'unixepoch') AS created,
+       datetime(last_seen_at / 1000, 'unixepoch') AS last_seen
+FROM client_error
+WHERE last_seen_at >= unixepoch('2026-03-15 00:00:00') * 1000
+  AND resolved_at IS NULL
+ORDER BY occurrences DESC;
+```
+
+Swap `last_seen_at` for `created_at` in the `WHERE` clause to list only fingerprints the deployment introduced.
+
 ### Most frequent errors (top crashers)
+
+Both dialects:
 
 ```sql
 SELECT fingerprint, message, occurrences, environment
-FROM "ClientError"
-WHERE "resolvedAt" IS NULL
+FROM client_error
+WHERE resolved_at IS NULL
 ORDER BY occurrences DESC
 LIMIT 10;
 ```
 
 ### Error detail with full stack
 
+Both dialects:
+
 ```sql
-SELECT message, stack, "resolvedStack", "componentStack", url, "userAgent",
-       occurrences, environment, "createdAt", "lastSeenAt"
-FROM "ClientError"
+SELECT message, stack, resolved_stack, component_stack, url, user_agent,
+       occurrences, environment, created_at, last_seen_at
+FROM client_error
 WHERE fingerprint = 'your-fingerprint-here';
 ```
 
@@ -47,59 +93,95 @@ WHERE fingerprint = 'your-fingerprint-here';
 
 ### By environment
 
+Both dialects:
+
 ```sql
-SELECT * FROM "ClientError"
+SELECT * FROM client_error
 WHERE environment = 'production'
-  AND "resolvedAt" IS NULL
-ORDER BY "lastSeenAt" DESC;
+  AND resolved_at IS NULL
+ORDER BY last_seen_at DESC;
 ```
+
+This one uses the `client_error_environment_idx` index.
 
 ### By URL pattern
 
+Both dialects:
+
 ```sql
 SELECT fingerprint, message, url, occurrences
-FROM "ClientError"
+FROM client_error
 WHERE url LIKE '%/campaigns/%'
-  AND "resolvedAt" IS NULL
-ORDER BY "lastSeenAt" DESC;
+  AND resolved_at IS NULL
+ORDER BY last_seen_at DESC;
 ```
+
+`LIKE` is case-sensitive in Postgres and case-insensitive for ASCII in SQLite. Use `ILIKE` on Postgres if you want SQLite's behavior.
 
 ### By browser/user agent
 
+Both dialects:
+
 ```sql
-SELECT fingerprint, message, "userAgent", occurrences
-FROM "ClientError"
-WHERE "userAgent" LIKE '%Firefox%'
-  AND "resolvedAt" IS NULL;
+SELECT fingerprint, message, user_agent, occurrences
+FROM client_error
+WHERE user_agent LIKE '%Firefox%'
+  AND resolved_at IS NULL;
 ```
 
 ## Aggregations
 
 ### Error count by environment
 
+Both dialects:
+
 ```sql
-SELECT environment, COUNT(*) as error_count, SUM(occurrences) as total_occurrences
-FROM "ClientError"
-WHERE "resolvedAt" IS NULL
+SELECT environment,
+       COUNT(*) AS error_count,
+       SUM(occurrences) AS total_occurrences
+FROM client_error
+WHERE resolved_at IS NULL
 GROUP BY environment;
 ```
 
-### Errors per day (trend)
+### New errors per day (trend)
+
+Postgres:
 
 ```sql
-SELECT DATE("createdAt") as day, COUNT(*) as new_errors, SUM(occurrences) as total_hits
-FROM "ClientError"
-WHERE "createdAt" >= NOW() - INTERVAL '30 days'
-GROUP BY DATE("createdAt")
+SELECT DATE(created_at) AS day,
+       COUNT(*) AS new_errors,
+       SUM(occurrences) AS total_hits
+FROM client_error
+WHERE created_at >= NOW() - INTERVAL '30 days'
+GROUP BY DATE(created_at)
 ORDER BY day DESC;
 ```
 
-### Top error pages
+SQLite:
 
 ```sql
-SELECT url, COUNT(*) as distinct_errors, SUM(occurrences) as total_hits
-FROM "ClientError"
-WHERE "resolvedAt" IS NULL
+SELECT date(created_at / 1000, 'unixepoch') AS day,
+       COUNT(*) AS new_errors,
+       SUM(occurrences) AS total_hits
+FROM client_error
+WHERE created_at >= (unixepoch() - 30 * 86400) * 1000
+GROUP BY day
+ORDER BY day DESC;
+```
+
+`total_hits` is the lifetime occurrence count of the errors first seen that day, not the number of hits on that day. The table keeps a counter, not an event log.
+
+### Top error pages
+
+Both dialects:
+
+```sql
+SELECT url,
+       COUNT(*) AS distinct_errors,
+       SUM(occurrences) AS total_hits
+FROM client_error
+WHERE resolved_at IS NULL
   AND url IS NOT NULL
 GROUP BY url
 ORDER BY total_hits DESC
@@ -110,38 +192,88 @@ LIMIT 10;
 
 ### Mark an error resolved
 
+`npx error-tracker resolve <fingerprint>` does this and exits 1 if the fingerprint is unknown or already resolved. By hand:
+
+Postgres:
+
 ```sql
-UPDATE "ClientError"
-SET "resolvedAt" = NOW()
+UPDATE client_error
+SET resolved_at = NOW()
 WHERE fingerprint = 'your-fingerprint-here';
 ```
 
-### Bulk resolve old errors
+SQLite:
 
 ```sql
-UPDATE "ClientError"
-SET "resolvedAt" = NOW()
-WHERE "resolvedAt" IS NULL
-  AND "lastSeenAt" < NOW() - INTERVAL '30 days';
+UPDATE client_error
+SET resolved_at = unixepoch() * 1000
+WHERE fingerprint = 'your-fingerprint-here';
+```
+
+If the error happens again, ingestion clears `resolved_at` and the row returns to the unresolved list with its occurrence count and original `created_at` intact.
+
+### Bulk resolve stale errors
+
+Postgres:
+
+```sql
+UPDATE client_error
+SET resolved_at = NOW()
+WHERE resolved_at IS NULL
+  AND last_seen_at < NOW() - INTERVAL '30 days';
+```
+
+SQLite:
+
+```sql
+UPDATE client_error
+SET resolved_at = unixepoch() * 1000
+WHERE resolved_at IS NULL
+  AND last_seen_at < (unixepoch() - 30 * 86400) * 1000;
 ```
 
 ### Delete old resolved errors (cleanup)
 
+Postgres:
+
 ```sql
-DELETE FROM "ClientError"
-WHERE "resolvedAt" IS NOT NULL
-  AND "resolvedAt" < NOW() - INTERVAL '90 days';
+DELETE FROM client_error
+WHERE resolved_at IS NOT NULL
+  AND resolved_at < NOW() - INTERVAL '90 days';
 ```
+
+SQLite:
+
+```sql
+DELETE FROM client_error
+WHERE resolved_at IS NOT NULL
+  AND resolved_at < (unixepoch() - 90 * 86400) * 1000;
+```
+
+Deleting a row throws away its history. If that error fires again, ingestion inserts a fresh row with `occurrences` at 1 and today's `created_at`.
 
 ### Table size check
 
+Postgres:
+
 ```sql
-SELECT COUNT(*) as total_rows,
-       COUNT(*) FILTER (WHERE "resolvedAt" IS NULL) as unresolved,
-       COUNT(*) FILTER (WHERE "resolvedAt" IS NOT NULL) as resolved,
-       pg_size_pretty(pg_total_relation_size('"ClientError"')) as table_size
-FROM "ClientError";
+SELECT COUNT(*) AS total_rows,
+       COUNT(*) FILTER (WHERE resolved_at IS NULL) AS unresolved,
+       COUNT(*) FILTER (WHERE resolved_at IS NOT NULL) AS resolved,
+       pg_size_pretty(pg_total_relation_size('client_error')) AS table_size
+FROM client_error;
 ```
+
+SQLite (3.30 and later, which supports `FILTER`):
+
+```sql
+SELECT COUNT(*) AS total_rows,
+       COUNT(*) FILTER (WHERE resolved_at IS NULL) AS unresolved,
+       COUNT(*) FILTER (WHERE resolved_at IS NOT NULL) AS resolved
+FROM client_error;
+```
+
+SQLite has no per-table size function in the default build. `PRAGMA page_count;` times `PRAGMA page_size;` gives the size of the whole database file.
 
 ## AI Assistant Usage
 
@@ -149,7 +281,7 @@ If you're using an AI coding assistant with database access, these prompts work 
 
 - "What are the top 5 errors in production right now?"
 - "Show me errors on the /checkout page from the last 24 hours with their resolved stacks"
-- "How many new errors were introduced since yesterday's deployment?"
-- "Mark all errors older than 2 weeks as resolved"
+- "Which fingerprints were first seen since yesterday's deployment?"
+- "Mark every error not seen in 2 weeks as resolved"
 
-The `resolvedStack` column contains human-readable source locations when source map resolution is configured — AI assistants can read these directly to understand where errors originate.
+The `resolved_stack` column contains human-readable source locations when source map resolution is configured, so an assistant can read them directly to find where an error originates.

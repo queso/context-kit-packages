@@ -9,12 +9,14 @@ A Bun workspace monorepo of official packages for [context-kit](https://github.c
 ## Development
 
 ```bash
-bun install                              # install all workspace deps
-bun --filter @context-kit/auth build     # build the auth package (tsup)
-bun --filter @context-kit/auth dev       # build in watch mode
-bun --filter @context-kit/auth typecheck # type-check without emitting
-bun --filter @context-kit/auth-ui build  # build the auth-ui package
-bun --filter @context-kit/auth-ui test   # run auth-ui tests
+bun install                                   # install all workspace deps
+bun --filter @context-kit/auth build          # build the auth package (tsup)
+bun --filter @context-kit/auth dev            # build in watch mode
+bun --filter @context-kit/auth typecheck      # type-check without emitting
+bun --filter @context-kit/auth-ui build       # build the auth-ui package
+bun --filter @context-kit/auth-ui test        # run auth-ui tests
+bun --filter @context-kit/error-tracker build # build the error-tracker package
+bun --filter @context-kit/error-tracker test  # run error-tracker tests
 ```
 
 ## Architecture
@@ -30,6 +32,7 @@ bun --filter @context-kit/auth-ui test   # run auth-ui tests
 |---------|------|--------|
 | `@context-kit/auth` | `packages/auth` | 0.2.0 — Better Auth + Drizzle |
 | `@context-kit/auth-ui` | `packages/auth-ui` | 0.1.0 — Auth UI components for Next.js App Router |
+| `@context-kit/error-tracker` | `packages/error-tracker` | 0.1.0 — Client-side error tracking stored in the app's own database via Drizzle |
 | `@context-kit/billing` | `packages/billing` | Planned — Stripe subscriptions |
 
 ## A(i)-Team Integration

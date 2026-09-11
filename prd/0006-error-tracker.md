@@ -2,6 +2,14 @@
 
 **Author:** Josh  **Date:** 2026-03-14  **Status:** Draft
 
+## Revision (2026-09-11)
+
+The storage layer is Drizzle, not Prisma. The package ships `client_error` as a Drizzle schema module per dialect (`@context-kit/error-tracker/schema/sqlite` and `/schema/postgres`); the app re-exports the module from its own `db/schema/<dialect>.ts` and owns the migration. The server factories take the app's Drizzle instance and its dialect (`{ db, dialect }`) instead of a Prisma client. SQLite is supported alongside PostgreSQL.
+
+Deduplication is a single upsert on the unique `fingerprint` column. A repeat increments `occurrences`, bumps `last_seen_at`, and clears `resolved_at`, so an error marked resolved is reopened when it happens again. The configurable dedup window described below is gone: one row per fingerprint, for the life of the table.
+
+Prisma references in the rest of this document are historical.
+
 ## 1. Context & Background
 
 Client-side JavaScript errors are invisible to server logs. When a React component crashes, an unhandled promise rejects, or `console.error` fires in a user's browser, nothing appears in stdout, nothing lands in your log aggregator, and the developer finds out via a screenshot or a confused user message.
