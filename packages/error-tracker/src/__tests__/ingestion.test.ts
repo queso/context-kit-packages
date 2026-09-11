@@ -295,7 +295,7 @@ describe("ingestion handler first report", () => {
     expect(row.userAgent).toBeNull();
   });
 
-  test("tags the row with NODE_ENV at request time", async () => {
+  test("tags the row with NODE_ENV at request time when the report carries no environment", async () => {
     const restore = stubEnv("NODE_ENV", "staging");
     try {
       await handler(errorRequest(validBody()));
@@ -305,7 +305,7 @@ describe("ingestion handler first report", () => {
     expect((await readOnlyClientError()).environment).toBe("staging");
   });
 
-  test("falls back to development when NODE_ENV is unset", async () => {
+  test("falls back to development when NODE_ENV is unset and the report carries no environment", async () => {
     const restore = stubEnv("NODE_ENV", undefined);
     try {
       await handler(errorRequest(validBody()));
@@ -313,6 +313,41 @@ describe("ingestion handler first report", () => {
       restore();
     }
     expect((await readOnlyClientError()).environment).toBe("development");
+  });
+
+  test("stores the client-reported environment instead of NODE_ENV", async () => {
+    const restore = stubEnv("NODE_ENV", "production");
+    try {
+      await handler(errorRequest(validBody({ environment: "staging" })));
+    } finally {
+      restore();
+    }
+    expect((await readOnlyClientError()).environment).toBe("staging");
+  });
+
+  test.each([
+    ["an empty string", ""],
+    ["a blank string", "   "],
+    ["a non-string", 42],
+  ])(
+    "falls back to NODE_ENV when the reported environment is %s",
+    async (_label, environment) => {
+      const restore = stubEnv("NODE_ENV", "staging");
+      try {
+        await handler(errorRequest(validBody({ environment })));
+      } finally {
+        restore();
+      }
+      expect((await readOnlyClientError()).environment).toBe("staging");
+    }
+  );
+
+  test("truncates an overlong reported environment to 64 characters", async () => {
+    const longEnvironment = "e".repeat(100);
+    await handler(errorRequest(validBody({ environment: longEnvironment })));
+    expect((await readOnlyClientError()).environment).toBe(
+      longEnvironment.slice(0, 64)
+    );
   });
 
   test("truncates a stack longer than 10,000 characters", async () => {

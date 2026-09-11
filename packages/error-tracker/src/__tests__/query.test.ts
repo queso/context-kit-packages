@@ -318,6 +318,20 @@ describe("query handler parameter validation", () => {
     expect(fingerprints(body)).toEqual(["fp-a"]);
   });
 
+  test("an offset far above Number.MAX_SAFE_INTEGER is clamped instead of reaching the driver as-is", async () => {
+    // Passing this straight through to Drizzle's .offset() would hand a
+    // Postgres driver a value it rejects outright, answering 500 instead of a
+    // well-formed empty page.
+    await seedClientErrors([
+      { fingerprint: "fp-a", lastSeenAt: new Date("2026-03-03T00:00:00Z") },
+    ]);
+    const res = await handler(
+      queryRequest({ offset: "99999999999999999999" })
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ errors: [], total: 1 });
+  });
+
   test("returns 400 when since does not parse to a valid date", async () => {
     const res = await handler(queryRequest({ since: "not-a-date" }));
     expect(res.status).toBe(400);

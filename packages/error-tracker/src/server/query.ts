@@ -17,11 +17,17 @@ function parseLimit(raw: string | null): number {
   return Math.min(parsed, MAX_LIMIT);
 }
 
-/** A missing, non-numeric, or negative offset falls back to 0. */
+/**
+ * A missing, non-numeric, non-finite, or negative offset falls back to 0.
+ * A valid offset is clamped to Number.MAX_SAFE_INTEGER: parseInt accepts
+ * values far beyond it (e.g. `?offset=99999999999999999999`), and passing
+ * one that large straight to the driver's OFFSET clause can be rejected
+ * outright rather than simply returning an empty page.
+ */
 function parseOffset(raw: string | null): number {
   const parsed = raw === null ? NaN : parseInt(raw, 10);
-  if (Number.isNaN(parsed) || parsed < 0) return 0;
-  return parsed;
+  if (!Number.isFinite(parsed) || parsed < 0) return 0;
+  return Math.min(parsed, Number.MAX_SAFE_INTEGER);
 }
 
 export function createQueryHandler(config: QueryConfig) {

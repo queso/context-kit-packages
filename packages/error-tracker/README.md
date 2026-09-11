@@ -69,7 +69,7 @@ Table name is `client_error`, column names are `snake_case`.
 | `resolved_stack` | text, nullable | Stack resolved through source maps, when `sourceMapDir` is configured |
 | `fingerprint` | text, not null, unique | SHA-256 of message plus the top three frames |
 | `occurrences` | integer, not null | Defaults to 1, incremented on every repeat |
-| `environment` | text, not null | The server's `NODE_ENV` at ingestion time (`development` when unset) |
+| `environment` | text, not null | The client-reported `environment` from the payload, when it is a non-empty string (truncated to 64 characters); falls back to the server's `NODE_ENV` at ingestion time (`development` when unset) |
 | `url` | text, nullable | Page URL the error happened on |
 | `user_agent` | text, nullable | Reporting browser's user agent |
 | `resolved_at` | timestamp, nullable | Null while the error is open |

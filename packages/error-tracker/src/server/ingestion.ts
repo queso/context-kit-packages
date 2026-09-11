@@ -14,6 +14,7 @@ const MAX_MESSAGE_LENGTH = 2_000;
 const MAX_COMPONENT_STACK_LENGTH = 10_000;
 const MAX_URL_LENGTH = 2_048;
 const MAX_USER_AGENT_LENGTH = 1_024;
+const MAX_ENVIRONMENT_LENGTH = 64;
 
 /** Requests whose body is larger than this are rejected with 413 before parsing. */
 export const MAX_BODY_BYTES = 64 * 1024;
@@ -164,6 +165,14 @@ export function createIngestionHandler(config: IngestionConfig) {
       typeof body.userAgent === "string"
         ? body.userAgent.slice(0, MAX_USER_AGENT_LENGTH)
         : null;
+    // The reporter builds this from the client's own config, so a real value
+    // is trusted over the server's NODE_ENV; anything that is not a
+    // meaningful string (missing, blank, or the wrong type) falls back the
+    // same way an unset NODE_ENV falls back to "development".
+    const environment =
+      typeof body.environment === "string" && body.environment.trim() !== ""
+        ? body.environment.slice(0, MAX_ENVIRONMENT_LENGTH)
+        : process.env.NODE_ENV ?? "development";
 
     // Fix 2: use resolved frames for fingerprinting when available so the same
     // logical error from different builds produces a stable fingerprint
@@ -179,7 +188,7 @@ export function createIngestionHandler(config: IngestionConfig) {
       componentStack,
       resolvedStack,
       fingerprint,
-      environment: process.env.NODE_ENV ?? "development",
+      environment,
       url,
       userAgent,
       now: new Date(),

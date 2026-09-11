@@ -212,6 +212,16 @@ describe("runTail", () => {
     expect(out).toContain("--limit expects a positive integer");
   });
 
+  test("rejects a fractional limit and exits 1", async () => {
+    // The store hands `limit` straight to Drizzle's .limit(), which SQLite
+    // and Postgres both reject for a non-integer value.
+    const { out, codes } = await runCli(() =>
+      runTail({ db: testDb, dialect: DIALECT, limit: 1.5 })
+    );
+    expect(codes).toEqual([1]);
+    expect(out).toContain("--limit expects a positive integer");
+  });
+
   test("rejects an invalid `since` Date and exits 1", async () => {
     const { out, codes } = await runCli(() =>
       runTail({ db: testDb, dialect: DIALECT, since: new Date("garbage") })

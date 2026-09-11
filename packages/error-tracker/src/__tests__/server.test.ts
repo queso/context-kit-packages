@@ -258,6 +258,27 @@ describe("createErrorHandlers source map resolution", () => {
     );
   });
 
+  test("ignores stale content-length/content-encoding on the rebuilt request when the body has no stack", async () => {
+    // Same bug as the resolved-stack rebuild, but on the no-stack path
+    // (`rebuild()`): copying content-encoding verbatim would tell the
+    // ingestion handler to gunzip a plain-JSON body it never gzipped.
+    // Asserting the exact Request the ingestion handler receives is not
+    // practical here, so this only proves the request still succeeds and the
+    // row still lands, which is the observable effect of the header leak.
+    const { POST } = createErrorHandlers({ ...sqliteConfig(), sourceMapDir });
+
+    const { stack: _stack, ...bodyWithoutStack } = validBody();
+    const res = await POST(
+      errorRequest(bodyWithoutStack, {
+        // Wrong on purpose, same as the resolved-stack test above.
+        "content-length": "1",
+        "content-encoding": "gzip",
+      })
+    );
+    expect(res.status).toBe(200);
+    expect((await readOnlyClientError()).message).toBe(MESSAGE);
+  });
+
   test("returns 413 and never reaches the store when the body exceeds the cap and carries no content-length header", async () => {
     const { POST } = createErrorHandlers({ ...sqliteConfig(), sourceMapDir });
 

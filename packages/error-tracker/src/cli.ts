@@ -69,7 +69,7 @@ export async function runTail(options: TailOptions): Promise<void> {
   // connection it is about to throw away; programmatic callers get the same
   // protection the CLI arg parser gives `tail`.
   const limit = options.limit ?? 20;
-  if (!Number.isFinite(limit) || limit < 1) {
+  if (!Number.isInteger(limit) || limit < 1) {
     console.error(`Error: ${LIMIT_USAGE_ERROR}`);
     printUsage();
     process.exit(1);

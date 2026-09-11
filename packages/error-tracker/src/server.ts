@@ -100,10 +100,22 @@ export function createErrorHandlers(config: ErrorHandlersConfig) {
         return Response.json({ error: "Payload too large" }, { status: 413 });
       }
 
+      // The re-sent body is always `capped.text` (or a re-serialized variant
+      // of it), never the original stream, so the original content-length no
+      // longer matches and a copied content-encoding would make the ingestion
+      // handler try to decode already-plain JSON. Both are dropped from every
+      // rebuilt request, not just the resolved-stack one.
+      const cleanHeaders = () => {
+        const headers = new Headers(request.headers);
+        headers.delete("content-length");
+        headers.delete("content-encoding");
+        return headers;
+      };
+
       const rebuild = () =>
         new Request(request.url, {
           method: request.method,
-          headers: request.headers,
+          headers: cleanHeaders(),
           body: capped.text,
         });
 
@@ -117,17 +129,11 @@ export function createErrorHandlers(config: ErrorHandlersConfig) {
 
       if (typeof body.stack === "string") {
         const resolvedStack = await resolveStack(body.stack, { sourceMapDir });
-        // Rebuild request with resolved stack. The original content-length no
-        // longer matches the re-serialized body, and a copied content-encoding
-        // would make the ingestion handler try to decode plain JSON, so both
-        // are dropped rather than copied from the original request.
+        // Rebuild request with resolved stack.
         const newBody = { ...body, resolvedStack };
-        const headers = new Headers(request.headers);
-        headers.delete("content-length");
-        headers.delete("content-encoding");
         const newRequest = new Request(request.url, {
           method: request.method,
-          headers,
+          headers: cleanHeaders(),
           body: JSON.stringify(newBody),
         });
         return ingestionHandler(newRequest);

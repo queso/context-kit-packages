@@ -60,7 +60,7 @@ Both `reporter.ts` (client-side) and `ingestion.ts` (server-side) truncate stack
 
 The factory in `src/server.ts` composes the server-side pipeline. `config` carries `db` (the app's Drizzle instance) and `dialect` (`"sqlite" | "postgres"`), which the package uses to pick the matching schema module and the matching upsert builder.
 
-1. **Rate limiter** (`src/server/rate-limiter.ts`) - per-IP sliding window with lazy cleanup of expired entries
+1. **Rate limiter** (`src/server/rate-limiter.ts`) - per-IP fixed window; the counter resets once `windowMs` elapses since the window opened, applied to both POST and GET
 2. **Source map resolution** (`src/server/source-map-resolver.ts`) - if `sourceMapDir` is configured, resolves the stack before ingestion
 3. **Ingestion handler** (`src/server/ingestion.ts`) - validates, fingerprints, and upserts
 4. **Query handler** (`src/server/query.ts`) - filtered read access to stored errors
@@ -120,7 +120,7 @@ src/
 └── server/
     ├── ingestion.ts      # POST handler + fingerprint + upsert
     ├── query.ts          # GET handler with filters
-    ├── rate-limiter.ts   # Per-IP rate limiting with lazy cleanup
+    ├── rate-limiter.ts   # Per-IP fixed-window rate limiting
     ├── source-map-resolver.ts  # Stack resolution with LRU cache
     └── parse-stack.ts    # Shared V8 stack frame regex parser
 ```

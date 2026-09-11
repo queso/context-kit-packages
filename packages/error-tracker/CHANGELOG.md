@@ -30,6 +30,7 @@ First release. Client-side error tracking for Next.js App Router apps, stored in
 - CLI validates `--limit` as a positive integer and `--since` as a valid date; a flag missing its value, or followed by another flag, is a usage error that exits 1
 - The client reporter's fetch is bounded by a 5 second timeout via `AbortSignal.timeout` where the browser supports it
 - Source map resolution reads maps asynchronously, dedups concurrent loads of the same file so simultaneous errors share one read, evicts its cache with true LRU (20 entries), validates chunk filenames against `[\w.-]+\.m?js` before touching the filesystem, and remembers a missing map so it is not reprobed on later reports
+- Ingestion stores the client-reported `environment` from the payload when it is a non-empty string (truncated to 64 characters), falling back to the server's `NODE_ENV` (`development` when unset) when the payload omits it
 
 ### Compared to the unreleased Prisma draft
 

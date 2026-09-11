@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
+import { pathToFileURL } from "node:url";
 import { eq } from "drizzle-orm";
 import type { LibSQLDatabase } from "drizzle-orm/libsql";
 import * as schema from "../schema/sqlite";
@@ -133,17 +134,20 @@ describe("sqliteFileUrl", () => {
   });
 
   test("a relative path resolves to a file:/// URL ending in the resolved absolute path", () => {
-    const absolute = resolvePath(process.cwd(), "./local.db");
-    // `file://` plus an absolute posix path (which already starts with "/")
-    // yields the three-slash "file:///..." form pathToFileURL produces.
-    expect(sqliteFileUrl("./local.db")).toBe(`file://${absolute}`);
+    // Built with the same pathToFileURL the implementation uses, rather than a
+    // hand-built "file://" string, so this still holds on Windows, where a
+    // resolved absolute path (a drive path, backslashes) turns into a
+    // differently-shaped URL than the manual concatenation would produce.
+    const expected = pathToFileURL(resolvePath(process.cwd(), "./local.db")).href;
+    expect(sqliteFileUrl("./local.db")).toBe(expected);
   });
 
   test("a path with a space is percent-encoded", () => {
-    const absolute = resolvePath(process.cwd(), "./My Data/app.db");
-    expect(sqliteFileUrl("./My Data/app.db")).toBe(
-      `file://${absolute.replace(/ /g, "%20")}`
-    );
+    const expected = pathToFileURL(
+      resolvePath(process.cwd(), "./My Data/app.db")
+    ).href;
+    expect(sqliteFileUrl("./My Data/app.db")).toBe(expected);
+    expect(expected).toContain("%20");
   });
 });
 
