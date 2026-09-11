@@ -21,9 +21,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Migrating from 0.1.x
 
-context-kit apps never ran the Prisma schema, so there is nothing to migrate: add the schema re-export line to `db/schema/<dialect>.ts`, run `bun run db:generate` and `bun run db:migrate`, and change `createAuth({ prisma, database })` to `createAuth({ db, dialect: getDialect() })`.
+Fresh installs, and apps that never ran the 0.1.x Prisma schema, have no data to migrate: add the schema re-export line to `db/schema/<dialect>.ts`, run `bun run db:generate` and `bun run db:migrate`, and change `createAuth({ prisma, database })` to `createAuth({ db, dialect: getDialect() })`.
 
-If you have existing data created under the 0.1.x Prisma schema, note that its columns are camelCase (`emailVerified`, `createdAt`) while the Drizzle schema uses snake_case (`email_verified`, `created_at`). Table names are unchanged. An in-place upgrade therefore needs a column-rename migration before switching to 0.2.0.
+If you have existing data created under the 0.1.x Prisma schema, apply a column-rename migration before switching to 0.2.0: the Prisma columns are camelCase (`emailVerified`, `createdAt`) while the Drizzle schema uses snake_case (`email_verified`, `created_at`). Table names are unchanged.
 
 ## [0.1.0] - 2026-02-19
 
