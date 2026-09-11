@@ -13,8 +13,10 @@ const hasPostgres = /^postgres(ql)?:/.test(url);
 // REQUIRE_POSTGRES so a missing or malformed DATABASE_URL fails the job
 // instead of letting it pass with the only Postgres test skipped.
 if (process.env.REQUIRE_POSTGRES && !hasPostgres) {
+  // The URL itself is deliberately not included: it may carry credentials, and
+  // this message ends up in CI logs.
   throw new Error(
-    `REQUIRE_POSTGRES is set but DATABASE_URL is not a postgres:// URL (got ${JSON.stringify(url)})`
+    "REQUIRE_POSTGRES is set but DATABASE_URL is missing or is not a postgres:// or postgresql:// URL"
   );
 }
 

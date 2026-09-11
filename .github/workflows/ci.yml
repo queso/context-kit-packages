@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
 
+# Nothing here writes back to the repo, and pull_request runs execute the PR's own
+# code, so grant read-only access and keep the token out of the checkout.
+permissions:
+  contents: read
+
 jobs:
   check:
     name: Typecheck, Build & Test
@@ -13,6 +18,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -55,6 +62,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:

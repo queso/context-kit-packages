@@ -2,7 +2,7 @@
 
 Official packages for [context-kit](https://github.com/queso/context-kit), the opinionated Next.js starter built for AI-assisted development.
 
-These packages are designed to be installed into a context-kit project (or any Next.js + Drizzle stack) and provide common SaaS functionality with a "fix once, inherit everywhere" model. Update a package version and every project gets the fix.
+These packages are designed to be installed into a context-kit project (or any Next.js + Drizzle stack on SQLite or PostgreSQL) and provide common SaaS functionality with a "fix once, inherit everywhere" model. Update a package version and every project gets the fix.
 
 ## Packages
 

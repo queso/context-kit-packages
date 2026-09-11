@@ -7,13 +7,16 @@ import { resolve } from "path";
 // environment.
 describe("postgres.test.ts REQUIRE_POSTGRES guard", () => {
   test(
-    "fails the run when REQUIRE_POSTGRES is set and DATABASE_URL is not a postgres URL",
+    "fails the run, without logging the URL, when REQUIRE_POSTGRES is set and DATABASE_URL is not a postgres URL",
     () => {
       const env: Record<string, string> = {};
       for (const [key, value] of Object.entries(process.env)) {
         if (value !== undefined && key !== "DATABASE_URL") env[key] = value;
       }
       env.REQUIRE_POSTGRES = "1";
+      // A wrong-scheme URL with credentials: the guard must reject it without
+      // echoing it into the output.
+      env.DATABASE_URL = "mysql://svc-user:s3cret-password@db.internal:3306/app";
 
       const result = Bun.spawnSync({
         cmd: [process.execPath, "test", resolve(import.meta.dir, "postgres.test.ts")],
@@ -25,7 +28,11 @@ describe("postgres.test.ts REQUIRE_POSTGRES guard", () => {
 
       const output = result.stdout.toString() + result.stderr.toString();
       expect(result.exitCode).not.toBe(0);
-      expect(output).toContain("REQUIRE_POSTGRES is set but DATABASE_URL is not a postgres:// URL");
+      expect(output).toContain(
+        "REQUIRE_POSTGRES is set but DATABASE_URL is missing or is not a postgres:// or postgresql:// URL"
+      );
+      expect(output).not.toContain("s3cret-password");
+      expect(output).not.toContain("db.internal");
     },
     30_000
   );
