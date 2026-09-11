@@ -9,6 +9,15 @@ setupEnvGuard();
 const url = process.env.DATABASE_URL ?? "";
 const hasPostgres = /^postgres(ql)?:/.test(url);
 
+// Locally the suite skips when no Postgres is configured. CI sets
+// REQUIRE_POSTGRES so a missing or malformed DATABASE_URL fails the job
+// instead of letting it pass with the only Postgres test skipped.
+if (process.env.REQUIRE_POSTGRES && !hasPostgres) {
+  throw new Error(
+    `REQUIRE_POSTGRES is set but DATABASE_URL is not a postgres:// URL (got ${JSON.stringify(url)})`
+  );
+}
+
 // Only created when a Postgres server is actually configured — importing this
 // file without DATABASE_URL must not open a connection.
 let client: ReturnType<typeof postgres> | undefined;

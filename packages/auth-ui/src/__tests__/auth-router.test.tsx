@@ -68,24 +68,22 @@ mock.module("next/navigation", () => ({
 // these stubs would leak into any later file that imports the real pages
 // (page-components.test.tsx). The real exports are captured before mocking and
 // restored in afterAll.
+//
+// The snapshots must be taken eagerly, and as copies: mock.module rewrites the
+// live namespace of an already-imported module, so by afterAll the `real*`
+// namespace objects themselves resolve to the stubs. Spreading here copies every
+// export the module has at this point, so the restore stays faithful even if a
+// page module grows additional exports.
 // ---------------------------------------------------------------------------
 
 const realPages = {
-  "../components/pages/sign-in-page": { SignInPage: realSignInPage.SignInPage },
-  "../components/pages/sign-up-page": { SignUpPage: realSignUpPage.SignUpPage },
-  "../components/pages/forgot-password-page": {
-    ForgotPasswordPage: realForgotPasswordPage.ForgotPasswordPage,
-  },
-  "../components/pages/reset-password-page": {
-    ResetPasswordPage: realResetPasswordPage.ResetPasswordPage,
-  },
-  "../components/pages/user-profile-page": { UserProfilePage: realUserProfilePage.UserProfilePage },
-  "../components/pages/change-password-page": {
-    ChangePasswordPage: realChangePasswordPage.ChangePasswordPage,
-  },
-  "../components/pages/session-management-page": {
-    SessionManagementPage: realSessionManagementPage.SessionManagementPage,
-  },
+  "../components/pages/sign-in-page": { ...realSignInPage },
+  "../components/pages/sign-up-page": { ...realSignUpPage },
+  "../components/pages/forgot-password-page": { ...realForgotPasswordPage },
+  "../components/pages/reset-password-page": { ...realResetPasswordPage },
+  "../components/pages/user-profile-page": { ...realUserProfilePage },
+  "../components/pages/change-password-page": { ...realChangePasswordPage },
+  "../components/pages/session-management-page": { ...realSessionManagementPage },
 };
 
 afterAll(() => {
