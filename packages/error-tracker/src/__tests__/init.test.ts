@@ -172,6 +172,29 @@ describe("initErrorTracker — unhandledrejection listener", () => {
     expect(mockReportError).toHaveBeenCalledTimes(1);
   });
 
+  test("serializes an undefined rejection reason to the string 'undefined'", async () => {
+    // JSON.stringify(undefined) returns undefined (not a string). The
+    // ingestion handler rejects a payload with a missing message, so a bare
+    // `Promise.reject()` or `throw undefined` must not be dropped.
+    simulateUnhandledRejection(undefined);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockReportError).toHaveBeenCalledTimes(1);
+    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
+    const [, payload] = (mockReportError.mock.calls as any[][])[0] ?? [];
+    expect(payload?.message).toBe("undefined");
+  });
+
+  test("serializes a function rejection reason to a string", async () => {
+    // JSON.stringify(fn) is also undefined, same failure mode as `undefined`.
+    simulateUnhandledRejection(function reason() {});
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockReportError).toHaveBeenCalledTimes(1);
+    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
+    const [, payload] = (mockReportError.mock.calls as any[][])[0] ?? [];
+    expect(typeof payload?.message).toBe("string");
+    expect(payload?.message.length).toBeGreaterThan(0);
+  });
+
   test("removes unhandledrejection listener after cleanup", async () => {
     cleanup();
     mockReportError.mockClear();

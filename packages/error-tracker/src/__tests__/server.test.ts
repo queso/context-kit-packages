@@ -511,6 +511,20 @@ describe("createErrorHandlers unauthenticated production warning", () => {
     }
   });
 
+  test("query warning names queryHeaderToken while ingestion warning names secretHeaderToken", async () => {
+    const restore = stubEnv("NODE_ENV", "production");
+    try {
+      const out = await captureWarnings(() => {
+        createErrorHandlers(sqliteConfig());
+      });
+      const [ingestionLine, queryLine] = out.split("\n").filter(Boolean);
+      expect(ingestionLine).toContain("secretHeaderToken");
+      expect(queryLine).toContain("queryHeaderToken");
+    } finally {
+      restore();
+    }
+  });
+
   test("warns for ingestion only when queryHeaderToken is set and no secretHeaderToken is configured", async () => {
     const restore = stubEnv("NODE_ENV", "production");
     try {

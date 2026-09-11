@@ -82,6 +82,18 @@ describe("createQueryHandler production warning", () => {
     }
   });
 
+  test("warning names queryHeaderToken, not just secretHeaderToken", () => {
+    const restore = stubEnv("NODE_ENV", "production");
+    try {
+      const out = captureWarnings(() => {
+        createQueryHandler(sqliteConfig());
+      });
+      expect(out).toContain("queryHeaderToken");
+    } finally {
+      restore();
+    }
+  });
+
   test("does not warn when a secretHeaderToken is configured", () => {
     const restore = stubEnv("NODE_ENV", "production");
     try {

@@ -31,7 +31,7 @@ function serializeReason(reason: unknown): { message: string; stack?: string } {
     return { message: reason };
   }
   try {
-    return { message: JSON.stringify(reason) };
+    return { message: JSON.stringify(reason) ?? String(reason) };
   } catch {
     return { message: String(reason) };
   }

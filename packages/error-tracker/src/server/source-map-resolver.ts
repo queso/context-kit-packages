@@ -253,6 +253,19 @@ export function __reconcileLoadedConsumerForTest(
   return insertOrReuseConsumer(mapFilePath, consumer);
 }
 
+// Test-only: removes a path's entry from the cache (and any in-flight load
+// for it) and destroys it immediately, with no grace timer, since the test
+// itself owns the consumer and knows nothing else can be holding it. Used to
+// clean up consumers a test inserted directly via __reconcileLoadedConsumerForTest,
+// so they don't stay live in the process-wide cache after the test's temp
+// files are removed. Never called from production code.
+export function __evictConsumerForTest(mapFilePath: string): void {
+  const cached = sourceMapCache.get(mapFilePath);
+  sourceMapCache.delete(mapFilePath);
+  inFlightLoads.delete(mapFilePath);
+  cached?.destroy();
+}
+
 export async function resolveStack(
   rawStack: string,
   options?: ResolveStackOptions

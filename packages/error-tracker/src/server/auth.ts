@@ -18,6 +18,20 @@ export function tokenMatches(
 }
 
 /**
+ * Instructions for configuring a token, per endpoint. The query endpoint can
+ * be reached two ways: standalone via `createQueryHandler` (which takes
+ * `secretHeaderToken` in its own config) or through `createErrorHandlers`
+ * (which takes `queryHeaderToken`, defaulting to `secretHeaderToken`). Since
+ * `warnIfUnauthenticated` can't tell which caller created the handler, the
+ * query message names both.
+ */
+const SET_TOKEN_INSTRUCTIONS: Record<"ingestion" | "query", string> = {
+  ingestion: "Set `secretHeaderToken` in production.",
+  query:
+    "Set `queryHeaderToken` on createErrorHandlers (or `secretHeaderToken` on createQueryHandler) in production.",
+};
+
+/**
  * Warns once, at handler-creation time, when a standalone ingestion or query
  * handler is created in production without a token configured. Both
  * `createIngestionHandler` and `createQueryHandler` are exported as drop-in
@@ -30,7 +44,7 @@ export function warnIfUnauthenticated(
 ): void {
   if (process.env.NODE_ENV === "production" && !token) {
     console.warn(
-      `[error-tracker] Warning: no secretHeaderToken configured. The ${endpoint} endpoint accepts unauthenticated requests. Set \`secretHeaderToken\` in production.`
+      `[error-tracker] Warning: no token configured. The ${endpoint} endpoint accepts unauthenticated requests. ${SET_TOKEN_INSTRUCTIONS[endpoint]}`
     );
   }
 }

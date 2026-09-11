@@ -73,6 +73,7 @@ const {
   resolveStack,
   __setEvictedConsumerGraceMs,
   __reconcileLoadedConsumerForTest,
+  __evictConsumerForTest,
   __setNegativeCacheTtlMs,
 } = await import("../server/source-map-resolver");
 
@@ -547,7 +548,11 @@ describe("getCachedConsumer — duplicate load discard", () => {
       }
     } finally {
       destroySpy.mockRestore();
-      rmSync(dir, { recursive: true, force: true });
+      try {
+        __evictConsumerForTest(mapFilePath);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     }
   });
 
@@ -560,11 +565,10 @@ describe("getCachedConsumer — duplicate load discard", () => {
     // objects: sourceMapCache is a process-wide singleton shared by every
     // test file in the run, and a non-consumer object left sitting in it
     // would fail confusingly if some later test ever resolved a frame for
-    // this path. A real consumer left cached here is harmless the same way
-    // the neighboring test's cached "dup.js.map" entry is: the "true LRU
-    // eviction" describe block right below fills the shared cache with 20
-    // fresh entries, which flushes every entry inserted before it out via
-    // ordinary LRU churn.
+    // this path. The consumer inserted here is removed from the cache and
+    // destroyed explicitly in the `finally` block below via
+    // __evictConsumerForTest, rather than left for LRU churn to flush out
+    // eventually, so it can't remain live and alter later cache state.
     const dir = join(tmpdir(), `error-tracker-dup-fresh-${Date.now()}`);
     mkdirSync(dir, { recursive: true });
     const mapFilePath = join(dir, "fresh.js.map");
@@ -599,8 +603,14 @@ describe("getCachedConsumer — duplicate load discard", () => {
       expect(winner).toBe(first);
       expect(destroyCount).toBe(1);
     } finally {
+      // Restore the spy before evicting so eviction's own destroy() call
+      // isn't counted, keeping the destroyCount assertions above unaffected.
       destroySpy.mockRestore();
-      rmSync(dir, { recursive: true, force: true });
+      try {
+        __evictConsumerForTest(mapFilePath);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     }
   });
 });

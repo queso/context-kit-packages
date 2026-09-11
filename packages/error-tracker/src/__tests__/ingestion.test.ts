@@ -255,6 +255,9 @@ describe("ingestion handler request validation", () => {
   test("returns 400 without throwing and stores nothing when the JSON body is an array", async () => {
     const res = await handler(rawRequest("[]"));
     expect(res.status).toBe(400);
+    // An array is an object, so it passes the JSON shape check and fails
+    // the required-field check instead.
+    expect(await res.json()).toEqual({ error: "message is required" });
     expect(await readClientErrors()).toHaveLength(0);
   });
 

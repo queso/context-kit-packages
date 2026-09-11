@@ -28,7 +28,7 @@ function makePayload(
       .map((a) => {
         if (typeof a === "string") return a;
         try {
-          return JSON.stringify(a);
+          return JSON.stringify(a) ?? String(a);
         } catch {
           return String(a);
         }

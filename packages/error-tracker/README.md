@@ -222,6 +222,8 @@ interface ErrorHandlersConfig {
 }
 ```
 
+`rateLimiter` identifies a client by the first address in the `X-Forwarded-For` header, then by `X-Real-IP`, and falls back to one shared `"unknown"` bucket when neither is present. Those headers are set by the client unless a proxy in front of the app overwrites them, so run the endpoints behind a reverse proxy or platform edge that sets them from the connection (Vercel, Cloudflare, nginx with `proxy_set_header`), and do not expose the handlers directly to the internet. Without such a proxy a caller can pick its own bucket, and every header-less client shares one.
+
 `queryHeaderToken` lets the query endpoint require a different token than ingestion. `NEXT_PUBLIC_ERROR_TRACKER_TOKEN` ships in the client bundle, so anyone who can read that bundle can also submit reports with it. If `queryHeaderToken` is unset, the same bundled token also authorizes the query endpoint, so anyone who loads the app can read stored errors. Set `queryHeaderToken` to a server-only value in production to keep query authorization out of the client bundle.
 
 Returns:

@@ -234,6 +234,16 @@ describe("patchConsoleError — non-Error arguments", () => {
     expect(payload?.message.length).toBeGreaterThan(0);
   });
 
+  test("serializes a single undefined argument to the string 'undefined'", () => {
+    // [undefined].join(" ") yields "" today, and the ingestion handler
+    // rejects an empty message, silently dropping the report.
+    console.error(undefined);
+    expect(mockReportError).toHaveBeenCalledTimes(1);
+    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
+    const [, payload] = (mockReportError.mock.calls as any[][])[0] ?? [];
+    expect(payload?.message).toBe("undefined");
+  });
+
   test("calls reportError when console.error is called with multiple arguments", () => {
     console.error("prefix:", new Error("multi-arg error"));
     expect(mockReportError).toHaveBeenCalledTimes(1);
