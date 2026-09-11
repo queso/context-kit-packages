@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SourceMapGenerator } from "source-map";
+import { SourceMapConsumer, SourceMapGenerator } from "source-map";
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
 
@@ -69,7 +69,186 @@ afterAll(() => {
 
 // ─── Import target ────────────────────────────────────────────────────────────
 
-const { resolveStack } = await import("../server/source-map-resolver");
+const { resolveStack, __setEvictedConsumerGraceMs } = await import(
+  "../server/source-map-resolver"
+);
+
+// ─── deferred destroy() on eviction ──────────────────────────────────────────
+//
+// getCachedConsumer hands the caller a consumer synchronously, then the
+// caller uses it (originalPositionFor) without awaiting anything in between.
+// A concurrent insert can evict that same consumer from the cache while the
+// caller is still holding it. destroy() frees the WASM-side memory backing
+// the consumer, so destroying it out from under an in-flight caller would be
+// a use-after-free.
+//
+// The module-level source map cache is a singleton shared with every other
+// test file in the run (`bun test` loads them into one process), so these
+// tests cannot assume the cache starts empty — another file's fixtures may
+// already occupy slots and get evicted incidentally while this test fills
+// its own 20. Assertions below identify "our" consumer by its unique source
+// name rather than by raw destroy-call counts, so incidental evictions of
+// unrelated entries can't produce a false pass or fail.
+//
+// A distinct source map per index, written into its own directory, so each
+// entry is independently addressable and every eviction below is exactly the
+// one the test expects (no accidental hits promoting a different key to MRU).
+function buildDeferDestroySourceMap(index: number): string {
+  const generator = new SourceMapGenerator({ file: `defer${index}.js` });
+  generator.addMapping({
+    generated: { line: 1, column: 0 },
+    original: { line: 1, column: 0 },
+    source: `DeferOriginal${index}.tsx`,
+    name: `deferFn${index}`,
+  });
+  return generator.toString();
+}
+
+describe("resolveStack — deferred destroy() on cache eviction", () => {
+  test("does not destroy an evicted consumer synchronously, but does after the grace period elapses", async () => {
+    const dir = join(tmpdir(), `error-tracker-defer-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+
+    const CACHE_LIMIT = 20;
+    const GRACE_MS = 40;
+    const frameFor = (i: number) => `TypeError: test\n    at defer${i}.js:1:0`;
+    const expectedFor = (i: number) =>
+      `TypeError: test\n    at deferFn${i} (DeferOriginal${i}.tsx:1:0)`;
+
+    // Spying on a probe instance's prototype reaches every BasicSourceMapConsumer
+    // instance the resolver creates: source-map's factory always returns the
+    // same shared class prototype for a plain (non-indexed) map. Destroy the
+    // probe before installing the spy so its own cleanup call isn't counted.
+    // Each destroy call's originating consumer is identified by its `.sources`
+    // (the original filenames the map declares) rather than object identity,
+    // so an incidental destroy of some other test's entry is distinguishable
+    // from the one this test is targeting.
+    const probe = await new SourceMapConsumer(
+      JSON.parse(buildDeferDestroySourceMap(-1))
+    );
+    const consumerProto = Object.getPrototypeOf(probe);
+    probe.destroy();
+    const originalDestroy: () => void = consumerProto.destroy;
+    const destroyedSources: string[][] = [];
+    const destroySpy = spyOn(consumerProto, "destroy").mockImplementation(
+      function (this: { sources: string[] }) {
+        destroyedSources.push([...this.sources]);
+        return originalDestroy.call(this);
+      }
+    );
+    const targetSource = `DeferOriginal0.tsx`;
+    const targetDestroyed = () =>
+      destroyedSources.some((sources) => sources.includes(targetSource));
+
+    try {
+      __setEvictedConsumerGraceMs(GRACE_MS);
+
+      // Fill the (possibly non-empty, shared) cache with 20 fresh entries.
+      // Regardless of what else already occupied the cache, once 20 distinct
+      // new keys have been inserted into a 20-entry LRU, the cache holds
+      // exactly those 20, in insertion order — so index 0 is now the oldest.
+      for (let i = 0; i < CACHE_LIMIT; i++) {
+        writeFileSync(
+          join(dir, `defer${i}.js.map`),
+          buildDeferDestroySourceMap(i),
+          "utf-8"
+        );
+        const result = await resolveStack(frameFor(i), { sourceMapDir: dir });
+        expect(result).toBe(expectedFor(i));
+      }
+      expect(targetDestroyed()).toBe(false);
+
+      // One more distinct entry forces the eviction of index 0.
+      writeFileSync(
+        join(dir, `defer${CACHE_LIMIT}.js.map`),
+        buildDeferDestroySourceMap(CACHE_LIMIT),
+        "utf-8"
+      );
+      await resolveStack(frameFor(CACHE_LIMIT), { sourceMapDir: dir });
+
+      // (a) Eviction happened, but destroy() must not fire synchronously:
+      // another caller could still be mid-use of the evicted consumer.
+      expect(targetDestroyed()).toBe(false);
+
+      // (b) Once the grace period elapses, the evicted consumer is destroyed.
+      await new Promise((resolve) => setTimeout(resolve, GRACE_MS + 60));
+      expect(targetDestroyed()).toBe(true);
+    } finally {
+      destroySpy.mockRestore();
+      __setEvictedConsumerGraceMs(undefined);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("does not destroy a reloaded entry that replaces an evicted one within the grace period", async () => {
+    const dir = join(tmpdir(), `error-tracker-defer-reload-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+
+    const CACHE_LIMIT = 20;
+    const GRACE_MS = 40;
+    const frameFor = (i: number) => `TypeError: test\n    at defer${i}.js:1:0`;
+    const expectedFor = (i: number) =>
+      `TypeError: test\n    at deferFn${i} (DeferOriginal${i}.tsx:1:0)`;
+
+    const realReadFile = fsp.readFile.bind(fsp);
+    let readCount = 0;
+    const readSpy = spyOn(fsp, "readFile").mockImplementation(
+      (...args: any[]) => {
+        readCount++;
+        return (realReadFile as any)(...args);
+      }
+    );
+
+    try {
+      __setEvictedConsumerGraceMs(GRACE_MS);
+
+      for (let i = 0; i < CACHE_LIMIT; i++) {
+        writeFileSync(
+          join(dir, `defer${i}.js.map`),
+          buildDeferDestroySourceMap(i),
+          "utf-8"
+        );
+        await resolveStack(frameFor(i), { sourceMapDir: dir });
+      }
+
+      // Evict index 0 by loading one more distinct entry.
+      writeFileSync(
+        join(dir, `defer${CACHE_LIMIT}.js.map`),
+        buildDeferDestroySourceMap(CACHE_LIMIT),
+        "utf-8"
+      );
+      await resolveStack(frameFor(CACHE_LIMIT), { sourceMapDir: dir });
+
+      // Reload index 0's path before the grace period elapses. This is a
+      // genuine cache miss (index 0 was just evicted), so it reads from disk
+      // again and caches a fresh consumer under the same path.
+      readCount = 0;
+      const reloadResult = await resolveStack(frameFor(0), {
+        sourceMapDir: dir,
+      });
+      expect(reloadResult).toBe(expectedFor(0));
+      expect(readCount).toBe(1);
+
+      // Wait past the original eviction's grace period. If the deferred
+      // destroy() were keyed only on the path (not on the specific evicted
+      // instance), it would destroy this freshly reloaded consumer too.
+      await new Promise((resolve) => setTimeout(resolve, GRACE_MS + 60));
+
+      // The reloaded entry must still be a live, working cache hit: correctly
+      // resolved output, and no further disk read.
+      readCount = 0;
+      const afterGraceResult = await resolveStack(frameFor(0), {
+        sourceMapDir: dir,
+      });
+      expect(afterGraceResult).toBe(expectedFor(0));
+      expect(readCount).toBe(0);
+    } finally {
+      readSpy.mockRestore();
+      __setEvictedConsumerGraceMs(undefined);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 // ─── resolveStack ─────────────────────────────────────────────────────────────
 

@@ -62,7 +62,11 @@ describe("createErrorTracker", () => {
   });
 
   test("defaults endpoint to /api/errors when not provided", () => {
-    expect(() => createErrorTracker({})).not.toThrow();
+    const tracker = createErrorTracker({});
+    tracker.init();
+    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
+    const [calledConfig] = (mockInitErrorTracker.mock.calls as any[][])[0];
+    expect(calledConfig?.endpoint).toBe("/api/errors");
   });
 });
 

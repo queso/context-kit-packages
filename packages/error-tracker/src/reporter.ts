@@ -8,6 +8,14 @@ function truncate(str: string): string {
   return str.length > MAX_STACK_LENGTH ? str.slice(0, MAX_STACK_LENGTH) : str;
 }
 
+/**
+ * Sends an error report to the configured endpoint.
+ *
+ * Fire-and-forget: the underlying POST is not awaited and attaches its own
+ * rejection handler, so this function never throws and never returns a
+ * promise. Callers must not await it or attach a `.catch` of their own;
+ * there is nothing to await or catch.
+ */
 export function reportError(
   config: ErrorTrackerConfig,
   data: ErrorPayload

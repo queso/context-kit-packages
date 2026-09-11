@@ -81,6 +81,23 @@ function getMapFilePath(sourceMapDir: string, fileRef: string): string | null {
 const sourceMapCache = new Map<string, SourceMapConsumerInstance>();
 const SOURCE_MAP_CACHE_LIMIT = 20;
 
+// An evicted consumer isn't destroyed right away: a caller may already be
+// holding it (getCachedConsumer already returned it and the caller hasn't
+// called originalPositionFor yet) when a concurrent insert evicts it here.
+// Destroying it out from under that caller would use freed WASM memory.
+// Instead the entry is removed from the cache immediately (so it can't be
+// handed out again) and destroy() is deferred until any in-flight use has
+// had time to finish. Callers use a consumer synchronously right after
+// awaiting getCachedConsumer, so this window only needs to outlast that.
+const DEFAULT_EVICTED_CONSUMER_GRACE_MS = 30_000;
+let evictedConsumerGraceMs = DEFAULT_EVICTED_CONSUMER_GRACE_MS;
+
+// Test-only: shortens (or restores) the eviction grace period so tests don't
+// have to wait out the real 30s window. Never called from production code.
+export function __setEvictedConsumerGraceMs(ms?: number): void {
+  evictedConsumerGraceMs = ms ?? DEFAULT_EVICTED_CONSUMER_GRACE_MS;
+}
+
 // In-flight loads keyed by map file path, so concurrent cache misses for the
 // same chunk share one read + parse instead of each performing its own.
 const inFlightLoads = new Map<string, Promise<SourceMapConsumerInstance>>();
@@ -138,8 +155,22 @@ async function getCachedConsumer(
     if (sourceMapCache.size >= SOURCE_MAP_CACHE_LIMIT) {
       const oldestKey = sourceMapCache.keys().next().value;
       if (oldestKey) {
-        sourceMapCache.get(oldestKey)?.destroy();
+        const evicted = sourceMapCache.get(oldestKey);
         sourceMapCache.delete(oldestKey);
+        if (evicted) {
+          const timer = setTimeout(() => {
+            // If the same consumer instance has been re-inserted under this
+            // path within the grace period, it's back in active use: leave
+            // it alone and let a future eviction destroy it instead.
+            if (sourceMapCache.get(oldestKey) === evicted) {
+              return;
+            }
+            evicted.destroy();
+          }, evictedConsumerGraceMs);
+          if (typeof timer.unref === "function") {
+            timer.unref();
+          }
+        }
       }
     }
     sourceMapCache.set(mapFilePath, consumer);

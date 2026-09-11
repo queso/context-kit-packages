@@ -257,13 +257,17 @@ describe("reportError", () => {
   test("does not include secret header when token is not configured", async () => {
     const fetchMock = mockGlobalFetch();
     try {
-      reportError(makeConfig({ token: undefined }), makePayload());
+      const config = makeConfig({ token: undefined });
+      reportError(config, makePayload());
       await new Promise((r) => setTimeout(r, 0));
       const headers = fetchMock.calls[0].init?.headers as Record<
         string,
         string
       >;
-      // Should not have any auth-style header with a secret value
+      // The configured header name must be absent, not just a different value.
+      const headerName = config.secretHeaderName ?? "x-error-tracker-token";
+      expect(headers?.[headerName]).toBeUndefined();
+      // No header should carry a token-shaped value at all.
       const headerValues = Object.values(headers ?? {});
       expect(headerValues.some((v) => v === "my-secret-token")).toBe(false);
     } finally {

@@ -125,7 +125,7 @@ The package is structured in two halves: a client module that instruments the br
 
 On the client, a lightweight initializer attaches to the browser's global error events and optionally wraps `console.error`. A React error boundary component catches render-time crashes. Both funnel errors to a single internal reporter that constructs a JSON payload and fires a POST to the app's own API — without awaiting the response.
 
-On the server, a pair of Next.js route handlers handle ingestion and querying. The ingestion handler validates the request, resolves the stack trace against build-time source maps stored on the server filesystem, computes a deduplication fingerprint, and upserts to the `ClientError` table. The query handler provides filtered access to stored errors.
+On the server, a pair of Next.js route handlers handle ingestion and querying. The ingestion handler validates the request, resolves the stack trace against build-time source maps stored on the server filesystem, computes a deduplication fingerprint, and upserts to the `client_error` table. The query handler provides filtered access to stored errors.
 
 The `client_error` table lives in the consuming app's own schema. The package ships it as a Drizzle schema module per dialect; consumers re-export the module from their schema file, generate and run the migration, and own the table alongside the rest of their data.
 
@@ -157,7 +157,7 @@ The `client_error` table lives in the consuming app's own schema. The package sh
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
 | Secret header not set in production | Medium | Endpoint open to public writes, table spam | Warn loudly at startup if `NODE_ENV=production` and no token configured |
-| Error storm fills Postgres table | Medium | Disk pressure, slow queries | Deduplication collapses repeats; document `DELETE FROM "ClientError" WHERE ...` cleanup query |
+| Error storm fills Postgres table | Medium | Disk pressure, slow queries | Deduplication collapses repeats; document `DELETE FROM client_error WHERE ...` cleanup query |
 | Source maps not present on server at runtime | Medium | Unresolved stacks in production | Document the build config requirement clearly; fail gracefully with raw stack |
 | `console.error` monkey-patch conflicts with React DevTools or third-party libs | Low | Unexpected suppression or double-reporting | Make `patchConsoleError` opt-in, default false |
 | Edge runtime deployment (Vercel Edge, Cloudflare Workers) | Low | Source map resolution fails (no filesystem) | Document incompatibility; resolution is skipped gracefully, raw stack stored |
@@ -170,12 +170,12 @@ No open questions remaining.
 ## 11. Rollout & Measurement
 
 **Phasing:**
-- **Phase 1 — Core capture:** `ClientError` model, ingestion endpoint, React error boundary, unhandled rejection listener. Enough to replace manual error boundary logging in KindredShelf.
+- **Phase 1 — Core capture:** `client_error` schema module, ingestion endpoint, React error boundary, unhandled rejection listener. Enough to replace manual error boundary logging in KindredShelf.
 - **Phase 2 — Production readiness:** Source map resolution, secret header auth, rate limiting, deduplication, loop prevention. Ready to deploy to production apps.
 - **Phase 3 — DX polish:** `console.error` patching, query endpoint with filters, `npx error-tracker tail` and `resolve` CLI commands, documented SQL recipes, README with copy-paste integration guide.
 
 **Measurement:**
-- Integration test: errors thrown in a test app appear in the `ClientError` table within one request cycle
+- Integration test: errors thrown in a test app appear in the `client_error` table within one request cycle
 - Source map test: a known minified stack resolves to the correct file/line in the resolved output
 - Load test: 100 rapid identical errors produce one row with `occurrences = 100`, not 100 rows
 - Security test: requests without the secret header are rejected with 401
