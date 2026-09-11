@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { mkdtempSync, readFileSync } from "fs";
+import { mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 
@@ -24,33 +24,38 @@ function runPostgresTestFile(envOverrides: Record<string, string | undefined>) {
 
   // The junit reporter gives structured counts, so the assertions below do not
   // depend on how many tests postgres.test.ts contains or on bun's summary text.
-  const junitFile = join(mkdtempSync(join(tmpdir(), "postgres-guard-")), "junit.xml");
-  const result = Bun.spawnSync({
-    cmd: [
-      process.execPath,
-      "test",
-      postgresTestFile,
-      "--reporter=junit",
-      `--reporter-outfile=${junitFile}`,
-    ],
-    cwd: packageRoot,
-    env,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-
-  let junit: string | undefined;
+  const junitDir = mkdtempSync(join(tmpdir(), "postgres-guard-"));
+  const junitFile = join(junitDir, "junit.xml");
   try {
-    junit = readFileSync(junitFile, "utf8");
-  } catch {
-    junit = undefined;
-  }
+    const result = Bun.spawnSync({
+      cmd: [
+        process.execPath,
+        "test",
+        postgresTestFile,
+        "--reporter=junit",
+        `--reporter-outfile=${junitFile}`,
+      ],
+      cwd: packageRoot,
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
 
-  return {
-    exitCode: result.exitCode,
-    output: result.stdout.toString() + result.stderr.toString(),
-    junit,
-  };
+    let junit: string | undefined;
+    try {
+      junit = readFileSync(junitFile, "utf8");
+    } catch {
+      junit = undefined;
+    }
+
+    return {
+      exitCode: result.exitCode,
+      output: result.stdout.toString() + result.stderr.toString(),
+      junit,
+    };
+  } finally {
+    rmSync(junitDir, { recursive: true, force: true });
+  }
 }
 
 function readCount(junit: string, attribute: "tests" | "failures" | "skipped"): number {

@@ -1,4 +1,6 @@
 import { describe, test, expect } from "bun:test";
+import { createClient } from "@libsql/client";
+import { drizzle } from "drizzle-orm/libsql";
 import { prepareTestDb, testDb, validConfig, setupEnvGuard } from "./helpers";
 
 setupEnvGuard();
@@ -108,5 +110,37 @@ describe("createAuth", () => {
     const created = rows.filter((row) => row.email === email);
     expect(created).toHaveLength(1);
     expect(created[0]?.name).toBe("Test User");
+  });
+
+  test("works with a Drizzle instance created without a schema attached", async () => {
+    // createAuth passes the package's own schema module to the adapter, so a
+    // consumer's `drizzle(client)` with no `{ schema }` must still work. This
+    // db is separate from `testDb` and deliberately has no schema attached.
+    const { createAuth } = await import("../create-auth");
+    const schema = await import("../schema/sqlite");
+    const { pushSQLiteSchema } = await import("drizzle-kit/api");
+
+    const schemalessDb = drizzle(createClient({ url: ":memory:" }));
+    expect(Object.keys(schemalessDb._.fullSchema)).toHaveLength(0);
+    const { apply } = await pushSQLiteSchema(
+      schema,
+      schemalessDb as Parameters<typeof pushSQLiteSchema>[1]
+    );
+    await apply();
+
+    const email = `schemaless-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`;
+    const auth = createAuth(validConfig({ db: schemalessDb }));
+    const res = await auth.api.signUpEmail({
+      body: { name: "Schemaless User", email, password: "password123" },
+      asResponse: true,
+    });
+    expect(res.status).toBe(200);
+
+    const cookie = res.headers.get("set-cookie") ?? "";
+    const session = await auth.api.getSession({ headers: new Headers({ cookie }) });
+    expect(session?.user.email).toBe(email);
+
+    const rows = await schemalessDb.select().from(schema.user);
+    expect(rows.map((row) => row.email)).toEqual([email]);
   });
 });
