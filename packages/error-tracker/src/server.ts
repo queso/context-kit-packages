@@ -119,13 +119,22 @@ export function createErrorHandlers(config: ErrorHandlersConfig) {
           body: capped.text,
         });
 
-      let body: Record<string, unknown>;
+      let parsedBody: unknown;
       try {
-        body = JSON.parse(capped.text);
+        parsedBody = JSON.parse(capped.text);
       } catch {
         // Let the ingestion handler deal with the parse error
         return ingestionHandler(rebuild());
       }
+
+      // JSON.parse succeeds on `null` and other non-object values; skip
+      // resolution for those (the ingestion handler rejects them on its own)
+      // rather than crash on `body.stack` below.
+      if (typeof parsedBody !== "object" || parsedBody === null) {
+        return ingestionHandler(rebuild());
+      }
+
+      const body = parsedBody as Record<string, unknown>;
 
       if (typeof body.stack === "string") {
         const resolvedStack = await resolveStack(body.stack, { sourceMapDir });

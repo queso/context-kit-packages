@@ -365,6 +365,21 @@ describe("createErrorHandlers source map resolution", () => {
     expect(await readClientErrors()).toHaveLength(0);
   });
 
+  test("returns 400 without throwing when the body is JSON null and resolution is configured", async () => {
+    // `JSON.parse("null")` succeeds and yields `null`, which is not a plain
+    // object: resolution must be skipped rather than crash on `body.stack`.
+    const { POST } = createErrorHandlers({ ...sqliteConfig(), sourceMapDir });
+    const res = await POST(
+      new Request("https://example.com/api/errors", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "null",
+      })
+    );
+    expect(res.status).toBe(400);
+    expect(await readClientErrors()).toHaveLength(0);
+  });
+
   test("returns 400 with a distinct message when the body stream itself fails", async () => {
     const { POST } = createErrorHandlers({ ...sqliteConfig(), sourceMapDir });
     const stream = new ReadableStream<Uint8Array>({

@@ -124,12 +124,23 @@ export function createIngestionHandler(config: IngestionConfig) {
     }
     const text = capped.text;
 
-    let body: Record<string, unknown>;
+    let parsedBody: unknown;
     try {
-      body = JSON.parse(text);
+      parsedBody = JSON.parse(text);
     } catch {
       return Response.json({ error: "Invalid JSON" }, { status: 400 });
     }
+
+    // JSON.parse succeeds on `null`, a number, a string, and a boolean, none
+    // of which can carry the fields below; treat anything but a plain object
+    // the same as unparseable JSON rather than crash on `body.message` etc.
+    // An array passes this check (typeof "object", not null) and falls
+    // through to the message check below instead.
+    if (typeof parsedBody !== "object" || parsedBody === null) {
+      return Response.json({ error: "Invalid JSON" }, { status: 400 });
+    }
+
+    const body = parsedBody as Record<string, unknown>;
 
     // Validate required fields
     if (
@@ -171,7 +182,7 @@ export function createIngestionHandler(config: IngestionConfig) {
     // same way an unset NODE_ENV falls back to "development".
     const environment =
       typeof body.environment === "string" && body.environment.trim() !== ""
-        ? body.environment.slice(0, MAX_ENVIRONMENT_LENGTH)
+        ? body.environment.trim().slice(0, MAX_ENVIRONMENT_LENGTH)
         : process.env.NODE_ENV ?? "development";
 
     // Fix 2: use resolved frames for fingerprinting when available so the same

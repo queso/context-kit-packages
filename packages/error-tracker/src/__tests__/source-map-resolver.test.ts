@@ -551,29 +551,57 @@ describe("getCachedConsumer — duplicate load discard", () => {
     }
   });
 
-  test("reconciling against an empty cache slot inserts the consumer and returns it unchanged", () => {
+  test("reconciling against an empty cache slot inserts the consumer and returns it unchanged", async () => {
     // The no-existing-entry branch of insertOrReuseConsumer: nothing to
     // discard, so the passed-in consumer becomes the cached one as-is.
+    //
+    // This uses real SourceMapConsumer instances and a real temp-dir map
+    // file, like the neighboring test above, rather than fake `{ destroy }`
+    // objects: sourceMapCache is a process-wide singleton shared by every
+    // test file in the run, and a non-consumer object left sitting in it
+    // would fail confusingly if some later test ever resolved a frame for
+    // this path. A real consumer left cached here is harmless the same way
+    // the neighboring test's cached "dup.js.map" entry is: the "true LRU
+    // eviction" describe block right below fills the shared cache with 20
+    // fresh entries, which flushes every entry inserted before it out via
+    // ordinary LRU churn.
     const dir = join(tmpdir(), `error-tracker-dup-fresh-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
     const mapFilePath = join(dir, "fresh.js.map");
+    writeFileSync(mapFilePath, buildSourceMap(), "utf-8");
 
-    const probe = { destroy: () => {} } as unknown as Parameters<
-      typeof __reconcileLoadedConsumerForTest
-    >[1];
-    const result = __reconcileLoadedConsumerForTest(mapFilePath, probe);
-    expect(result).toBe(probe);
+    const probe = await new SourceMapConsumer(JSON.parse(buildSourceMap()));
+    const consumerProto = Object.getPrototypeOf(probe);
+    probe.destroy();
+    const originalDestroy: () => void = consumerProto.destroy;
+    let destroyCount = 0;
+    const destroySpy = spyOn(consumerProto, "destroy").mockImplementation(
+      function (this: unknown) {
+        destroyCount++;
+        return originalDestroy.call(this);
+      }
+    );
 
-    // A second reconciliation for the same path now finds it cached and
-    // discards whatever is passed in place of it.
-    let destroyed = false;
-    const duplicate = {
-      destroy: () => {
-        destroyed = true;
-      },
-    } as unknown as Parameters<typeof __reconcileLoadedConsumerForTest>[1];
-    const winner = __reconcileLoadedConsumerForTest(mapFilePath, duplicate);
-    expect(winner).toBe(probe);
-    expect(destroyed).toBe(true);
+    try {
+      // Nothing cached yet for this path: the passed-in consumer is
+      // inserted as-is and returned unchanged.
+      const first = await new SourceMapConsumer(JSON.parse(buildSourceMap()));
+      const result = __reconcileLoadedConsumerForTest(mapFilePath, first);
+      expect(result).toBe(first);
+      expect(destroyCount).toBe(0);
+
+      // A second reconciliation for the same path now finds it cached and
+      // discards whatever is passed in place of it.
+      const duplicate = await new SourceMapConsumer(
+        JSON.parse(buildSourceMap())
+      );
+      const winner = __reconcileLoadedConsumerForTest(mapFilePath, duplicate);
+      expect(winner).toBe(first);
+      expect(destroyCount).toBe(1);
+    } finally {
+      destroySpy.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -79,7 +79,7 @@ Request → Auth Check → Parse JSON → Validate → Truncate Stacks
 **Deduplication:** one statement, no read-then-write. The insert targets the unique `fingerprint` column; on conflict the update:
 
 - sets `occurrences` to `occurrences + 1`
-- sets `last_seen_at` to the incoming timestamp
+- sets `last_seen_at` to the server's clock at ingestion (the client payload carries no timestamp, so a client cannot backdate it)
 - keeps the stored `resolved_stack` unless the incoming report carries one
 - sets `resolved_at` to `NULL`
 

@@ -47,7 +47,7 @@ For Next.js, set `sourceMapDir` to `.next/static/chunks`, the standard output di
 
 ## Deployment Requirements
 
-Resolved stacks name your source files, components and functions, and the GET query endpoint serves them back. Set `queryHeaderToken` on `createErrorHandlers` before enabling `sourceMapDir` on any deployment reachable from the internet; without a token the query endpoint answers every request.
+Set `queryHeaderToken` on `createErrorHandlers` for every deployment reachable from the internet, whether or not `sourceMapDir` is enabled: without a token the GET query endpoint answers every request with the stored error data (messages, raw stacks, URLs, user agents). Enabling `sourceMapDir` makes that data more sensitive, because resolved stacks name your source files, components and functions, and the query endpoint serves them back.
 
 Source map resolution requires that the `.next/` build output directory is present on the server at runtime. This is true for:
 

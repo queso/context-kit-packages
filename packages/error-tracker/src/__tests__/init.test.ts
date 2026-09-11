@@ -296,8 +296,10 @@ describe("initErrorTracker — existing handler chaining", () => {
 describe("initErrorTracker — idempotency", () => {
   test("each installed tracker reports an unhandled rejection once", async () => {
     // Two initErrorTracker calls install two independent trackers, each with
-    // its own listener, so one rejection is reported twice. The factory's
-    // init() is the single intended entry point for de-duplication.
+    // its own listener, so one rejection is reported twice. Nothing
+    // de-duplicates: the factory's init() calls initErrorTracker
+    // unconditionally, so consumers call init() once and tear that
+    // installation down with the returned cleanup before calling it again.
     mockReportError.mockClear();
     const cleanup1 = initErrorTracker(TEST_CONFIG);
     const cleanup2 = initErrorTracker(TEST_CONFIG);

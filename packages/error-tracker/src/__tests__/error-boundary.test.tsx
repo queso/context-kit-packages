@@ -190,6 +190,17 @@ describe("ErrorBoundary", () => {
 
     screen.getByText("fallback shown");
   });
+
+  test("does not call reportError when config is omitted", () => {
+    render(
+      <ErrorBoundary fallback={<div>no config fallback</div>}>
+        <ThrowingComponent />
+      </ErrorBoundary>
+    );
+
+    expect(screen.getByText("no config fallback")).toBeDefined();
+    expect(mockReportError).not.toHaveBeenCalled();
+  });
 });
 
 describe("ErrorBoundary — fallback prop variants", () => {

@@ -238,6 +238,27 @@ describe("ingestion handler request validation", () => {
   });
 
   test.each([
+    ["null", "null"],
+    ["a number", "42"],
+    ["a string", '"oops"'],
+    ["a boolean", "true"],
+  ])(
+    "returns 400 without throwing and stores nothing when the JSON body is %s",
+    async (_label, json) => {
+      const res = await handler(rawRequest(json));
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "Invalid JSON" });
+      expect(await readClientErrors()).toHaveLength(0);
+    }
+  );
+
+  test("returns 400 without throwing and stores nothing when the JSON body is an array", async () => {
+    const res = await handler(rawRequest("[]"));
+    expect(res.status).toBe(400);
+    expect(await readClientErrors()).toHaveLength(0);
+  });
+
+  test.each([
     ["missing", undefined],
     ["empty", ""],
     ["blank", "   \t\n"],
@@ -348,6 +369,19 @@ describe("ingestion handler first report", () => {
     expect((await readOnlyClientError()).environment).toBe(
       longEnvironment.slice(0, 64)
     );
+  });
+
+  test("trims surrounding whitespace from a reported environment before storing it", async () => {
+    await handler(errorRequest(validBody({ environment: "  staging  " })));
+    expect((await readOnlyClientError()).environment).toBe("staging");
+  });
+
+  test("trims before truncating so leading whitespace does not push the real name past the length limit", async () => {
+    // 64 leading spaces plus "production": an untrimmed slice(0, 64) would
+    // keep only spaces and lose the name entirely.
+    const environment = `${" ".repeat(64)}production`;
+    await handler(errorRequest(validBody({ environment })));
+    expect((await readOnlyClientError()).environment).toBe("production");
   });
 
   test("truncates a stack longer than 10,000 characters", async () => {
