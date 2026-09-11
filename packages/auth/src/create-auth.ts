@@ -1,18 +1,26 @@
 import { betterAuth } from "better-auth";
-import { prismaAdapter } from "better-auth/adapters/prisma";
+import { drizzleAdapter, type DB } from "better-auth/adapters/drizzle";
+import * as sqliteSchema from "./schema/sqlite";
+import * as postgresSchema from "./schema/postgres";
 import type { AuthConfig, AuthInstance } from "./types";
 
 /**
- * Creates a configured Better Auth instance wired to Prisma.
+ * Creates a configured Better Auth instance wired to Drizzle.
  *
  * Validates required configuration, reads env-var fallbacks for
  * BETTER_AUTH_SECRET and BETTER_AUTH_URL, and returns a ready-to-use
  * auth instance with email/password enabled by default.
  */
 export function createAuth(config: AuthConfig): AuthInstance {
-  if (!config.prisma) {
+  if (!config.db) {
     throw new Error(
-      "A Prisma client instance is required. Pass your PrismaClient as the `prisma` option."
+      'A Drizzle database instance is required. Pass your Drizzle db as the `db` option (e.g. `import { db } from "@/db"`).'
+    );
+  }
+
+  if (config.dialect !== "sqlite" && config.dialect !== "postgres") {
+    throw new Error(
+      `Unsupported dialect "${config.dialect}". Expected "sqlite" or "postgres".`
     );
   }
 
@@ -59,9 +67,13 @@ export function createAuth(config: AuthConfig): AuthInstance {
   }
 
   return betterAuth({
-    // PrismaClient types are generated per-schema, so we accept `unknown` and cast here.
-    database: prismaAdapter(config.prisma as any, {
-      provider: config.database,
+    // Drizzle instances are generic over the consumer's schema, so `db` is
+    // typed as `object` in AuthConfig and narrowed to the adapter's DB here.
+    // `schema` is passed explicitly so the adapter works even when the
+    // consumer's Drizzle instance was created without a schema attached.
+    database: drizzleAdapter(config.db as DB, {
+      provider: config.dialect === "postgres" ? "pg" : "sqlite",
+      schema: config.dialect === "postgres" ? postgresSchema : sqliteSchema,
     }),
     secret,
     baseURL,

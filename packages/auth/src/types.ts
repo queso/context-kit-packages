@@ -14,21 +14,31 @@ export interface PasswordRules {
 }
 
 /**
+ * The database dialect the auth tables live in.
+ */
+export type AuthDialect = "sqlite" | "postgres";
+
+/**
  * Configuration for the auth package, passed to `createAuth()`.
  *
- * Wraps Better Auth's options with a Prisma-native interface.
+ * Wraps Better Auth's options with a Drizzle-native interface.
  */
 export interface AuthConfig {
   /**
-   * Your Prisma client instance. Used as the database adapter.
-   * The consumer is responsible for providing a configured PrismaClient.
+   * Your app's Drizzle database instance — e.g. `import { db } from "@/db"`
+   * in a context-kit app.
+   *
+   * Any Drizzle instance works (libsql, better-sqlite3, postgres-js,
+   * node-postgres, ...). Typed as `object` because Drizzle's types are
+   * generic over the consumer's schema.
    */
-  prisma: unknown;
+  db: object;
 
   /**
-   * The database provider type. Must match your Prisma datasource provider.
+   * Which database `db` points at. In a context-kit app pass `getDialect()`
+   * from `@/db` so the two cannot drift.
    */
-  database: "postgresql" | "mysql" | "sqlite";
+  dialect: AuthDialect;
 
   /**
    * Session expiration duration in seconds.

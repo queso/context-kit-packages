@@ -1,6 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import type {
   AuthConfig,
+  AuthDialect,
   AuthInstance,
   SessionData,
   MiddlewareConfig,
@@ -10,16 +11,16 @@ import type {
 describe("types are importable and structurally sound", () => {
   test("AuthConfig accepts a valid config shape", () => {
     const config: AuthConfig = {
-      prisma: {},
-      database: "postgresql",
+      db: {},
+      dialect: "sqlite",
     };
-    expect(config.database).toBe("postgresql");
+    expect(config.dialect).toBe("sqlite");
   });
 
   test("AuthConfig accepts optional fields", () => {
     const config: AuthConfig = {
-      prisma: {},
-      database: "sqlite",
+      db: {},
+      dialect: "postgres",
       sessionDuration: 3600,
       secret: "test-secret",
       baseURL: "http://localhost:3000",
@@ -41,5 +42,12 @@ describe("types are importable and structurally sound", () => {
     };
     expect(mwConfig.protectedRoutes).toHaveLength(3);
     expect(mwConfig.signInPath).toBe("/sign-in");
+  });
+
+  test("AuthDialect accepts both supported dialects", () => {
+    const sqlite: AuthDialect = "sqlite";
+    const postgres: AuthDialect = "postgres";
+    const dialects: AuthDialect[] = [sqlite, postgres];
+    expect(dialects).toEqual(["sqlite", "postgres"]);
   });
 });

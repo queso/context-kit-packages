@@ -4,6 +4,7 @@ export { getSession, getUser } from "./session";
 
 export type {
   AuthConfig,
+  AuthDialect,
   AuthInstance,
   SessionData,
   PasswordRules,

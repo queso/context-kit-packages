@@ -17,12 +17,12 @@ describe("client entry point", () => {
 
   test("client module does not re-export server-only modules", async () => {
     // Importing the client module must not throw due to server-side imports
-    // (e.g. next/headers, prisma adapter). If it does, the module is polluted.
+    // (e.g. next/headers, drizzle adapter). If it does, the module is polluted.
     const clientModule = await import("../client");
     // createAuthClient should be the only named export from our entry point
     expect("createAuthClient" in clientModule).toBe(true);
     // Ensure server-only identifiers are not present
-    expect("prismaAdapter" in clientModule).toBe(false);
+    expect("drizzleAdapter" in clientModule).toBe(false);
     expect("createAuth" in clientModule).toBe(false);
   });
 });

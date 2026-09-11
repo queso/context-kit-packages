@@ -20,15 +20,15 @@ bun --filter @context-kit/auth-ui test   # run auth-ui tests
 ## Architecture
 
 - **Monorepo layout:** `packages/<name>/` — each directory is a separate npm package under the `@context-kit` scope
-- **Stack assumptions:** Next.js App Router, Prisma, TypeScript
+- **Stack assumptions:** Next.js App Router, Drizzle, TypeScript
 - **No Pages Router support** — Server Components, Server Actions, and Route Handlers only
-- **Prisma-native:** packages extend the consumer's Prisma schema rather than using their own database layer
+- **Drizzle-native:** packages export Drizzle schema modules the consumer re-exports from its own `db/schema/<dialect>.ts`; the consumer owns the migrations, so a package bump surfaces as a generated migration
 
 ### Packages
 
 | Package | Path | Status |
 |---------|------|--------|
-| `@context-kit/auth` | `packages/auth` | In progress — Better Auth + Prisma |
+| `@context-kit/auth` | `packages/auth` | 0.2.0 — Better Auth + Drizzle |
 | `@context-kit/auth-ui` | `packages/auth-ui` | 0.1.0 — Auth UI components for Next.js App Router |
 | `@context-kit/billing` | `packages/billing` | Planned — Stripe subscriptions |
 
