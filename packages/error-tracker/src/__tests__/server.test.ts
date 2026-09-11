@@ -1,366 +1,303 @@
-import { describe, expect, mock, test } from "bun:test";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { SourceMapGenerator } from "source-map";
+import { computeFingerprint, createErrorHandlers } from "../server";
+import { parseFrames } from "../server/parse-stack";
+import {
+  errorRequest,
+  prepareTestDb,
+  queryRequest,
+  readClientErrors,
+  readOnlyClientError,
+  resetClientErrors,
+  sqliteConfig,
+  testDb,
+} from "./helpers";
 
-// ─── Fixtures ─────────────────────────────────────────────────────────────────
-
-const SECRET_TOKEN = "server-secret-token";
 const SECRET_HEADER = "x-error-token";
+const SECRET_TOKEN = "test-secret-token";
 
-const NOW = new Date("2026-03-15T10:00:00.000Z");
+const MESSAGE = "TypeError: Cannot read properties of undefined";
+const STACK = `${MESSAGE}\n  at Component (app.js:1:100)`;
 
-function makePostRequest(
-  body: unknown = { message: "TypeError: test" },
-  headers: Record<string, string> = {}
-): Request {
-  return new Request("https://example.com/api/errors", {
-    method: "POST",
-    headers: { "content-type": "application/json", ...headers },
-    body: JSON.stringify(body),
-  });
-}
-
-function makeGetRequest(
-  searchParams: Record<string, string> = {},
-  headers: Record<string, string> = {}
-): Request {
-  const url = new URL("https://example.com/api/errors");
-  for (const [k, v] of Object.entries(searchParams)) url.searchParams.set(k, v);
-  return new Request(url.toString(), { method: "GET", headers });
-}
-
-function makePostWithToken(
-  body: unknown = { message: "TypeError: test" }
-): Request {
-  return makePostRequest(body, { [SECRET_HEADER]: SECRET_TOKEN });
-}
-
-function makeGetWithToken(searchParams: Record<string, string> = {}): Request {
-  return makeGetRequest(searchParams, { [SECRET_HEADER]: SECRET_TOKEN });
-}
-
-function makeErrorRecord(overrides: Record<string, unknown> = {}) {
+function validBody(overrides: Record<string, unknown> = {}) {
   return {
-    id: "err_1",
-    fingerprint: "fp_abc123",
-    message: "TypeError: Cannot read properties of undefined",
-    stack: "TypeError\n  at Component (app.js:1:100)",
-    componentStack: null,
-    environment: "test",
-    url: "https://example.com",
+    message: MESSAGE,
+    stack: STACK,
+    url: "https://example.com/dashboard",
     userAgent: "Mozilla/5.0",
-    occurrences: 1,
-    resolvedAt: null,
-    lastSeenAt: NOW,
-    createdAt: NOW,
-    updatedAt: NOW,
     ...overrides,
   };
 }
 
-// ─── Mock Prisma factory ──────────────────────────────────────────────────────
-
-// biome-ignore lint/suspicious/noExplicitAny: test mock
-function makeMockPrisma(overrides?: {
-  clientErrorFindFirst?: (args: any) => Promise<any>;
-  clientErrorCreate?: (args: any) => Promise<any>;
-  clientErrorUpdate?: (args: any) => Promise<any>;
-  clientErrorUpsert?: (args: any) => Promise<any>;
-  clientErrorFindMany?: (args: any) => Promise<any[]>;
-  clientErrorCount?: (args: any) => Promise<number>;
-}): any {
-  const defaultRecord = makeErrorRecord();
-  return {
-    clientError: {
-      findFirst:
-        overrides?.clientErrorFindFirst ?? ((_: any) => Promise.resolve(null)),
-      create:
-        overrides?.clientErrorCreate ??
-        ((_: any) => Promise.resolve(defaultRecord)),
-      update:
-        overrides?.clientErrorUpdate ??
-        ((_: any) => Promise.resolve(defaultRecord)),
-      upsert:
-        overrides?.clientErrorUpsert ??
-        ((_: any) => Promise.resolve(defaultRecord)),
-      findMany:
-        overrides?.clientErrorFindMany ??
-        ((_: any) => Promise.resolve([defaultRecord])),
-      count: overrides?.clientErrorCount ?? ((_: any) => Promise.resolve(1)),
-    },
-  };
+/**
+ * A real source map, built with the same generator a bundler uses: app.js:1:100
+ * maps to handleClick in Dashboard.tsx. A hand-written `mappings` string is easy
+ * to get subtly wrong, and a map that decodes to no mapping at all would make
+ * the resolver look correct while resolving nothing.
+ */
+function buildSourceMap(): string {
+  const generator = new SourceMapGenerator({ file: "app.js" });
+  generator.addMapping({
+    generated: { line: 1, column: 100 },
+    original: { line: 42, column: 8 },
+    source: "../src/components/Dashboard.tsx",
+    name: "handleClick",
+  });
+  return generator.toString();
 }
 
-// ─── Import target ────────────────────────────────────────────────────────────
+const MINIFIED_STACK = [
+  MESSAGE,
+  "    at http://localhost:3000/_next/static/chunks/app.js:1:100",
+].join("\n");
 
-// @ts-expect-error: module created by B.A. during implementation phase
-const serverModule = await import("../server");
-const { createErrorHandlers } = serverModule;
+let sourceMapDir: string;
 
-// ─── createErrorHandlers ──────────────────────────────────────────────────────
+beforeAll(async () => {
+  await prepareTestDb();
+  sourceMapDir = join(tmpdir(), `error-tracker-server-${Date.now()}`);
+  mkdirSync(sourceMapDir, { recursive: true });
+  writeFileSync(join(sourceMapDir, "app.js.map"), buildSourceMap(), "utf-8");
+});
 
-describe("createErrorHandlers", () => {
-  test("is a function", () => {
-    expect(typeof createErrorHandlers).toBe("function");
-  });
+afterAll(() => {
+  rmSync(sourceMapDir, { recursive: true, force: true });
+});
 
-  test("returns an object with POST and GET handlers", () => {
-    const handlers = createErrorHandlers({ prisma: makeMockPrisma() });
+beforeEach(async () => {
+  await resetClientErrors();
+});
+
+describe("createErrorHandlers configuration", () => {
+  test("returns a POST and a GET handler", () => {
+    const handlers = createErrorHandlers(sqliteConfig());
     expect(typeof handlers.POST).toBe("function");
     expect(typeof handlers.GET).toBe("function");
   });
-});
 
-// ─── POST handler ─────────────────────────────────────────────────────────────
-
-describe("createErrorHandlers — POST handler", () => {
-  test("POST handler returns 200 with { success: true, fingerprint } on valid request", async () => {
-    const { POST } = createErrorHandlers({ prisma: makeMockPrisma() });
-    const res = await POST(makePostRequest());
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.success).toBe(true);
-    expect(typeof body.fingerprint).toBe("string");
+  test("throws when no db is provided", () => {
+    expect(() => createErrorHandlers({ dialect: "sqlite" } as never)).toThrow(
+      /A Drizzle database instance is required/
+    );
   });
 
-  test("POST handler returns 400 when message is missing", async () => {
-    const { POST } = createErrorHandlers({ prisma: makeMockPrisma() });
-    const res = await POST(makePostRequest({}));
+  test.each(["mysql", "sqlite3", "Postgres"])(
+    'throws Unsupported dialect "%s"',
+    (dialect) => {
+      expect(() =>
+        createErrorHandlers({ db: testDb, dialect } as never)
+      ).toThrow(`Unsupported dialect "${dialect}"`);
+    }
+  );
+});
+
+describe("createErrorHandlers POST", () => {
+  const { POST } = createErrorHandlers(sqliteConfig());
+
+  test("stores the report and answers with its fingerprint", async () => {
+    const res = await POST(errorRequest(validBody()));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      success: true,
+      fingerprint: computeFingerprint(MESSAGE, parseFrames(STACK)),
+    });
+    expect((await readOnlyClientError()).message).toBe(MESSAGE);
+  });
+
+  test("returns 400 and stores nothing when message is missing", async () => {
+    const res = await POST(errorRequest({ stack: STACK }));
     expect(res.status).toBe(400);
+    expect(await readClientErrors()).toHaveLength(0);
   });
 
-  test("POST handler returns 401 when secret configured but header missing", async () => {
-    const { POST } = createErrorHandlers({
-      prisma: makeMockPrisma(),
-      secretHeaderName: SECRET_HEADER,
-      secretHeaderToken: SECRET_TOKEN,
-    });
-    const res = await POST(makePostRequest());
+  test("merges a repeat into the row it already has", async () => {
+    await POST(errorRequest(validBody()));
+    await POST(errorRequest(validBody()));
+    expect((await readOnlyClientError()).occurrences).toBe(2);
+  });
+});
+
+describe("createErrorHandlers authentication", () => {
+  const { POST, GET } = createErrorHandlers({
+    ...sqliteConfig(),
+    secretHeaderName: SECRET_HEADER,
+    secretHeaderToken: SECRET_TOKEN,
+  });
+
+  test("POST returns 401 and stores nothing without the token", async () => {
+    const res = await POST(errorRequest(validBody()));
     expect(res.status).toBe(401);
+    expect(await readClientErrors()).toHaveLength(0);
   });
 
-  test("POST handler returns 401 when secret header value is wrong", async () => {
-    const { POST } = createErrorHandlers({
-      prisma: makeMockPrisma(),
-      secretHeaderName: SECRET_HEADER,
-      secretHeaderToken: SECRET_TOKEN,
-    });
+  test("POST returns 401 with the wrong token", async () => {
     const res = await POST(
-      makePostRequest({ message: "err" }, { [SECRET_HEADER]: "bad" })
+      errorRequest(validBody(), { [SECRET_HEADER]: "wrong" })
     );
     expect(res.status).toBe(401);
   });
 
-  test("POST handler proceeds when correct secret token is provided", async () => {
-    const { POST } = createErrorHandlers({
-      prisma: makeMockPrisma(),
-      secretHeaderName: SECRET_HEADER,
-      secretHeaderToken: SECRET_TOKEN,
-    });
-    const res = await POST(makePostWithToken());
-    expect(res.status).not.toBe(401);
-    expect(res.status).toBe(200);
+  test("GET returns 401 without the token", async () => {
+    const res = await GET(queryRequest());
+    expect(res.status).toBe(401);
   });
 
-  test("POST handler returns 200 with no auth configured (permissive default)", async () => {
-    const { POST } = createErrorHandlers({ prisma: makeMockPrisma() });
-    const res = await POST(makePostRequest());
-    expect(res.status).toBe(200);
+  test("both handlers work with the correct token", async () => {
+    const post = await POST(
+      errorRequest(validBody(), { [SECRET_HEADER]: SECRET_TOKEN })
+    );
+    expect(post.status).toBe(200);
+
+    const get = await GET(queryRequest({}, { [SECRET_HEADER]: SECRET_TOKEN }));
+    expect(get.status).toBe(200);
+    const body = (await get.json()) as { errors: { message: string }[] };
+    expect(body.errors.map((row) => row.message)).toEqual([MESSAGE]);
   });
 });
 
-// ─── POST + source map resolution ─────────────────────────────────────────────
+describe("createErrorHandlers GET reads what POST wrote", () => {
+  const { POST, GET } = createErrorHandlers(sqliteConfig());
 
-describe("createErrorHandlers — source map resolution on POST", () => {
-  test("POST succeeds even when sourceMapDir is configured but no maps exist", async () => {
+  test("the reported error comes back through the query handler", async () => {
+    await POST(errorRequest(validBody()));
+    await POST(errorRequest(validBody()));
+
+    const res = await GET(queryRequest({ resolved: "false" }));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      errors: { fingerprint: string; occurrences: number }[];
+      total: number;
+    };
+    expect(body.total).toBe(1);
+    expect(body.errors[0]?.fingerprint).toBe(
+      computeFingerprint(MESSAGE, parseFrames(STACK))
+    );
+    expect(body.errors[0]?.occurrences).toBe(2);
+  });
+});
+
+describe("createErrorHandlers source map resolution", () => {
+  test("resolves the reported stack and fingerprints on the resolved frames", async () => {
+    const { POST } = createErrorHandlers({ ...sqliteConfig(), sourceMapDir });
+
+    const res = await POST(errorRequest(validBody({ stack: MINIFIED_STACK })));
+    expect(res.status).toBe(200);
+    const { fingerprint } = (await res.json()) as { fingerprint: string };
+
+    const row = await readOnlyClientError();
+    const resolvedStack = String(row.resolvedStack);
+    expect(resolvedStack).toContain(
+      "handleClick (../src/components/Dashboard.tsx:42:8)"
+    );
+    expect(row.stack).toBe(MINIFIED_STACK);
+    expect(fingerprint).toBe(
+      computeFingerprint(MESSAGE, parseFrames(resolvedStack))
+    );
+    expect(fingerprint).not.toBe(
+      computeFingerprint(MESSAGE, parseFrames(MINIFIED_STACK))
+    );
+  });
+
+  test("stores the report unresolved when the directory holds no matching map", async () => {
     const { POST } = createErrorHandlers({
-      prisma: makeMockPrisma(),
-      sourceMapDir: "/nonexistent/path/to/sourcemaps",
+      ...sqliteConfig(),
+      sourceMapDir: join(sourceMapDir, "empty"),
     });
+
+    const res = await POST(errorRequest(validBody({ stack: MINIFIED_STACK })));
+    expect(res.status).toBe(200);
+    expect((await readOnlyClientError()).stack).toBe(MINIFIED_STACK);
+  });
+
+  test("still returns 400 on an unparseable body when resolution is configured", async () => {
+    const { POST } = createErrorHandlers({ ...sqliteConfig(), sourceMapDir });
     const res = await POST(
-      makePostRequest({
-        message: "TypeError: test",
-        stack: "TypeError\n  at fn (app.js:1:0)",
+      new Request("https://example.com/api/errors", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "not json at all",
       })
     );
-    // Source map miss must not fail the request — graceful fallback
-    expect(res.status).toBe(200);
-  });
-
-  test("POST accepts sourceMapDir configuration option without throwing", () => {
-    expect(() =>
-      createErrorHandlers({
-        prisma: makeMockPrisma(),
-        sourceMapDir: "/path/to/.next/static/chunks",
-      })
-    ).not.toThrow();
+    expect(res.status).toBe(400);
+    expect(await readClientErrors()).toHaveLength(0);
   });
 });
 
-// ─── POST + rate limiting ─────────────────────────────────────────────────────
+describe("createErrorHandlers rate limiting", () => {
+  const CLIENT_IP = "203.0.113.7";
 
-describe("createErrorHandlers — rate limiting on POST", () => {
-  test("POST returns 429 when rate limiter is configured and limit exceeded", async () => {
-    const { POST } = createErrorHandlers({
-      prisma: makeMockPrisma(),
+  function limited() {
+    return createErrorHandlers({
+      ...sqliteConfig(),
       rateLimiter: { windowMs: 60_000, maxRequests: 2 },
     });
+  }
 
-    const ip = "10.0.0.99";
-    const makeIpRequest = () =>
-      makePostRequest(
-        { message: "rate limit test" },
-        { "x-forwarded-for": ip }
-      );
+  function fromClient(body: unknown): Request {
+    return errorRequest(body, { "x-forwarded-for": CLIENT_IP });
+  }
 
-    // Exhaust the limit
-    await POST(makeIpRequest());
-    await POST(makeIpRequest());
+  test("accepts requests up to the limit and rejects the next with 429", async () => {
+    const { POST } = limited();
+    expect((await POST(fromClient(validBody()))).status).toBe(200);
+    expect((await POST(fromClient(validBody()))).status).toBe(200);
 
-    const blocked = await POST(makeIpRequest());
+    const blocked = await POST(fromClient(validBody()));
     expect(blocked.status).toBe(429);
+
+    // The blocked report must not have been counted.
+    expect((await readOnlyClientError()).occurrences).toBe(2);
   });
 
-  test("POST returns 200 within rate limit", async () => {
-    const { POST } = createErrorHandlers({
-      prisma: makeMockPrisma(),
-      rateLimiter: { windowMs: 60_000, maxRequests: 10 },
-    });
+  test("does not rate limit GET", async () => {
+    const { POST, GET } = limited();
+    await POST(fromClient(validBody()));
+    await POST(fromClient(validBody()));
+    await POST(fromClient(validBody()));
 
-    const ip = "10.0.0.77";
-    const res = await POST(
-      makePostRequest({ message: "ok" }, { "x-forwarded-for": ip })
-    );
-    expect(res.status).toBe(200);
-  });
-
-  test("POST does not apply rate limiting when rateLimiter is not configured", async () => {
-    const { POST } = createErrorHandlers({ prisma: makeMockPrisma() });
-
-    // Send many requests — none should be rate limited
     for (let i = 0; i < 5; i++) {
-      const res = await POST(makePostRequest());
+      const res = await GET(queryRequest({}, { "x-forwarded-for": CLIENT_IP }));
       expect(res.status).toBe(200);
     }
   });
 
-  test("rate limiting on POST does not affect GET", async () => {
-    const { POST, GET } = createErrorHandlers({
-      prisma: makeMockPrisma(),
-      rateLimiter: { windowMs: 60_000, maxRequests: 1 },
-    });
-
-    const ip = "10.0.0.55";
-    // Exhaust POST limit
-    await POST(makePostRequest({ message: "r" }, { "x-forwarded-for": ip }));
-    const blocked = await POST(
-      makePostRequest({ message: "r" }, { "x-forwarded-for": ip })
-    );
-    expect(blocked.status).toBe(429);
-
-    // GET should be unaffected by the POST rate limiter
-    const getRes = await GET(makeGetRequest({}, { "x-forwarded-for": ip }));
-    expect(getRes.status).not.toBe(429);
+  test("accepts an unlimited number of reports when no limiter is configured", async () => {
+    const { POST } = createErrorHandlers(sqliteConfig());
+    for (let i = 0; i < 5; i++) {
+      const res = await POST(fromClient(validBody()));
+      expect(res.status).toBe(200);
+    }
+    expect((await readOnlyClientError()).occurrences).toBe(5);
   });
 });
 
-// ─── GET handler ──────────────────────────────────────────────────────────────
-
-describe("createErrorHandlers — GET handler", () => {
-  test("GET handler returns 200 with { errors, total }", async () => {
-    const { GET } = createErrorHandlers({ prisma: makeMockPrisma() });
-    const res = await GET(makeGetRequest());
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(Array.isArray(body.errors)).toBe(true);
-    expect(typeof body.total).toBe("number");
+describe("server barrel exports", () => {
+  test("re-exports the server-side surface consumers import", async () => {
+    const mod = await import("../server");
+    expect(typeof mod.createErrorHandlers).toBe("function");
+    expect(typeof mod.createIngestionHandler).toBe("function");
+    expect(typeof mod.createQueryHandler).toBe("function");
+    expect(typeof mod.createRateLimiter).toBe("function");
+    expect(typeof mod.resolveStack).toBe("function");
+    expect(typeof mod.computeFingerprint).toBe("function");
   });
 
-  test("GET handler returns 401 when secret configured but header missing", async () => {
-    const { GET } = createErrorHandlers({
-      prisma: makeMockPrisma(),
-      secretHeaderName: SECRET_HEADER,
-      secretHeaderToken: SECRET_TOKEN,
-    });
-    const res = await GET(makeGetRequest());
-    expect(res.status).toBe(401);
-  });
-
-  test("GET handler proceeds with correct secret token", async () => {
-    const { GET } = createErrorHandlers({
-      prisma: makeMockPrisma(),
-      secretHeaderName: SECRET_HEADER,
-      secretHeaderToken: SECRET_TOKEN,
-    });
-    const res = await GET(makeGetWithToken());
-    expect(res.status).toBe(200);
-  });
-
-  test("GET handler supports ?env= filter", async () => {
-    const clientErrorFindMany = mock((_: any) => Promise.resolve([]));
-    const { GET } = createErrorHandlers({
-      prisma: makeMockPrisma({ clientErrorFindMany }),
-    });
-
-    await GET(makeGetRequest({ env: "production" }));
-
-    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-    const callArgs = (clientErrorFindMany.mock.calls as any[][])[0][0];
-    const where = callArgs?.where;
-    expect(where?.environment ?? where?.env).toBe("production");
-  });
-
-  test("GET handler defaults to 50 results per page", async () => {
-    const clientErrorFindMany = mock((_: any) => Promise.resolve([]));
-    const { GET } = createErrorHandlers({
-      prisma: makeMockPrisma({ clientErrorFindMany }),
-    });
-
-    await GET(makeGetRequest());
-
-    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-    const callArgs = (clientErrorFindMany.mock.calls as any[][])[0][0];
-    expect(callArgs?.take ?? callArgs?.limit).toBe(50);
-  });
-});
-
-// ─── deduplicationWindowMs passthrough ────────────────────────────────────────
-
-describe("createErrorHandlers — deduplicationWindowMs", () => {
-  test("accepts deduplicationWindowMs configuration", () => {
-    expect(() =>
-      createErrorHandlers({
-        prisma: makeMockPrisma(),
-        deduplicationWindowMs: 3_600_000,
-      })
-    ).not.toThrow();
-  });
-
-  test("defaults deduplicationWindowMs to 24 hours when not provided", () => {
-    expect(() =>
-      createErrorHandlers({ prisma: makeMockPrisma() })
-    ).not.toThrow();
-  });
-});
-
-// ─── server.ts re-exports ─────────────────────────────────────────────────────
-
-describe("src/server.ts re-exports", () => {
-  test("createIngestionHandler is re-exported from src/server", () => {
-    expect(typeof serverModule.createIngestionHandler).toBe("function");
-  });
-
-  test("createQueryHandler is re-exported from src/server", () => {
-    expect(typeof serverModule.createQueryHandler).toBe("function");
-  });
-
-  test("createRateLimiter is re-exported from src/server", () => {
-    expect(typeof serverModule.createRateLimiter).toBe("function");
-  });
-
-  test("resolveStack is re-exported from src/server", () => {
-    expect(typeof serverModule.resolveStack).toBe("function");
-  });
-
-  test("computeFingerprint is re-exported from src/server", () => {
-    expect(typeof serverModule.computeFingerprint).toBe("function");
+  test("the re-exported factories are wired to the same implementations", async () => {
+    const mod = await import("../server");
+    const ingestion = await import("../server/ingestion");
+    const queryModule = await import("../server/query");
+    expect(mod.createIngestionHandler).toBe(ingestion.createIngestionHandler);
+    expect(mod.computeFingerprint).toBe(ingestion.computeFingerprint);
+    expect(mod.createQueryHandler).toBe(queryModule.createQueryHandler);
   });
 });

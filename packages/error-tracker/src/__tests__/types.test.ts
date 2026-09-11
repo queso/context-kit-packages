@@ -1,214 +1,122 @@
-import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import type { ErrorPayload, ErrorTrackerConfig, StackFrame } from "../types";
+import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import {
+  createErrorHandlers,
+  createIngestionHandler,
+  createQueryHandler,
+} from "../server";
+import type { ClientError as PostgresClientError } from "../schema/postgres";
+import type { ClientError as SqliteClientError } from "../schema/sqlite";
+// Imported from the server barrel, not from ../types: the server-side surface
+// re-exports both, and that is the path a consumer's route handler imports.
+import type { DatabaseConfig, ErrorTrackerDialect } from "../server";
+import type { ErrorPayload } from "../types";
+import {
+  errorRequest,
+  prepareTestDb,
+  queryRequest,
+  readOnlyClientError,
+  resetClientErrors,
+  testDb,
+} from "./helpers";
 
-const PACKAGE_ROOT = resolve(import.meta.dir, "../..");
+// Type-only contract. Nothing here runs; it fails to compile if the dialect
+// union stops being the closed two-value union the package documents. This is
+// only enforced once tsconfig.json stops excluding src/__tests__ (packages/auth
+// already includes its tests in the program).
+"sqlite" satisfies ErrorTrackerDialect;
+"postgres" satisfies ErrorTrackerDialect;
+// @ts-expect-error the dialect union is closed to the two supported dialects
+"mysql" satisfies ErrorTrackerDialect;
 
-// ─── Type-level compile checks ────────────────────────────────────────────────
-// These declarations never execute but cause a TypeScript compile error if the
-// interfaces are missing or have the wrong shape. Tests will fail at `bun test`
-// time because the file won't compile.
+beforeAll(async () => {
+  await prepareTestDb();
+});
 
-// ─── Runtime interface-shape tests ────────────────────────────────────────────
+beforeEach(async () => {
+  await resetClientErrors();
+});
 
-describe("ErrorTrackerConfig interface shape", () => {
-  test("mock object satisfying ErrorTrackerConfig has all required fields", () => {
-    const config: ErrorTrackerConfig = {
-      endpoint: "/api/errors",
-      token: "secret-token",
-      environment: "production",
-      patchConsoleError: false,
-    };
+describe("DatabaseConfig", () => {
+  /** Exactly the two fields a consumer passes: `db` from @/db, `getDialect()`. */
+  const config: DatabaseConfig = { db: testDb, dialect: "sqlite" };
 
-    expect(typeof config.endpoint).toBe("string");
-    expect(typeof config.environment).toBe("string");
+  test("is the config every server-side factory accepts", () => {
+    expect(typeof createIngestionHandler(config)).toBe("function");
+    expect(typeof createQueryHandler(config)).toBe("function");
+    const handlers = createErrorHandlers(config);
+    expect(typeof handlers.POST).toBe("function");
+    expect(typeof handlers.GET).toBe("function");
   });
 
-  test("ErrorTrackerConfig allows optional token", () => {
-    const config: ErrorTrackerConfig = {
-      endpoint: "/api/errors",
-      environment: "development",
-    };
-
-    expect(config.token).toBeUndefined();
-  });
-
-  test("ErrorTrackerConfig allows optional patchConsoleError", () => {
-    const config: ErrorTrackerConfig = {
-      endpoint: "/api/errors",
-      environment: "development",
-    };
-
-    expect(config.patchConsoleError).toBeUndefined();
+  test("a Drizzle instance reached through a Proxy still works", async () => {
+    // context-kit apps export `db` as a Proxy over a lazily created Drizzle
+    // instance, so the package must not depend on receiving a bare object.
+    const res = await createIngestionHandler(config)(
+      errorRequest({ message: "TypeError: through the proxy" })
+    );
+    expect(res.status).toBe(200);
+    expect((await readOnlyClientError()).message).toBe(
+      "TypeError: through the proxy"
+    );
   });
 });
 
-describe("ErrorPayload interface shape", () => {
-  test("mock object satisfying ErrorPayload has all required fields", () => {
-    const payload: ErrorPayload = {
-      message: "TypeError: Cannot read properties of undefined",
-      stack: "TypeError: Cannot read...\n  at Component (app.js:1:100)",
+describe("the client payload and the stored row agree on field names", () => {
+  test("every ErrorPayload field a browser reports is stored and queryable", async () => {
+    // `ErrorPayload` is what the browser half posts; the Drizzle schema is what
+    // the server half writes. A rename on either side would drop data silently,
+    // and nothing but a round trip notices.
+    // Named separately so the assertions compare against required strings:
+    // `stack` and `componentStack` are optional on ErrorPayload but not-null
+    // strings once the row exists.
+    const reported = {
+      message: "TypeError: payload round trip",
+      stack: "TypeError: payload round trip\n  at Component (app.js:1:100)",
       componentStack: "\n  at ErrorBoundary\n  at App",
       url: "https://example.com/dashboard",
       userAgent: "Mozilla/5.0",
       environment: "production",
     };
+    const payload: ErrorPayload = reported;
 
-    expect(typeof payload.message).toBe("string");
-    expect(typeof payload.url).toBe("string");
-    expect(typeof payload.userAgent).toBe("string");
-    expect(typeof payload.environment).toBe("string");
-  });
+    const config: DatabaseConfig = { db: testDb, dialect: "sqlite" };
+    const post = await createIngestionHandler(config)(errorRequest(payload));
+    expect(post.status).toBe(200);
 
-  test("ErrorPayload allows optional stack", () => {
-    const payload: ErrorPayload = {
-      message: "Something went wrong",
-      url: "https://example.com",
-      userAgent: "Mozilla/5.0",
-      environment: "development",
-    };
+    const row = await readOnlyClientError();
+    expect(row.message).toBe(reported.message);
+    expect(row.stack).toBe(reported.stack);
+    expect(row.componentStack).toBe(reported.componentStack);
+    expect(row.url).toBe(reported.url);
+    expect(row.userAgent).toBe(reported.userAgent);
 
-    expect(payload.stack).toBeUndefined();
-  });
-
-  test("ErrorPayload allows optional componentStack", () => {
-    const payload: ErrorPayload = {
-      message: "Something went wrong",
-      url: "https://example.com",
-      userAgent: "Mozilla/5.0",
-      environment: "development",
-    };
-
-    expect(payload.componentStack).toBeUndefined();
+    const get = await createQueryHandler(config)(queryRequest());
+    const body = (await get.json()) as { errors: Record<string, unknown>[] };
+    expect(body.errors[0]).toMatchObject({
+      message: reported.message,
+      stack: reported.stack,
+      componentStack: reported.componentStack,
+      url: reported.url,
+      userAgent: reported.userAgent,
+    });
   });
 });
 
-describe("StackFrame interface shape", () => {
-  test("mock object satisfying StackFrame has all required fields", () => {
-    const frame: StackFrame = {
-      file: "app.js",
-      line: 42,
-      column: 10,
-      functionName: "handleClick",
-    };
+describe("ClientError row type", () => {
+  test("a row read from sqlite is also a postgres ClientError", async () => {
+    // Consumers write dialect-neutral code against one row type, so the two
+    // modules have to infer the same shape. The assignments below are the
+    // compile-time half; the assertions are the runtime half.
+    const config: DatabaseConfig = { db: testDb, dialect: "sqlite" };
+    await createIngestionHandler(config)(
+      errorRequest({ message: "TypeError: row type" })
+    );
 
-    expect(typeof frame.file).toBe("string");
-    expect(typeof frame.line).toBe("number");
-    expect(typeof frame.column).toBe("number");
-  });
-
-  test("StackFrame allows optional functionName", () => {
-    const frame: StackFrame = {
-      file: "app.js",
-      line: 42,
-      column: 10,
-    };
-
-    expect(frame.functionName).toBeUndefined();
-  });
-});
-
-// ─── src/types.ts exports ─────────────────────────────────────────────────────
-
-describe("src/types.ts exports", () => {
-  test("types.ts file exists", () => {
-    expect(existsSync(resolve(PACKAGE_ROOT, "src/types.ts"))).toBe(true);
-  });
-
-  test("types.ts exports ErrorTrackerConfig", async () => {
-    const mod = await import("../types");
-    // Type-only exports aren't present at runtime, but the module must import
-    // without error — the compile-time type declarations above verify the shapes
-    expect(mod).toBeDefined();
-  });
-});
-
-// ─── Prisma schema fragment ────────────────────────────────────────────────────
-
-describe("prisma/error-tracker.prisma", () => {
-  const schemaPath = resolve(PACKAGE_ROOT, "prisma/error-tracker.prisma");
-
-  test("prisma schema file exists", () => {
-    expect(existsSync(schemaPath)).toBe(true);
-  });
-
-  test("schema contains ClientError model", () => {
-    const content = readFileSync(schemaPath, "utf-8");
-    expect(content).toContain("model ClientError");
-  });
-
-  test("ClientError has id field", () => {
-    const content = readFileSync(schemaPath, "utf-8");
-    expect(content).toContain("id");
-  });
-
-  test("ClientError has message field", () => {
-    const content = readFileSync(schemaPath, "utf-8");
-    expect(content).toMatch(/message\s+String/);
-  });
-
-  test("ClientError has stack field", () => {
-    const content = readFileSync(schemaPath, "utf-8");
-    expect(content).toMatch(/stack\s+String/);
-  });
-
-  test("ClientError has componentStack field", () => {
-    const content = readFileSync(schemaPath, "utf-8");
-    expect(content).toMatch(/componentStack\s+String/);
-  });
-
-  test("ClientError has fingerprint field", () => {
-    const content = readFileSync(schemaPath, "utf-8");
-    expect(content).toMatch(/fingerprint\s+String/);
-  });
-
-  test("fingerprint has @unique constraint", () => {
-    const content = readFileSync(schemaPath, "utf-8");
-    // fingerprint must appear on a line that includes @unique
-    const lines = content.split("\n");
-    const fingerprintLine = lines.find((l) => l.includes("fingerprint"));
-    expect(fingerprintLine).toBeDefined();
-    expect(fingerprintLine).toContain("@unique");
-  });
-
-  test("ClientError has occurrences field", () => {
-    const content = readFileSync(schemaPath, "utf-8");
-    expect(content).toMatch(/occurrences\s+Int/);
-  });
-
-  test("ClientError has environment field", () => {
-    const content = readFileSync(schemaPath, "utf-8");
-    expect(content).toMatch(/environment\s+String/);
-  });
-
-  test("ClientError has url field", () => {
-    const content = readFileSync(schemaPath, "utf-8");
-    expect(content).toMatch(/url\s+String/);
-  });
-
-  test("ClientError has userAgent field", () => {
-    const content = readFileSync(schemaPath, "utf-8");
-    expect(content).toMatch(/userAgent\s+String/);
-  });
-
-  test("ClientError has resolvedAt nullable timestamp", () => {
-    const content = readFileSync(schemaPath, "utf-8");
-    expect(content).toMatch(/resolvedAt\s+DateTime\?/);
-  });
-
-  test("ClientError has lastSeenAt field", () => {
-    const content = readFileSync(schemaPath, "utf-8");
-    expect(content).toMatch(/lastSeenAt\s+DateTime/);
-  });
-
-  test("ClientError has createdAt field", () => {
-    const content = readFileSync(schemaPath, "utf-8");
-    expect(content).toMatch(/createdAt\s+DateTime/);
-  });
-
-  test("ClientError has updatedAt field", () => {
-    const content = readFileSync(schemaPath, "utf-8");
-    expect(content).toMatch(/updatedAt\s+DateTime/);
+    const sqliteRow: SqliteClientError = await readOnlyClientError();
+    const postgresRow: PostgresClientError = sqliteRow;
+    expect(postgresRow.fingerprint).toBe(sqliteRow.fingerprint);
+    expect(postgresRow.occurrences).toBe(1);
+    expect(postgresRow.lastSeenAt).toBeInstanceOf(Date);
+    expect(postgresRow.resolvedAt).toBeNull();
   });
 });

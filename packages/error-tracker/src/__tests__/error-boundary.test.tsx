@@ -1,4 +1,12 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  afterAll,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  test,
+} from "bun:test";
+import * as reporterModule from "../reporter";
 import { render, screen } from "@testing-library/react";
 import React from "react";
 import type { ErrorTrackerConfig } from "../types";
@@ -9,9 +17,21 @@ const mockReportError = mock(
   (_config: ErrorTrackerConfig, _data: unknown) => undefined
 );
 
+// Bun's `mock.module` registry is process-wide and survives across test files
+// in one `bun test` run, so this stub has to be handed back before
+// reporter.test.ts runs. The snapshot must be a spread copy taken before the
+// stub is registered: `mock.module` rewrites an already-imported module's live
+// namespace in place, so re-registering the namespace object itself would only
+// reinstall the stub.
+const realReporter = { ...reporterModule };
+
 mock.module("../reporter", () => ({
   reportError: mockReportError,
 }));
+
+afterAll(() => {
+  mock.module("../reporter", () => realReporter);
+});
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -26,7 +46,7 @@ function ThrowingComponent({
   message = "Test render error",
 }: {
   message?: string;
-}) {
+}): React.ReactNode {
   throw new Error(message);
 }
 
@@ -37,7 +57,6 @@ function SafeChild({ text = "safe content" }: { text?: string }) {
 
 // ─── Import target ────────────────────────────────────────────────────────────
 
-// @ts-expect-error: module created by B.A. during implementation phase
 const { ErrorBoundary } = await import("../error-boundary");
 
 // ─── Suppress React error boundary console noise in tests ─────────────────────

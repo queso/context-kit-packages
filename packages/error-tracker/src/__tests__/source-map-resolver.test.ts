@@ -1,22 +1,25 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
+import { SourceMapGenerator } from "source-map";
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
 
-// A minimal valid source map (maps line 1, col 0 → original file line 5, col 0)
-// Generated from a fictional minified file with one mapping entry.
-const MINIMAL_SOURCE_MAP = JSON.stringify({
-  version: 3,
-  file: "app.js",
-  sourceRoot: "",
-  sources: ["../src/components/Dashboard.tsx"],
-  sourcesContent: [null],
-  names: ["handleClick"],
-  // Single mapping: generated col 0 → source 0, orig line 4 (0-indexed), col 0, name 0
-  mappings: "AACIC",
-});
+// A real source map built with the same library the resolver uses: generated
+// app.js line 1, column 0 maps back to Dashboard.tsx line 5, column 0 inside
+// handleClick. A hand-written "mappings" string is too easy to get wrong, and
+// a map that maps nothing makes every resolution assertion pass vacuously.
+function buildSourceMap(): string {
+  const generator = new SourceMapGenerator({ file: "app.js" });
+  generator.addMapping({
+    generated: { line: 1, column: 0 },
+    original: { line: 5, column: 0 },
+    source: "../src/components/Dashboard.tsx",
+    name: "handleClick",
+  });
+  return generator.toString();
+}
 
 // A raw minified stack trace referencing the test fixture file
 function makeMinifiedStack(mapDir: string) {
@@ -34,7 +37,7 @@ beforeAll(() => {
   testMapDir = join(tmpdir(), `error-tracker-test-${Date.now()}`);
   mkdirSync(testMapDir, { recursive: true });
   testMapFile = join(testMapDir, "app.js.map");
-  writeFileSync(testMapFile, MINIMAL_SOURCE_MAP, "utf-8");
+  writeFileSync(testMapFile, buildSourceMap(), "utf-8");
 });
 
 afterAll(() => {
@@ -45,7 +48,6 @@ afterAll(() => {
 
 // ─── Import target ────────────────────────────────────────────────────────────
 
-// @ts-expect-error: module created by B.A. during implementation phase
 const { resolveStack } = await import("../server/source-map-resolver");
 
 // ─── resolveStack ─────────────────────────────────────────────────────────────
@@ -143,21 +145,31 @@ describe("resolveStack", () => {
     expect(result).toContain("TypeError");
   });
 
-  test("resolved output with a valid source map includes original source file reference", async () => {
+  test("resolves a mapped frame to the original file, line, column and name", async () => {
     const rawStack = `TypeError: test\n    at http://localhost:3000/_next/static/chunks/app.js:1:0`;
     const result = await resolveStack(rawStack, { sourceMapDir: testMapDir });
-    // If resolution succeeded, the output should reference the original source file
-    // or at minimum contain a non-empty resolved string
-    expect(result.length).toBeGreaterThan(0);
+    expect(result).toBe(
+      "TypeError: test\n    at handleClick (../src/components/Dashboard.tsx:5:0)"
+    );
   });
 
-  test("falls back gracefully when resolution fails internally (raw stack returned)", async () => {
-    const rawStack = "RangeError: invalid length\n  at fn (app.js:999:999)";
+  test("resolves only the frames that have a map and leaves the rest verbatim", async () => {
+    const result = await resolveStack(makeMinifiedStack(testMapDir), {
+      sourceMapDir: testMapDir,
+    });
+    const lines = result.split("\n");
+    expect(lines[1]).toBe(
+      "    at handleClick (../src/components/Dashboard.tsx:5:0)"
+    );
+    expect(lines[2]).toBe(
+      "    at processTicksAndRejections (node:internal/process/task_queues:95:5)"
+    );
+  });
 
-    // Even if the specific line/col isn't in the source map, should not throw
+  test("keeps the raw frame when the position has no mapping", async () => {
+    const rawStack = "RangeError: invalid length\n  at fn (app.js:999:999)";
     const result = await resolveStack(rawStack, { sourceMapDir: testMapDir });
-    expect(typeof result).toBe("string");
-    expect(result.length).toBeGreaterThan(0);
+    expect(result).toBe(rawStack);
   });
 });
 

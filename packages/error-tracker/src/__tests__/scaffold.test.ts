@@ -1,196 +1,165 @@
 import { describe, expect, test } from "bun:test";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { is, Table } from "drizzle-orm";
 
 const PACKAGE_ROOT = resolve(import.meta.dir, "../..");
 const MONOREPO_ROOT = resolve(PACKAGE_ROOT, "../..");
 
-function readJson(filePath: string): Record<string, unknown> {
-  return JSON.parse(readFileSync(filePath, "utf-8"));
-}
+const pkgSource = readFileSync(resolve(PACKAGE_ROOT, "package.json"), "utf-8");
+const pkg = JSON.parse(pkgSource) as {
+  name: string;
+  version: string;
+  type: string;
+  files: string[];
+  scripts: Record<string, string>;
+  exports: Record<string, Record<string, string>>;
+  dependencies: Record<string, string>;
+  peerDependencies: Record<string, string>;
+  devDependencies: Record<string, string>;
+  bin: Record<string, string>;
+};
 
-describe("@context-kit/error-tracker package.json", () => {
-  const pkgPath = resolve(PACKAGE_ROOT, "package.json");
-
-  test("package.json exists", () => {
-    expect(existsSync(pkgPath)).toBe(true);
-  });
-
-  test("name is @context-kit/error-tracker", () => {
-    const pkg = readJson(pkgPath);
+describe("@context-kit/error-tracker package identity", () => {
+  test("is the scoped ESM package consumers install", () => {
     expect(pkg.name).toBe("@context-kit/error-tracker");
-  });
-
-  test("version is 0.1.0", () => {
-    const pkg = readJson(pkgPath);
     expect(pkg.version).toBe("0.1.0");
-  });
-
-  test("type is module", () => {
-    const pkg = readJson(pkgPath);
     expect(pkg.type).toBe("module");
   });
 
-  test("has test script using bun test", () => {
-    const pkg = readJson(pkgPath);
-    const scripts = pkg.scripts as Record<string, string>;
-    expect(typeof scripts?.test).toBe("string");
-    expect(scripts.test).toContain("bun test");
+  test("ships only the built output and the readme", () => {
+    expect(pkg.files).toEqual(["dist", "README.md"]);
   });
 
-  test("has build script using tsup", () => {
-    const pkg = readJson(pkgPath);
-    const scripts = pkg.scripts as Record<string, string>;
-    expect(typeof scripts?.build).toBe("string");
-    expect(scripts.build).toContain("tsup");
+  test("exposes build, dev, typecheck and test scripts", () => {
+    expect(pkg.scripts.build).toContain("tsup");
+    expect(pkg.scripts.dev).toContain("tsup");
+    expect(pkg.scripts.typecheck).toContain("tsc");
+    expect(pkg.scripts.test).toContain("bun test");
   });
 
-  test("has typecheck script", () => {
-    const pkg = readJson(pkgPath);
-    const scripts = pkg.scripts as Record<string, string>;
-    expect(typeof scripts?.typecheck).toBe("string");
-    expect(scripts.typecheck).toContain("tsc");
-  });
-
-  test("has . export (main entry point)", () => {
-    const pkg = readJson(pkgPath);
-    const exports = pkg.exports as Record<string, unknown>;
-    expect(exports?.["."]).toBeDefined();
-  });
-
-  test("has ./server export", () => {
-    const pkg = readJson(pkgPath);
-    const exports = pkg.exports as Record<string, unknown>;
-    expect(exports?.["./server"]).toBeDefined();
-  });
-
-  test("has ./prisma export", () => {
-    const pkg = readJson(pkgPath);
-    const exports = pkg.exports as Record<string, unknown>;
-    expect(exports?.["./prisma"]).toBeDefined();
-  });
-
-  test("peerDependencies includes @prisma/client >=5.0.0", () => {
-    const pkg = readJson(pkgPath);
-    const peers = pkg.peerDependencies as Record<string, string>;
-    expect(peers?.["@prisma/client"]).toBeDefined();
-    expect(peers["@prisma/client"]).toMatch(/>=5/);
-  });
-
-  test("peerDependencies includes next >=14.0.0", () => {
-    const pkg = readJson(pkgPath);
-    const peers = pkg.peerDependencies as Record<string, string>;
-    expect(peers?.["next"]).toBeDefined();
-    expect(peers["next"]).toMatch(/>=14/);
-  });
-
-  test("peerDependencies includes react >=18.0.0", () => {
-    const pkg = readJson(pkgPath);
-    const peers = pkg.peerDependencies as Record<string, string>;
-    expect(peers?.["react"]).toBeDefined();
-    expect(peers["react"]).toMatch(/>=18/);
-  });
-
-  test("peerDependencies includes react-dom >=18.0.0", () => {
-    const pkg = readJson(pkgPath);
-    const peers = pkg.peerDependencies as Record<string, string>;
-    expect(peers?.["react-dom"]).toBeDefined();
-    expect(peers["react-dom"]).toMatch(/>=18/);
-  });
-
-  test("dependencies includes source-map", () => {
-    const pkg = readJson(pkgPath);
-    const deps = pkg.dependencies as Record<string, string>;
-    expect(deps?.["source-map"]).toBeDefined();
+  test("installs an error-tracker binary", () => {
+    expect(pkg.bin["error-tracker"]).toBe("./dist/cli.js");
   });
 });
 
-describe("@context-kit/error-tracker tsconfig.json", () => {
+describe("@context-kit/error-tracker subpath exports", () => {
+  test.each([
+    [".", "./dist/index"],
+    ["./server", "./dist/server"],
+    ["./cli", "./dist/cli"],
+    ["./schema/sqlite", "./dist/schema/sqlite"],
+    ["./schema/postgres", "./dist/schema/postgres"],
+  ])("%s resolves to %s with types, import and default conditions", (subpath, file) => {
+    // Consumers re-export the schema subpaths from their own
+    // db/schema/<dialect>.ts, and drizzle-kit resolves them through a CommonJS
+    // loader, which needs the `default` condition on top of `types` and `import`.
+    const entry = pkg.exports[subpath];
+    expect(entry).toBeDefined();
+    expect(entry.types).toBe(`${file}.d.ts`);
+    expect(entry.import).toBe(`${file}.js`);
+    expect(entry.default).toBe(`${file}.js`);
+  });
+
+  test("no longer exports a Prisma subpath", () => {
+    expect(Object.keys(pkg.exports).sort()).toEqual([
+      ".",
+      "./cli",
+      "./schema/postgres",
+      "./schema/sqlite",
+      "./server",
+    ]);
+  });
+});
+
+describe("@context-kit/error-tracker dependencies", () => {
+  test("drizzle-orm is a peer dependency", () => {
+    expect(pkg.peerDependencies["drizzle-orm"]).toBe(">=0.41.0");
+  });
+
+  test.each([
+    ["@libsql/client", ">=0.14.0"],
+    ["postgres", ">=3.4.0"],
+  ])("%s is an optional peer, not a dependency", (driver, range) => {
+    expect(pkg.peerDependencies[driver]).toBe(range);
+    expect(pkg.dependencies[driver]).toBeUndefined();
+  });
+
+  test("source-map is the only runtime dependency", () => {
+    expect(Object.keys(pkg.dependencies)).toEqual(["source-map"]);
+  });
+
+  test("Prisma is gone from the whole manifest", () => {
+    // A leftover dependency, peer or devDependency would keep pulling the
+    // Prisma client into consumers' installs after the Drizzle port.
+    expect(pkgSource).not.toContain("prisma");
+    expect(pkgSource).not.toContain("Prisma");
+  });
+});
+
+describe("@context-kit/error-tracker typescript config", () => {
   const tsconfigPath = resolve(PACKAGE_ROOT, "tsconfig.json");
 
-  test("tsconfig.json exists", () => {
-    expect(existsSync(tsconfigPath)).toBe(true);
-  });
-
-  test("extends a workspace base config or includes strict: true", () => {
-    const tsconfig = readJson(tsconfigPath);
-    const strict =
-      (tsconfig.compilerOptions as Record<string, unknown>)?.strict === true ||
-      typeof tsconfig.extends === "string";
-    expect(strict).toBe(true);
-  });
-
-  test("strict mode is enabled", () => {
-    const tsconfig = readJson(tsconfigPath);
-    const opts = tsconfig.compilerOptions as Record<string, unknown>;
-    expect(opts?.strict).toBe(true);
-  });
-});
-
-describe("@context-kit/error-tracker tsup.config.ts", () => {
-  test("tsup.config.ts exists", () => {
-    expect(existsSync(resolve(PACKAGE_ROOT, "tsup.config.ts"))).toBe(true);
-  });
-
-  test("tsup config references index.ts entry point", () => {
-    const content = readFileSync(
-      resolve(PACKAGE_ROOT, "tsup.config.ts"),
-      "utf-8"
-    );
-    expect(content).toContain("index.ts");
-  });
-
-  test("tsup config references server.ts entry point", () => {
-    const content = readFileSync(
-      resolve(PACKAGE_ROOT, "tsup.config.ts"),
-      "utf-8"
-    );
-    expect(content).toContain("server.ts");
-  });
-});
-
-describe("@context-kit/error-tracker source barrel files", () => {
-  test("src/index.ts exists", () => {
-    expect(existsSync(resolve(PACKAGE_ROOT, "src/index.ts"))).toBe(true);
-  });
-
-  test("src/server.ts exists", () => {
-    expect(existsSync(resolve(PACKAGE_ROOT, "src/server.ts"))).toBe(true);
-  });
-});
-
-describe("@context-kit/error-tracker workspace registration", () => {
-  test("workspace root package.json workspaces glob covers packages/*", () => {
-    const rootPkgPath = resolve(MONOREPO_ROOT, "package.json");
-    const rootPkg = readJson(rootPkgPath);
-    const workspaces = rootPkg.workspaces as string[];
-    expect(Array.isArray(workspaces)).toBe(true);
-    expect(
-      workspaces.some((w) => w === "packages/*" || w.startsWith("packages/"))
-    ).toBe(true);
+  test("compiles in strict mode", () => {
+    const tsconfig = JSON.parse(readFileSync(tsconfigPath, "utf-8")) as {
+      compilerOptions: Record<string, unknown>;
+    };
+    expect(tsconfig.compilerOptions.strict).toBe(true);
   });
 });
 
 describe("@context-kit/error-tracker build output", () => {
-  test("package builds successfully", () => {
-    const result = execSync("bun --filter @context-kit/error-tracker build", {
-      cwd: MONOREPO_ROOT,
-      stdio: "pipe",
-    });
-    expect(result).toBeDefined();
-  }, 30000);
-
-  test("dist/index.js exists after build", () => {
-    expect(existsSync(resolve(PACKAGE_ROOT, "dist/index.js"))).toBe(true);
+  // One build for the whole describe block; the assertions below read what it
+  // produced rather than only checking that config files exist.
+  // execFileSync throws when tsup exits non-zero, so the whole block fails
+  // rather than asserting against stale dist/ output from an earlier run.
+  execFileSync("bun", ["--filter", "@context-kit/error-tracker", "build"], {
+    cwd: MONOREPO_ROOT,
+    encoding: "utf-8",
+    stdio: "pipe",
   });
 
-  test("dist/server.js exists after build", () => {
-    expect(existsSync(resolve(PACKAGE_ROOT, "dist/server.js"))).toBe(true);
+  test.each([
+    "dist/index.js",
+    "dist/index.d.ts",
+    "dist/server.js",
+    "dist/server.d.ts",
+    "dist/cli.js",
+    "dist/schema/sqlite.js",
+    "dist/schema/sqlite.d.ts",
+    "dist/schema/postgres.js",
+    "dist/schema/postgres.d.ts",
+  ])("emits %s", (file) => {
+    expect(existsSync(resolve(PACKAGE_ROOT, file))).toBe(true);
   });
 
-  test("main entry point can be imported without error", async () => {
+  test("the built index entry exports the client-side factory", async () => {
     const mod = await import(resolve(PACKAGE_ROOT, "dist/index.js"));
-    expect(mod).toBeDefined();
+    expect(typeof mod.createErrorTracker).toBe("function");
+  });
+
+  test("the built server entry exports the route-handler factories", async () => {
+    const mod = await import(resolve(PACKAGE_ROOT, "dist/server.js"));
+    expect(typeof mod.createErrorHandlers).toBe("function");
+    expect(typeof mod.createIngestionHandler).toBe("function");
+    expect(typeof mod.createQueryHandler).toBe("function");
+  });
+
+  test.each(["dist/schema/sqlite.js", "dist/schema/postgres.js"])(
+    "%s exports the clientError table so drizzle-kit can read it",
+    async (file) => {
+      const mod = await import(resolve(PACKAGE_ROOT, file));
+      expect(is(mod.clientError, Table)).toBe(true);
+    }
+  );
+});
+
+describe("@context-kit/error-tracker workspace registration", () => {
+  test("the workspace glob covers the package directory", () => {
+    const rootPkg = JSON.parse(
+      readFileSync(resolve(MONOREPO_ROOT, "package.json"), "utf-8")
+    ) as { workspaces: string[] };
+    expect(rootPkg.workspaces).toContain("packages/*");
   });
 });

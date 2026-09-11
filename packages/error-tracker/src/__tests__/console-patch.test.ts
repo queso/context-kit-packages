@@ -1,4 +1,13 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  test,
+} from "bun:test";
+import * as reporterModule from "../reporter";
 import type { ErrorTrackerConfig } from "../types";
 
 // ─── Mock reportError ─────────────────────────────────────────────────────────
@@ -7,9 +16,21 @@ const mockReportError = mock(
   (_config: ErrorTrackerConfig, _data: unknown) => undefined
 );
 
+// Bun's `mock.module` registry is process-wide and survives across test files
+// in one `bun test` run, so this stub has to be handed back before
+// reporter.test.ts runs. The snapshot must be a spread copy taken before the
+// stub is registered: `mock.module` rewrites an already-imported module's live
+// namespace in place, so re-registering the namespace object itself would only
+// reinstall the stub.
+const realReporter = { ...reporterModule };
+
 mock.module("../reporter", () => ({
   reportError: mockReportError,
 }));
+
+afterAll(() => {
+  mock.module("../reporter", () => realReporter);
+});
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -21,7 +42,6 @@ const TEST_CONFIG: ErrorTrackerConfig = {
 
 // ─── Import target ────────────────────────────────────────────────────────────
 
-// @ts-expect-error: module created by B.A. during implementation phase
 const { patchConsoleError } = await import("../console-patch");
 
 // ─── patchConsoleError ────────────────────────────────────────────────────────

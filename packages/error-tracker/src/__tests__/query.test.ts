@@ -1,394 +1,294 @@
-import { describe, expect, mock, test } from "bun:test";
+import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { createQueryHandler } from "../server/query";
+import {
+  prepareTestDb,
+  queryRequest,
+  resetClientErrors,
+  seedClientError,
+  seedClientErrors,
+  sqliteConfig,
+  testDb,
+} from "./helpers";
 
-// ─── Fixtures ─────────────────────────────────────────────────────────────────
-
-const SECRET_TOKEN = "query-secret-token";
 const SECRET_HEADER = "x-error-token";
+const SECRET_TOKEN = "test-secret-token";
 
-const NOW = new Date("2026-03-15T10:00:00.000Z");
-
-function makeErrorRecord(overrides: Record<string, unknown> = {}) {
-  return {
-    id: "err_1",
-    fingerprint: "fp_abc123",
-    message: "TypeError: Cannot read properties of undefined",
-    stack: "TypeError\n  at Component (app.js:1:100)",
-    componentStack: "\n  at ErrorBoundary\n  at App",
-    environment: "production",
-    url: "https://example.com/dashboard",
-    userAgent: "Mozilla/5.0",
-    occurrences: 3,
-    resolvedAt: null,
-    lastSeenAt: NOW,
-    createdAt: NOW,
-    updatedAt: NOW,
-    ...overrides,
-  };
+interface QueryBody {
+  errors: Record<string, unknown>[];
+  total: number;
 }
 
-function makeRequest(
-  searchParams: Record<string, string> = {},
-  headers: Record<string, string> = {}
-): Request {
-  const url = new URL("https://example.com/api/errors");
-  for (const [key, value] of Object.entries(searchParams)) {
-    url.searchParams.set(key, value);
-  }
-  return new Request(url.toString(), {
-    method: "GET",
-    headers,
-  });
+const handler = createQueryHandler(sqliteConfig());
+
+/** Runs the handler and returns its parsed body, failing on a non-200 status. */
+async function query(params: Record<string, string> = {}): Promise<QueryBody> {
+  const res = await handler(queryRequest(params));
+  expect(res.status).toBe(200);
+  return (await res.json()) as QueryBody;
 }
 
-function makeRequestWithToken(searchParams: Record<string, string> = {}) {
-  return makeRequest(searchParams, { [SECRET_HEADER]: SECRET_TOKEN });
+function fingerprints(body: QueryBody): unknown[] {
+  return body.errors.map((row) => row.fingerprint);
 }
 
-// ─── Mock Prisma factory ──────────────────────────────────────────────────────
+beforeAll(async () => {
+  await prepareTestDb();
+});
 
-// biome-ignore lint/suspicious/noExplicitAny: test mock
-function makeMockPrisma(overrides?: {
-  clientErrorFindMany?: (args: any) => Promise<any[]>;
-  clientErrorCount?: (args: any) => Promise<number>;
-}): any {
-  return {
-    clientError: {
-      findMany:
-        overrides?.clientErrorFindMany ??
-        ((_: any) => Promise.resolve([makeErrorRecord()])),
-      count: overrides?.clientErrorCount ?? ((_: any) => Promise.resolve(1)),
-    },
-  };
-}
+beforeEach(async () => {
+  await resetClientErrors();
+});
 
-// ─── Import target ────────────────────────────────────────────────────────────
-
-// @ts-expect-error: module created by B.A. during implementation phase
-const { createQueryHandler } = await import("../server/query");
-
-// ─── createQueryHandler ───────────────────────────────────────────────────────
-
-describe("createQueryHandler", () => {
-  test("is a function", () => {
-    expect(typeof createQueryHandler).toBe("function");
+describe("createQueryHandler configuration", () => {
+  test("throws when no db is provided", () => {
+    expect(() => createQueryHandler({ dialect: "sqlite" } as never)).toThrow(
+      /A Drizzle database instance is required/
+    );
   });
 
-  test("returns a function (Next.js GET route handler)", () => {
-    const handler = createQueryHandler({ prisma: makeMockPrisma() });
-    expect(typeof handler).toBe("function");
+  test("throws on a dialect it cannot query", () => {
+    expect(() =>
+      createQueryHandler({ db: testDb, dialect: "mysql" } as never)
+    ).toThrow('Unsupported dialect "mysql"');
   });
 });
 
-// ─── Authentication ───────────────────────────────────────────────────────────
+describe("query handler authentication", () => {
+  const guarded = createQueryHandler({
+    ...sqliteConfig(),
+    secretHeaderName: SECRET_HEADER,
+    secretHeaderToken: SECRET_TOKEN,
+  });
 
-describe("query handler — authentication", () => {
-  test("returns 401 when secret is configured but header is missing", async () => {
-    const handler = createQueryHandler({
-      prisma: makeMockPrisma(),
-      secretHeaderName: SECRET_HEADER,
-      secretHeaderToken: SECRET_TOKEN,
-    });
+  test("returns 401 and no rows when the token header is missing", async () => {
+    await seedClientError();
+    const res = await guarded(queryRequest());
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "Unauthorized" });
+  });
 
-    const req = makeRequest();
-    const res = await handler(req);
-
+  test("returns 401 when the token header is wrong", async () => {
+    const res = await guarded(
+      queryRequest({}, { [SECRET_HEADER]: "wrong" })
+    );
     expect(res.status).toBe(401);
   });
 
-  test("returns 401 when secret header value is wrong", async () => {
-    const handler = createQueryHandler({
-      prisma: makeMockPrisma(),
-      secretHeaderName: SECRET_HEADER,
-      secretHeaderToken: SECRET_TOKEN,
-    });
-
-    const req = makeRequest({}, { [SECRET_HEADER]: "wrong-token" });
-    const res = await handler(req);
-
-    expect(res.status).toBe(401);
-  });
-
-  test("proceeds when correct token is provided", async () => {
-    const handler = createQueryHandler({
-      prisma: makeMockPrisma(),
-      secretHeaderName: SECRET_HEADER,
-      secretHeaderToken: SECRET_TOKEN,
-    });
-
-    const req = makeRequestWithToken();
-    const res = await handler(req);
-
-    expect(res.status).not.toBe(401);
-  });
-
-  test("proceeds when no secret is configured", async () => {
-    const handler = createQueryHandler({ prisma: makeMockPrisma() });
-    const req = makeRequest();
-    const res = await handler(req);
-
-    expect(res.status).not.toBe(401);
-  });
-});
-
-// ─── Success response shape ───────────────────────────────────────────────────
-
-describe("query handler — response shape", () => {
-  test("returns 200 on a valid request", async () => {
-    const handler = createQueryHandler({ prisma: makeMockPrisma() });
-    const res = await handler(makeRequest());
+  test("returns rows when the correct token is provided", async () => {
+    await seedClientError({ fingerprint: "fp-authorized" });
+    const res = await guarded(
+      queryRequest({}, { [SECRET_HEADER]: SECRET_TOKEN })
+    );
     expect(res.status).toBe(200);
+    expect(fingerprints((await res.json()) as QueryBody)).toEqual([
+      "fp-authorized",
+    ]);
   });
 
-  test("response body has errors array", async () => {
-    const handler = createQueryHandler({
-      prisma: makeMockPrisma({
-        clientErrorFindMany: (_: any) => Promise.resolve([makeErrorRecord()]),
-      }),
-    });
-    const res = await handler(makeRequest());
-    const body = await res.json();
-    expect(Array.isArray(body.errors)).toBe(true);
-  });
-
-  test("response body has total count", async () => {
-    const handler = createQueryHandler({
-      prisma: makeMockPrisma({
-        clientErrorFindMany: (_: any) => Promise.resolve([makeErrorRecord()]),
-        clientErrorCount: (_: any) => Promise.resolve(42),
-      }),
-    });
-    const res = await handler(makeRequest());
-    const body = await res.json();
-    expect(typeof body.total).toBe("number");
-    expect(body.total).toBe(42);
-  });
-
-  test("errors array contains records from the database", async () => {
-    const record = makeErrorRecord({ fingerprint: "fp_unique_xyz" });
-    const handler = createQueryHandler({
-      prisma: makeMockPrisma({
-        clientErrorFindMany: (_: any) => Promise.resolve([record]),
-      }),
-    });
-    const res = await handler(makeRequest());
-    const body = await res.json();
-    expect(body.errors.length).toBe(1);
-    expect(body.errors[0].fingerprint).toBe("fp_unique_xyz");
-  });
-
-  test("returns empty errors array when no records match", async () => {
-    const handler = createQueryHandler({
-      prisma: makeMockPrisma({
-        clientErrorFindMany: (_: any) => Promise.resolve([]),
-        clientErrorCount: (_: any) => Promise.resolve(0),
-      }),
-    });
-    const res = await handler(makeRequest());
-    const body = await res.json();
-    expect(body.errors).toEqual([]);
-    expect(body.total).toBe(0);
+  test("returns rows when no token is configured", async () => {
+    await seedClientError({ fingerprint: "fp-open" });
+    expect(fingerprints(await query())).toEqual(["fp-open"]);
   });
 });
 
-// ─── Ordering ─────────────────────────────────────────────────────────────────
+describe("query handler response shape", () => {
+  test("returns an empty list and a zero total when nothing is stored", async () => {
+    expect(await query()).toEqual({ errors: [], total: 0 });
+  });
 
-describe("query handler — ordering", () => {
-  test("queries errors ordered by lastSeenAt descending", async () => {
-    const clientErrorFindMany = mock((_: any) => Promise.resolve([]));
-    const handler = createQueryHandler({
-      prisma: makeMockPrisma({ clientErrorFindMany }),
+  test("returns rows keyed by the schema's property names with ISO timestamps", async () => {
+    const lastSeenAt = new Date("2026-03-15T10:00:00.000Z");
+    const resolvedAt = new Date("2026-03-16T11:30:00.000Z");
+    const seeded = await seedClientError({
+      message: "TypeError: boom",
+      stack: "TypeError: boom\n  at Component (app.js:1:100)",
+      componentStack: "\n  at ErrorBoundary",
+      resolvedStack: "TypeError: boom\n  at Component (src/Component.tsx:1:1)",
+      fingerprint: "fp-shape",
+      occurrences: 7,
+      environment: "production",
+      url: "https://example.com/dashboard",
+      userAgent: "Mozilla/5.0",
+      lastSeenAt,
+      resolvedAt,
     });
 
-    await handler(makeRequest());
+    const body = await query();
+    expect(body.total).toBe(1);
+    expect(body.errors[0]).toEqual({
+      id: seeded.id,
+      message: "TypeError: boom",
+      stack: "TypeError: boom\n  at Component (app.js:1:100)",
+      componentStack: "\n  at ErrorBoundary",
+      resolvedStack: "TypeError: boom\n  at Component (src/Component.tsx:1:1)",
+      fingerprint: "fp-shape",
+      occurrences: 7,
+      environment: "production",
+      url: "https://example.com/dashboard",
+      userAgent: "Mozilla/5.0",
+      resolvedAt: resolvedAt.toISOString(),
+      createdAt: seeded.createdAt.toISOString(),
+      updatedAt: seeded.updatedAt.toISOString(),
+      lastSeenAt: lastSeenAt.toISOString(),
+    });
+  });
 
-    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-    const callArgs = (clientErrorFindMany.mock.calls as any[][])[0][0];
-    const orderBy = callArgs?.orderBy;
-    if (orderBy) {
-      const isLastSeenAtDesc =
-        orderBy?.lastSeenAt === "desc" ||
-        (Array.isArray(orderBy) &&
-          orderBy.some((o: any) => o?.lastSeenAt === "desc"));
-      expect(isLastSeenAtDesc).toBe(true);
-    }
+  test("returns the newest errors first", async () => {
+    await seedClientErrors([
+      { fingerprint: "fp-old", lastSeenAt: new Date("2026-01-01T00:00:00Z") },
+      { fingerprint: "fp-new", lastSeenAt: new Date("2026-03-01T00:00:00Z") },
+      { fingerprint: "fp-mid", lastSeenAt: new Date("2026-02-01T00:00:00Z") },
+    ]);
+
+    expect(fingerprints(await query())).toEqual([
+      "fp-new",
+      "fp-mid",
+      "fp-old",
+    ]);
   });
 });
 
-// ─── Filters ─────────────────────────────────────────────────────────────────
-
-describe("query handler — env filter", () => {
-  test("passes env filter to prisma when ?env= is provided", async () => {
-    const clientErrorFindMany = mock((_: any) => Promise.resolve([]));
-    const handler = createQueryHandler({
-      prisma: makeMockPrisma({ clientErrorFindMany }),
-    });
-
-    await handler(makeRequest({ env: "production" }));
-
-    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-    const callArgs = (clientErrorFindMany.mock.calls as any[][])[0][0];
-    const where = callArgs?.where;
-    expect(where?.environment ?? where?.env).toBe("production");
+describe("query handler filters", () => {
+  beforeEach(async () => {
+    await seedClientErrors([
+      {
+        fingerprint: "fp-prod-open",
+        environment: "production",
+        lastSeenAt: new Date("2026-03-10T00:00:00Z"),
+      },
+      {
+        fingerprint: "fp-prod-resolved",
+        environment: "production",
+        lastSeenAt: new Date("2026-03-05T00:00:00Z"),
+        resolvedAt: new Date("2026-03-06T00:00:00Z"),
+      },
+      {
+        fingerprint: "fp-staging-open",
+        environment: "staging",
+        lastSeenAt: new Date("2026-02-01T00:00:00Z"),
+      },
+    ]);
   });
 
-  test("does not apply env filter when ?env= is absent", async () => {
-    const clientErrorFindMany = mock((_: any) => Promise.resolve([]));
-    const handler = createQueryHandler({
-      prisma: makeMockPrisma({ clientErrorFindMany }),
-    });
-
-    await handler(makeRequest());
-
-    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-    const callArgs = (clientErrorFindMany.mock.calls as any[][])[0][0];
-    const where = callArgs?.where;
-    // environment field should be absent or undefined when not filtered
-    expect(where?.environment ?? where?.env).toBeUndefined();
-  });
-});
-
-describe("query handler — since filter", () => {
-  test("applies lastSeenAt gte filter when ?since= is provided", async () => {
-    const clientErrorFindMany = mock((_: any) => Promise.resolve([]));
-    const handler = createQueryHandler({
-      prisma: makeMockPrisma({ clientErrorFindMany }),
-    });
-
-    const since = "2026-03-14T00:00:00.000Z";
-    await handler(makeRequest({ since }));
-
-    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-    const callArgs = (clientErrorFindMany.mock.calls as any[][])[0][0];
-    const where = callArgs?.where;
-    // Should have a date range filter
-    const hasDateFilter =
-      where?.lastSeenAt?.gte !== undefined ||
-      where?.createdAt?.gte !== undefined;
-    expect(where !== undefined).toBe(true);
-    // If date filter is present, it should be after the since timestamp
-    if (hasDateFilter) {
-      const filterDate = where?.lastSeenAt?.gte ?? where?.createdAt?.gte;
-      expect(new Date(filterDate).getTime()).toBe(new Date(since).getTime());
-    }
-  });
-});
-
-describe("query handler — fingerprint filter", () => {
-  test("filters by fingerprint when ?fingerprint= is provided", async () => {
-    const clientErrorFindMany = mock((_: any) => Promise.resolve([]));
-    const handler = createQueryHandler({
-      prisma: makeMockPrisma({ clientErrorFindMany }),
-    });
-
-    await handler(makeRequest({ fingerprint: "fp_target_abc" }));
-
-    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-    const callArgs = (clientErrorFindMany.mock.calls as any[][])[0][0];
-    const where = callArgs?.where;
-    expect(where?.fingerprint).toBe("fp_target_abc");
-  });
-});
-
-describe("query handler — resolved filter", () => {
-  test("returns only unresolved errors when ?resolved=false", async () => {
-    const clientErrorFindMany = mock((_: any) => Promise.resolve([]));
-    const handler = createQueryHandler({
-      prisma: makeMockPrisma({ clientErrorFindMany }),
-    });
-
-    await handler(makeRequest({ resolved: "false" }));
-
-    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-    const callArgs = (clientErrorFindMany.mock.calls as any[][])[0][0];
-    const where = callArgs?.where;
-    if (where?.resolvedAt !== undefined) {
-      expect(where.resolvedAt).toBeNull();
-    }
+  test("returns every row when no filter is applied", async () => {
+    const body = await query();
+    expect(body.total).toBe(3);
+    expect(fingerprints(body)).toEqual([
+      "fp-prod-open",
+      "fp-prod-resolved",
+      "fp-staging-open",
+    ]);
   });
 
-  test("returns only resolved errors when ?resolved=true", async () => {
-    const clientErrorFindMany = mock((_: any) => Promise.resolve([]));
-    const handler = createQueryHandler({
-      prisma: makeMockPrisma({ clientErrorFindMany }),
+  test("env returns only that environment", async () => {
+    const body = await query({ env: "staging" });
+    expect(fingerprints(body)).toEqual(["fp-staging-open"]);
+    expect(body.total).toBe(1);
+  });
+
+  test("since keeps rows last seen at or after the timestamp", async () => {
+    const body = await query({ since: "2026-03-05T00:00:00.000Z" });
+    expect(fingerprints(body)).toEqual(["fp-prod-open", "fp-prod-resolved"]);
+    expect(body.total).toBe(2);
+  });
+
+  test("fingerprint returns just that error", async () => {
+    const body = await query({ fingerprint: "fp-prod-resolved" });
+    expect(fingerprints(body)).toEqual(["fp-prod-resolved"]);
+    expect(body.total).toBe(1);
+  });
+
+  test("fingerprint returns nothing when it matches no row", async () => {
+    expect(await query({ fingerprint: "fp-does-not-exist" })).toEqual({
+      errors: [],
+      total: 0,
     });
+  });
 
-    await handler(makeRequest({ resolved: "true" }));
+  test("resolved=false returns only unresolved errors", async () => {
+    const body = await query({ resolved: "false" });
+    expect(fingerprints(body)).toEqual(["fp-prod-open", "fp-staging-open"]);
+    expect(body.total).toBe(2);
+  });
 
-    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-    const callArgs = (clientErrorFindMany.mock.calls as any[][])[0][0];
-    const where = callArgs?.where;
-    if (where?.resolvedAt !== undefined) {
-      // Should filter for non-null resolvedAt
-      expect(where.resolvedAt).not.toBeNull();
-    }
+  test("resolved=true returns only resolved errors", async () => {
+    const body = await query({ resolved: "true" });
+    expect(fingerprints(body)).toEqual(["fp-prod-resolved"]);
+    expect(body.total).toBe(1);
+  });
+
+  test("combines env with resolved", async () => {
+    const body = await query({ env: "production", resolved: "false" });
+    expect(fingerprints(body)).toEqual(["fp-prod-open"]);
+    expect(body.total).toBe(1);
   });
 });
 
-// ─── Pagination ───────────────────────────────────────────────────────────────
+describe("query handler pagination", () => {
+  /** Rows dated one day apart, newest first once sorted. */
+  async function seedDaily(count: number): Promise<void> {
+    await seedClientErrors(
+      Array.from({ length: count }, (_, i) => ({
+        fingerprint: `fp-${String(i).padStart(4, "0")}`,
+        lastSeenAt: new Date(Date.UTC(2026, 0, 1) + i * 86_400_000),
+      }))
+    );
+  }
 
-describe("query handler — pagination", () => {
-  test("defaults to limit of 50 results", async () => {
-    const clientErrorFindMany = mock((_: any) => Promise.resolve([]));
-    const handler = createQueryHandler({
-      prisma: makeMockPrisma({ clientErrorFindMany }),
-    });
-
-    await handler(makeRequest());
-
-    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-    const callArgs = (clientErrorFindMany.mock.calls as any[][])[0][0];
-    expect(callArgs?.take ?? callArgs?.limit).toBe(50);
+  test("returns 50 rows by default and reports the full total", async () => {
+    await seedDaily(55);
+    const body = await query();
+    expect(body.errors).toHaveLength(50);
+    expect(body.total).toBe(55);
+    expect(body.errors[0]?.fingerprint).toBe("fp-0054");
   });
 
-  test("respects custom ?limit= parameter", async () => {
-    const clientErrorFindMany = mock((_: any) => Promise.resolve([]));
-    const handler = createQueryHandler({
-      prisma: makeMockPrisma({ clientErrorFindMany }),
-    });
-
-    await handler(makeRequest({ limit: "10" }));
-
-    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-    const callArgs = (clientErrorFindMany.mock.calls as any[][])[0][0];
-    expect(callArgs?.take ?? callArgs?.limit).toBe(10);
+  test("respects a smaller limit", async () => {
+    await seedDaily(10);
+    const body = await query({ limit: "3" });
+    expect(fingerprints(body)).toEqual(["fp-0009", "fp-0008", "fp-0007"]);
+    expect(body.total).toBe(10);
   });
 
-  test("caps limit at 200 even when larger value is requested", async () => {
-    const clientErrorFindMany = mock((_: any) => Promise.resolve([]));
-    const handler = createQueryHandler({
-      prisma: makeMockPrisma({ clientErrorFindMany }),
-    });
-
-    await handler(makeRequest({ limit: "999" }));
-
-    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-    const callArgs = (clientErrorFindMany.mock.calls as any[][])[0][0];
-    expect(callArgs?.take ?? callArgs?.limit).toBeLessThanOrEqual(200);
+  test("caps the limit at 200", async () => {
+    await seedDaily(205);
+    const body = await query({ limit: "500" });
+    expect(body.errors).toHaveLength(200);
+    expect(body.total).toBe(205);
   });
 
-  test("applies offset when ?offset= is provided", async () => {
-    const clientErrorFindMany = mock((_: any) => Promise.resolve([]));
-    const handler = createQueryHandler({
-      prisma: makeMockPrisma({ clientErrorFindMany }),
-    });
-
-    await handler(makeRequest({ offset: "20" }));
-
-    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-    const callArgs = (clientErrorFindMany.mock.calls as any[][])[0][0];
-    expect(callArgs?.skip ?? callArgs?.offset).toBe(20);
+  test("offset skips rows without changing the total", async () => {
+    await seedDaily(10);
+    const body = await query({ limit: "2", offset: "3" });
+    expect(fingerprints(body)).toEqual(["fp-0006", "fp-0005"]);
+    expect(body.total).toBe(10);
   });
 
-  test("defaults offset to 0 when not provided", async () => {
-    const clientErrorFindMany = mock((_: any) => Promise.resolve([]));
-    const handler = createQueryHandler({
-      prisma: makeMockPrisma({ clientErrorFindMany }),
-    });
+  test("an offset past the end returns no rows and the unchanged total", async () => {
+    await seedDaily(4);
+    expect(await query({ offset: "10" })).toEqual({ errors: [], total: 4 });
+  });
 
-    await handler(makeRequest());
-
-    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-    const callArgs = (clientErrorFindMany.mock.calls as any[][])[0][0];
-    expect(callArgs?.skip ?? 0).toBe(0);
+  test("applies the filter and the page together", async () => {
+    await seedClientErrors([
+      {
+        fingerprint: "fp-a",
+        environment: "production",
+        lastSeenAt: new Date("2026-03-03T00:00:00Z"),
+      },
+      {
+        fingerprint: "fp-b",
+        environment: "production",
+        lastSeenAt: new Date("2026-03-02T00:00:00Z"),
+      },
+      {
+        fingerprint: "fp-c",
+        environment: "staging",
+        lastSeenAt: new Date("2026-03-01T00:00:00Z"),
+      },
+    ]);
+    const body = await query({ env: "production", limit: "1", offset: "1" });
+    expect(fingerprints(body)).toEqual(["fp-b"]);
+    expect(body.total).toBe(2);
   });
 });

@@ -38,7 +38,6 @@ function makeRequestWithNoIpHeaders(): Request {
 
 // ─── Import target ────────────────────────────────────────────────────────────
 
-// @ts-expect-error: module created by B.A. during implementation phase
 const { createRateLimiter } = await import("../server/rate-limiter");
 
 // ─── createRateLimiter ────────────────────────────────────────────────────────

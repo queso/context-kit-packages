@@ -67,7 +67,6 @@ function mockFetchReject(): { restore: () => void } {
 
 // ─── Import target ────────────────────────────────────────────────────────────
 
-// @ts-expect-error: module created by B.A. during implementation phase
 const { reportError } = await import("../reporter");
 
 // ─── reportError ──────────────────────────────────────────────────────────────

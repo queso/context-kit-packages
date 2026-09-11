@@ -1,506 +1,383 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { LibSQLDatabase } from "drizzle-orm/libsql";
+import { runResolve, runTail } from "../cli";
+import * as schema from "../schema/sqlite";
+import {
+  captureConsole,
+  findClientError,
+  prepareTestDb,
+  ProcessExitError,
+  readClientErrors,
+  resetClientErrors,
+  seedClientError,
+  seedClientErrors,
+  stubEnv,
+  stubProcessExit,
+  testDb,
+} from "./helpers";
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+const DIALECT = "sqlite" as const;
 
-function mockProcessExit(): { calls: number[]; restore: () => void } {
-  const calls: number[] = [];
-  const original = process.exit.bind(process);
-  // biome-ignore lint/suspicious/noExplicitAny: test mock
-  (process as any).exit = (code: number) => {
-    calls.push(code);
-    throw new Error(`process.exit(${code})`);
-  };
-  return {
-    calls,
-    restore: () => {
-      // biome-ignore lint/suspicious/noExplicitAny: test mock
-      (process as any).exit = original;
-    },
-  };
+let workDir: string;
+
+beforeAll(async () => {
+  await prepareTestDb();
+  workDir = mkdtempSync(join(tmpdir(), "error-tracker-cli-"));
+});
+
+afterAll(() => {
+  rmSync(workDir, { recursive: true, force: true });
+});
+
+beforeEach(async () => {
+  await resetClientErrors();
+});
+
+/**
+ * Runs a CLI function with the console captured and `process.exit` stubbed, so
+ * an `exit()` call is recorded instead of killing the test runner.
+ */
+async function runCli(fn: () => Promise<void>) {
+  const exit = stubProcessExit();
+  try {
+    const { out, lines, error } = await captureConsole(fn);
+    if (error && !(error instanceof ProcessExitError)) throw error;
+    return { out, lines, codes: exit.codes };
+  } finally {
+    exit.restore();
+  }
 }
-
-function captureLogs(): { lines: string[]; restore: () => void } {
-  const lines: string[] = [];
-  const originalLog = console.log.bind(console);
-  const originalError = console.error.bind(console);
-  // biome-ignore lint/suspicious/noExplicitAny: test mock
-  console.log = (...args: any[]) => lines.push(args.join(" "));
-  // biome-ignore lint/suspicious/noExplicitAny: test mock
-  console.error = (...args: any[]) => lines.push(args.join(" "));
-  return {
-    lines,
-    restore: () => {
-      console.log = originalLog;
-      console.error = originalError;
-    },
-  };
-}
-
-// ─── Fixtures ─────────────────────────────────────────────────────────────────
-
-const NOW = new Date("2026-03-15T10:00:00.000Z");
-
-function makeErrorRecord(overrides: Record<string, unknown> = {}) {
-  return {
-    id: "err_1",
-    fingerprint: "fp_abc123",
-    message: "TypeError: Cannot read properties of undefined",
-    stack: "TypeError\n  at Component (app.js:1:100)",
-    componentStack: "\n  at ErrorBoundary",
-    environment: "production",
-    url: "https://example.com/dashboard",
-    userAgent: "Mozilla/5.0",
-    occurrences: 3,
-    resolvedAt: null,
-    lastSeenAt: NOW,
-    createdAt: NOW,
-    updatedAt: NOW,
-    ...overrides,
-  };
-}
-
-// ─── Mock Prisma factory ──────────────────────────────────────────────────────
-
-// biome-ignore lint/suspicious/noExplicitAny: test mock
-function makeMockPrisma(overrides?: {
-  clientErrorFindMany?: (args: any) => Promise<any[]>;
-  clientErrorUpdateMany?: (args: any) => Promise<any>;
-  clientErrorUpdate?: (args: any) => Promise<any>;
-}): any {
-  return {
-    clientError: {
-      findMany:
-        overrides?.clientErrorFindMany ??
-        ((_: any) => Promise.resolve([makeErrorRecord()])),
-      updateMany:
-        overrides?.clientErrorUpdateMany ??
-        ((_: any) => Promise.resolve({ count: 1 })),
-      update:
-        overrides?.clientErrorUpdate ??
-        ((_: any) => Promise.resolve(makeErrorRecord({ resolvedAt: NOW }))),
-    },
-  };
-}
-
-// ─── Import target ────────────────────────────────────────────────────────────
-
-// @ts-expect-error: module created by B.A. during implementation phase
-const { runTail, runResolve } = await import("../cli");
-
-// ─── runTail ──────────────────────────────────────────────────────────────────
 
 describe("runTail", () => {
-  let savedDatabaseUrl: string | undefined;
-
-  beforeEach(() => {
-    savedDatabaseUrl = process.env.DATABASE_URL;
-    process.env.DATABASE_URL = "postgresql://user:pass@localhost:5432/testdb";
-  });
-
-  afterEach(() => {
-    if (savedDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
-    } else {
-      process.env.DATABASE_URL = savedDatabaseUrl;
-    }
-  });
-
-  test("is a function", () => {
-    expect(typeof runTail).toBe("function");
-  });
-
-  test("queries clientError.findMany to fetch recent errors", async () => {
-    const clientErrorFindMany = mock((_: any) =>
-      Promise.resolve([makeErrorRecord()])
+  test("says so when there is nothing unresolved", async () => {
+    const { out, codes } = await runCli(() =>
+      runTail({ db: testDb, dialect: DIALECT })
     );
-    const prisma = makeMockPrisma({ clientErrorFindMany });
-    const logs = captureLogs();
-
-    try {
-      await runTail({ prisma });
-    } finally {
-      logs.restore();
-    }
-
-    expect(clientErrorFindMany).toHaveBeenCalledTimes(1);
+    expect(out).toContain("No unresolved errors found.");
+    expect(codes).toEqual([]);
   });
 
-  test("returns errors ordered by lastSeenAt descending", async () => {
-    const clientErrorFindMany = mock((_: any) => Promise.resolve([]));
-    const prisma = makeMockPrisma({ clientErrorFindMany });
-    const logs = captureLogs();
-
-    try {
-      await runTail({ prisma });
-    } finally {
-      logs.restore();
-    }
-
-    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-    const callArgs = (clientErrorFindMany.mock.calls as any[][])[0][0];
-    const orderBy = callArgs?.orderBy;
-    if (orderBy) {
-      // Should order by lastSeenAt desc
-      const isLastSeenAtDesc =
-        orderBy?.lastSeenAt === "desc" ||
-        (Array.isArray(orderBy) &&
-          orderBy.some((o: any) => o?.lastSeenAt === "desc"));
-      expect(isLastSeenAtDesc).toBe(true);
-    }
-  });
-
-  test("defaults to limit of 20 results", async () => {
-    const clientErrorFindMany = mock((_: any) => Promise.resolve([]));
-    const prisma = makeMockPrisma({ clientErrorFindMany });
-    const logs = captureLogs();
-
-    try {
-      await runTail({ prisma });
-    } finally {
-      logs.restore();
-    }
-
-    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-    const callArgs = (clientErrorFindMany.mock.calls as any[][])[0][0];
-    expect(callArgs?.take ?? callArgs?.limit).toBe(20);
-  });
-
-  test("respects custom --limit option", async () => {
-    const clientErrorFindMany = mock((_: any) => Promise.resolve([]));
-    const prisma = makeMockPrisma({ clientErrorFindMany });
-    const logs = captureLogs();
-
-    try {
-      await runTail({ prisma, limit: 5 });
-    } finally {
-      logs.restore();
-    }
-
-    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-    const callArgs = (clientErrorFindMany.mock.calls as any[][])[0][0];
-    expect(callArgs?.take ?? callArgs?.limit).toBe(5);
-  });
-
-  test("filters by environment when --env is provided", async () => {
-    const clientErrorFindMany = mock((_: any) => Promise.resolve([]));
-    const prisma = makeMockPrisma({ clientErrorFindMany });
-    const logs = captureLogs();
-
-    try {
-      await runTail({ prisma, env: "production" });
-    } finally {
-      logs.restore();
-    }
-
-    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-    const callArgs = (clientErrorFindMany.mock.calls as any[][])[0][0];
-    const where = callArgs?.where;
-    expect(where?.environment ?? where?.env).toBe("production");
-  });
-
-  test("filters by --since timestamp when provided", async () => {
-    const since = new Date("2026-03-14T00:00:00.000Z");
-    const clientErrorFindMany = mock((_: any) => Promise.resolve([]));
-    const prisma = makeMockPrisma({ clientErrorFindMany });
-    const logs = captureLogs();
-
-    try {
-      await runTail({ prisma, since });
-    } finally {
-      logs.restore();
-    }
-
-    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-    const callArgs = (clientErrorFindMany.mock.calls as any[][])[0][0];
-    const where = callArgs?.where;
-    // Should have a date filter (gte/after the since timestamp)
-    expect(where).toBeDefined();
-  });
-
-  test("only returns unresolved errors by default", async () => {
-    const clientErrorFindMany = mock((_: any) => Promise.resolve([]));
-    const prisma = makeMockPrisma({ clientErrorFindMany });
-    const logs = captureLogs();
-
-    try {
-      await runTail({ prisma });
-    } finally {
-      logs.restore();
-    }
-
-    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-    const callArgs = (clientErrorFindMany.mock.calls as any[][])[0][0];
-    const where = callArgs?.where;
-    // resolvedAt should be filtered to null (unresolved only)
-    if (where?.resolvedAt !== undefined) {
-      expect(where.resolvedAt).toBeNull();
-    }
-  });
-
-  test("prints output in table-like format (each error produces output lines)", async () => {
-    const prisma = makeMockPrisma();
-    const logs = captureLogs();
-
-    try {
-      await runTail({ prisma });
-    } finally {
-      logs.restore();
-    }
-
-    expect(logs.lines.length).toBeGreaterThan(0);
-  });
-
-  test("prints fingerprint in output", async () => {
-    const prisma = makeMockPrisma({
-      clientErrorFindMany: (_: any) =>
-        Promise.resolve([makeErrorRecord({ fingerprint: "fp_abc123" })]),
+  test("says so when every stored error is already resolved", async () => {
+    await seedClientError({
+      fingerprint: "fp-resolved",
+      resolvedAt: new Date("2026-03-01T00:00:00.000Z"),
     });
-    const logs = captureLogs();
 
-    try {
-      await runTail({ prisma });
-    } finally {
-      logs.restore();
-    }
-
-    const allOutput = logs.lines.join("\n");
-    expect(allOutput).toContain("fp_abc123");
+    const { out } = await runCli(() =>
+      runTail({ db: testDb, dialect: DIALECT })
+    );
+    expect(out).toContain("No unresolved errors found.");
+    expect(out).not.toContain("fp-resolved");
   });
 
-  test("prints error message in output", async () => {
-    const prisma = makeMockPrisma({
-      clientErrorFindMany: (_: any) =>
-        Promise.resolve([
-          makeErrorRecord({ message: "TypeError: unique-test-message" }),
-        ]),
+  test("prints the fingerprint, occurrence count, last-seen time and message", async () => {
+    const lastSeenAt = new Date("2026-03-15T10:00:00.000Z");
+    await seedClientError({
+      fingerprint: "fp-printed",
+      message: "TypeError: printed message",
+      occurrences: 12,
+      lastSeenAt,
     });
-    const logs = captureLogs();
 
-    try {
-      await runTail({ prisma });
-    } finally {
-      logs.restore();
-    }
-
-    const allOutput = logs.lines.join("\n");
-    expect(allOutput).toContain("TypeError: unique-test-message");
+    const { out } = await runCli(() =>
+      runTail({ db: testDb, dialect: DIALECT })
+    );
+    expect(out).toContain("fp-printed");
+    expect(out).toContain("12");
+    expect(out).toContain(lastSeenAt.toISOString());
+    expect(out).toContain("TypeError: printed message");
   });
 
-  test("exits with code 0 on success when exitOnComplete is true", async () => {
-    const prisma = makeMockPrisma();
-    const exitMock = mockProcessExit();
-    const logs = captureLogs();
+  test("lists unresolved errors newest first and leaves resolved ones out", async () => {
+    await seedClientErrors([
+      { fingerprint: "fp-old", lastSeenAt: new Date("2026-01-01T00:00:00Z") },
+      { fingerprint: "fp-new", lastSeenAt: new Date("2026-03-01T00:00:00Z") },
+      { fingerprint: "fp-mid", lastSeenAt: new Date("2026-02-01T00:00:00Z") },
+      {
+        fingerprint: "fp-done",
+        lastSeenAt: new Date("2026-04-01T00:00:00Z"),
+        resolvedAt: new Date("2026-04-02T00:00:00Z"),
+      },
+    ]);
 
-    try {
-      await runTail({ prisma, exitOnComplete: true });
-    } catch {
-      // process.exit throws in test environment
-    } finally {
-      exitMock.restore();
-      logs.restore();
-    }
-
-    expect(exitMock.calls).toContain(0);
+    const { out } = await runCli(() =>
+      runTail({ db: testDb, dialect: DIALECT })
+    );
+    expect(out).not.toContain("fp-done");
+    const newest = out.indexOf("fp-new");
+    const middle = out.indexOf("fp-mid");
+    const oldest = out.indexOf("fp-old");
+    expect(newest).toBeGreaterThan(-1);
+    expect(middle).toBeGreaterThan(newest);
+    expect(oldest).toBeGreaterThan(middle);
   });
 
-  test("exits with code 1 and helpful error when DATABASE_URL is missing", async () => {
-    delete process.env.DATABASE_URL;
-    const exitMock = mockProcessExit();
-    const logs = captureLogs();
+  test("prints at most 20 rows by default", async () => {
+    const seeded = await seedManyUnresolved(25);
+    const { out } = await runCli(() =>
+      runTail({ db: testDb, dialect: DIALECT })
+    );
+    // `seeded` is oldest first, and filter keeps that order, so this checks
+    // which rows were printed; the ordering test above checks the order.
+    const printed = seeded.filter((fp) => out.includes(fp));
+    expect(printed).toHaveLength(20);
+    // The 20 most recent, so the five oldest are the ones left out.
+    expect(printed).toEqual(seeded.slice(5));
+  });
 
-    try {
-      // Pass no prisma — it should detect missing DATABASE_URL
-      await runTail({});
-    } catch {
-      // process.exit throws in test environment
-    } finally {
-      exitMock.restore();
-      logs.restore();
-    }
+  test("prints at most `limit` rows", async () => {
+    const seeded = await seedManyUnresolved(10);
+    const { out } = await runCli(() =>
+      runTail({ db: testDb, dialect: DIALECT, limit: 3 })
+    );
+    expect(seeded.filter((fp) => out.includes(fp))).toEqual(seeded.slice(7));
+  });
 
-    expect(exitMock.calls).toContain(1);
-    const allOutput = logs.lines.join("\n");
-    expect(allOutput.toLowerCase()).toMatch(/database_url/);
+  test("prints only the requested environment", async () => {
+    await seedClientErrors([
+      { fingerprint: "fp-prod", environment: "production" },
+      { fingerprint: "fp-stage", environment: "staging" },
+    ]);
+
+    const { out } = await runCli(() =>
+      runTail({ db: testDb, dialect: DIALECT, env: "staging" })
+    );
+    expect(out).toContain("fp-stage");
+    expect(out).not.toContain("fp-prod");
+  });
+
+  test("prints only errors last seen at or after `since`", async () => {
+    await seedClientErrors([
+      {
+        fingerprint: "fp-before",
+        lastSeenAt: new Date("2026-01-01T00:00:00Z"),
+      },
+      { fingerprint: "fp-on", lastSeenAt: new Date("2026-02-01T00:00:00Z") },
+      { fingerprint: "fp-after", lastSeenAt: new Date("2026-03-01T00:00:00Z") },
+    ]);
+
+    const { out } = await runCli(() =>
+      runTail({
+        db: testDb,
+        dialect: DIALECT,
+        since: new Date("2026-02-01T00:00:00Z"),
+      })
+    );
+    expect(out).toContain("fp-on");
+    expect(out).toContain("fp-after");
+    expect(out).not.toContain("fp-before");
+  });
+
+  test("exits 0 when exitOnComplete is set", async () => {
+    await seedClientError();
+    const { codes } = await runCli(() =>
+      runTail({ db: testDb, dialect: DIALECT, exitOnComplete: true })
+    );
+    expect(codes).toEqual([0]);
+  });
+
+  test("does not exit when exitOnComplete is not set", async () => {
+    await seedClientError();
+    const { codes } = await runCli(() =>
+      runTail({ db: testDb, dialect: DIALECT })
+    );
+    expect(codes).toEqual([]);
   });
 });
-
-// ─── runResolve ───────────────────────────────────────────────────────────────
 
 describe("runResolve", () => {
-  let savedDatabaseUrl: string | undefined;
+  test("stamps resolvedAt on the matching error and says which one", async () => {
+    await seedClientError({ fingerprint: "fp-to-resolve" });
+    await seedClientError({ fingerprint: "fp-untouched" });
+    const before = Date.now();
 
-  beforeEach(() => {
-    savedDatabaseUrl = process.env.DATABASE_URL;
-    process.env.DATABASE_URL = "postgresql://user:pass@localhost:5432/testdb";
-  });
-
-  afterEach(() => {
-    if (savedDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
-    } else {
-      process.env.DATABASE_URL = savedDatabaseUrl;
-    }
-  });
-
-  test("is a function", () => {
-    expect(typeof runResolve).toBe("function");
-  });
-
-  test("sets resolvedAt on the matching fingerprint", async () => {
-    const clientErrorUpdate = mock((_: any) =>
-      Promise.resolve(makeErrorRecord({ resolvedAt: NOW }))
+    const { out, codes } = await runCli(() =>
+      runResolve({ db: testDb, dialect: DIALECT, fingerprint: "fp-to-resolve" })
     );
-    const prisma = makeMockPrisma({ clientErrorUpdate });
-    const logs = captureLogs();
 
-    try {
-      await runResolve({ prisma, fingerprint: "fp_abc123" });
-    } finally {
-      logs.restore();
-    }
+    expect(out).toContain("Resolved error with fingerprint: fp-to-resolve");
+    expect(codes).toEqual([]);
 
-    expect(clientErrorUpdate.mock.calls.length).toBeGreaterThan(0);
-    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-    const callArgs = (clientErrorUpdate.mock.calls as any[][])[0][0];
-    const resolvedAt = callArgs?.data?.resolvedAt;
-    expect(resolvedAt).toBeDefined();
-    expect(resolvedAt).not.toBeNull();
+    const resolved = await findClientError("fp-to-resolve");
+    expect(resolved?.resolvedAt?.getTime()).toBeGreaterThanOrEqual(before);
+    expect((await findClientError("fp-untouched"))?.resolvedAt).toBeNull();
   });
 
-  test("targets the correct fingerprint in the where clause", async () => {
-    const clientErrorUpdate = mock((_: any) =>
-      Promise.resolve(makeErrorRecord({ resolvedAt: NOW }))
+  test("fails and exits 1 when no error carries that fingerprint", async () => {
+    await seedClientError({ fingerprint: "fp-present" });
+
+    const { out, codes } = await runCli(() =>
+      runResolve({ db: testDb, dialect: DIALECT, fingerprint: "fp-missing" })
     );
-    const prisma = makeMockPrisma({ clientErrorUpdate });
-    const logs = captureLogs();
 
-    try {
-      await runResolve({ prisma, fingerprint: "fp_target_xyz" });
-    } finally {
-      logs.restore();
-    }
-
-    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-    const callArgs = (clientErrorUpdate.mock.calls as any[][])[0][0];
-    expect(callArgs?.where?.fingerprint).toBe("fp_target_xyz");
+    expect(codes).toEqual([1]);
+    const failure = out
+      .split("\n")
+      .find((line) => line.startsWith("Failed to resolve error:"));
+    expect(failure).toContain("fp-missing");
+    expect((await findClientError("fp-present"))?.resolvedAt).toBeNull();
   });
 
-  test("prints confirmation message after resolving", async () => {
-    const prisma = makeMockPrisma();
-    const logs = captureLogs();
+  test("fails and exits 1 when the error is already resolved", async () => {
+    const resolvedAt = new Date("2026-03-01T00:00:00.000Z");
+    await seedClientError({ fingerprint: "fp-already", resolvedAt });
 
-    try {
-      await runResolve({ prisma, fingerprint: "fp_abc123" });
-    } finally {
-      logs.restore();
-    }
+    const { out, codes } = await runCli(() =>
+      runResolve({ db: testDb, dialect: DIALECT, fingerprint: "fp-already" })
+    );
 
-    expect(logs.lines.length).toBeGreaterThan(0);
+    expect(codes).toEqual([1]);
+    // Only unresolved rows are eligible, so a second resolve reports failure.
+    expect(out).toContain("Failed to resolve error:");
+    expect(out).toContain("fp-already");
+    // The original resolution time is left alone.
+    expect((await findClientError("fp-already"))?.resolvedAt).toEqual(resolvedAt);
   });
 
-  test("exits with code 0 on success when exitOnComplete is true", async () => {
-    const prisma = makeMockPrisma();
-    const exitMock = mockProcessExit();
-    const logs = captureLogs();
-
-    try {
-      await runResolve({
-        prisma,
-        fingerprint: "fp_abc123",
+  test("exits 0 when exitOnComplete is set", async () => {
+    await seedClientError({ fingerprint: "fp-exit" });
+    const { codes } = await runCli(() =>
+      runResolve({
+        db: testDb,
+        dialect: DIALECT,
+        fingerprint: "fp-exit",
         exitOnComplete: true,
-      });
-    } catch {
-      // process.exit throws in test environment
-    } finally {
-      exitMock.restore();
-      logs.restore();
-    }
-
-    expect(exitMock.calls).toContain(0);
+      })
+    );
+    expect(codes).toEqual([0]);
   });
 
-  test("exits with code 1 when DATABASE_URL is missing and no prisma provided", async () => {
-    delete process.env.DATABASE_URL;
-    const exitMock = mockProcessExit();
-    const logs = captureLogs();
+  test("a resolved error is hidden from tail until it happens again", async () => {
+    await seedClientError({ fingerprint: "fp-cycle" });
+    await runCli(() =>
+      runResolve({ db: testDb, dialect: DIALECT, fingerprint: "fp-cycle" })
+    );
 
-    try {
-      await runResolve({ fingerprint: "fp_abc123" });
-    } catch {
-      // process.exit throws in test environment
-    } finally {
-      exitMock.restore();
-      logs.restore();
-    }
-
-    expect(exitMock.calls).toContain(1);
-    const allOutput = logs.lines.join("\n");
-    expect(allOutput.toLowerCase()).toMatch(/database_url/);
-  });
-
-  test("exits with code 1 when an error occurs during update", async () => {
-    const prisma = makeMockPrisma({
-      clientErrorUpdate: (_: any) =>
-        Promise.reject(new Error("DB write failed")),
-    });
-    const exitMock = mockProcessExit();
-    const logs = captureLogs();
-
-    try {
-      await runResolve({
-        prisma,
-        fingerprint: "fp_abc123",
-        exitOnComplete: true,
-      });
-    } catch {
-      // process.exit throws in test environment
-    } finally {
-      exitMock.restore();
-      logs.restore();
-    }
-
-    expect(exitMock.calls).toContain(1);
+    const { out } = await runCli(() =>
+      runTail({ db: testDb, dialect: DIALECT })
+    );
+    expect(out).toContain("No unresolved errors found.");
   });
 });
 
-// ─── CLI flag handling ────────────────────────────────────────────────────────
-
-describe("CLI exit codes", () => {
-  test("runTail exits 0 on successful completion", async () => {
-    const prisma = makeMockPrisma();
-    const exitMock = mockProcessExit();
-    const logs = captureLogs();
-
+describe("CLI database connection", () => {
+  test.each([
+    ["runTail", () => runTail({})],
+    ["runResolve", () => runResolve({ fingerprint: "fp-anything" })],
+  ])("%s exits 1 and names DATABASE_URL when it is unset", async (_name, call) => {
+    const restore = stubEnv("DATABASE_URL", undefined);
     try {
-      await runTail({ prisma, exitOnComplete: true });
-    } catch {
-      // process.exit throws in test environment
+      const { out, codes } = await runCli(call);
+      expect(codes).toEqual([1]);
+      expect(out).toContain("DATABASE_URL");
     } finally {
-      exitMock.restore();
-      logs.restore();
+      restore();
     }
-
-    expect(exitMock.calls).toContain(0);
   });
 
-  test("runResolve exits 0 on successful completion", async () => {
-    const prisma = makeMockPrisma();
-    const exitMock = mockProcessExit();
-    const logs = captureLogs();
-
+  test("runTail reads the database DATABASE_URL points at", async () => {
+    const file = join(workDir, "tail-from-url.db");
+    const { connectFromDatabaseUrl } = await import("../server/connect");
+    const { db, close } = await connectFromDatabaseUrl(`sqlite:${file}`);
     try {
-      await runResolve({
-        prisma,
-        fingerprint: "fp_abc123",
-        exitOnComplete: true,
-      });
-    } catch {
-      // process.exit throws in test environment
+      const { pushSQLiteSchema } = await import("drizzle-kit/api");
+      const { apply } = await pushSQLiteSchema(
+        schema,
+        db as Parameters<typeof pushSQLiteSchema>[1]
+      );
+      await apply();
+      await (db as LibSQLDatabase<typeof schema>)
+        .insert(schema.clientError)
+        .values({
+          message: "TypeError: from DATABASE_URL",
+          fingerprint: "fp-from-url",
+          environment: "production",
+          lastSeenAt: new Date("2026-03-20T00:00:00.000Z"),
+        });
     } finally {
-      exitMock.restore();
-      logs.restore();
+      await close();
     }
 
-    expect(exitMock.calls).toContain(0);
+    const restore = stubEnv("DATABASE_URL", `sqlite:${file}`);
+    try {
+      const { out, codes } = await runCli(() => runTail({}));
+      expect(codes).toEqual([]);
+      expect(out).toContain("fp-from-url");
+      expect(out).toContain("TypeError: from DATABASE_URL");
+    } finally {
+      restore();
+    }
+
+    // The in-memory database the other tests share was not touched.
+    expect(await readClientErrors()).toHaveLength(0);
+  });
+
+  test("runResolve writes to the database DATABASE_URL points at", async () => {
+    const file = join(workDir, "resolve-from-url.db");
+    const { connectFromDatabaseUrl } = await import("../server/connect");
+    const setup = await connectFromDatabaseUrl(`sqlite:${file}`);
+    try {
+      const { pushSQLiteSchema } = await import("drizzle-kit/api");
+      const { apply } = await pushSQLiteSchema(
+        schema,
+        setup.db as Parameters<typeof pushSQLiteSchema>[1]
+      );
+      await apply();
+      await (setup.db as LibSQLDatabase<typeof schema>)
+        .insert(schema.clientError)
+        .values({
+          message: "TypeError: resolve me",
+          fingerprint: "fp-resolve-url",
+          environment: "production",
+          lastSeenAt: new Date("2026-03-21T00:00:00.000Z"),
+        });
+    } finally {
+      await setup.close();
+    }
+
+    const restore = stubEnv("DATABASE_URL", `sqlite:${file}`);
+    try {
+      const { out } = await runCli(() =>
+        runResolve({ fingerprint: "fp-resolve-url" })
+      );
+      expect(out).toContain(
+        "Resolved error with fingerprint: fp-resolve-url"
+      );
+    } finally {
+      restore();
+    }
+
+    const check = await connectFromDatabaseUrl(`sqlite:${file}`);
+    try {
+      const rows = await (check.db as LibSQLDatabase<typeof schema>)
+        .select()
+        .from(schema.clientError);
+      expect(rows[0]?.resolvedAt).toBeInstanceOf(Date);
+    } finally {
+      await check.close();
+    }
   });
 });
+
+/**
+ * Seeds `count` unresolved errors one day apart, returning their fingerprints
+ * oldest first.
+ */
+async function seedManyUnresolved(count: number): Promise<string[]> {
+  const rows = Array.from({ length: count }, (_, i) => ({
+    fingerprint: `fp-${String(i).padStart(4, "0")}`,
+    lastSeenAt: new Date(Date.UTC(2026, 0, 1) + i * 86_400_000),
+  }));
+  await seedClientErrors(rows);
+  return rows.map((row) => row.fingerprint);
+}

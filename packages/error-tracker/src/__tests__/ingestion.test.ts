@@ -1,426 +1,458 @@
-import { describe, expect, mock, test } from "bun:test";
+import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import {
+  computeFingerprint,
+  createIngestionHandler,
+} from "../server/ingestion";
+import { parseFrames } from "../server/parse-stack";
 import type { StackFrame } from "../types";
+import {
+  errorRequest,
+  findClientError,
+  prepareTestDb,
+  rawRequest,
+  readClientErrors,
+  readOnlyClientError,
+  resetClientErrors,
+  seedClientError,
+  sqliteConfig,
+  stubEnv,
+  testDb,
+} from "./helpers";
 
-// ─── Fixtures ─────────────────────────────────────────────────────────────────
-
-const SECRET_TOKEN = "test-secret-token";
 const SECRET_HEADER = "x-error-token";
+const SECRET_TOKEN = "test-secret-token";
 
-function makeValidBody(overrides: Record<string, unknown> = {}) {
+const STACK = [
+  "TypeError: Cannot read properties of undefined",
+  "  at Component (app.js:1:100)",
+  "  at App (app.js:2:200)",
+  "  at Root (app.js:3:300)",
+].join("\n");
+
+const MESSAGE = "TypeError: Cannot read properties of undefined";
+
+/** The fingerprint the handler must derive for `message` plus `stack`. */
+function fingerprintFor(message: string, stack: string): string {
+  return computeFingerprint(message, parseFrames(stack));
+}
+
+function validBody(overrides: Record<string, unknown> = {}) {
   return {
-    message: "TypeError: Cannot read properties of undefined",
-    stack:
-      "TypeError\n  at Component (app.js:1:100)\n  at App (app.js:2:200)\n  at Root (app.js:3:300)",
+    message: MESSAGE,
+    stack: STACK,
     componentStack: "\n  at ErrorBoundary\n  at App",
     url: "https://example.com/dashboard",
     userAgent: "Mozilla/5.0",
-    environment: "test",
-    timestamp: new Date().toISOString(),
     ...overrides,
   };
 }
 
-function makeRequest(
-  body: unknown,
-  headers: Record<string, string> = {},
-  method = "POST"
-): Request {
-  return new Request("https://example.com/api/errors", {
-    method,
-    headers: {
-      "content-type": "application/json",
-      ...headers,
-    },
-    body: JSON.stringify(body),
-  });
-}
+const frame = (over: Partial<StackFrame> = {}): StackFrame => ({
+  file: "app.js",
+  line: 1,
+  column: 1,
+  functionName: "Component",
+  ...over,
+});
 
-function makeRequestWithToken(body: unknown) {
-  return makeRequest(body, { [SECRET_HEADER]: SECRET_TOKEN });
-}
+beforeAll(async () => {
+  await prepareTestDb();
+});
 
-// ─── Mock Prisma factory ──────────────────────────────────────────────────────
-
-// biome-ignore lint/suspicious/noExplicitAny: test mock
-function makeMockPrisma(overrides?: {
-  clientErrorFindFirst?: (args: any) => Promise<any>;
-  clientErrorCreate?: (args: any) => Promise<any>;
-  clientErrorUpdate?: (args: any) => Promise<any>;
-  clientErrorUpsert?: (args: any) => Promise<any>;
-}): any {
-  const defaultRecord = {
-    id: "err_1",
-    fingerprint: "fp_abc123",
-    message: "TypeError",
-    occurrences: 1,
-    resolvedAt: null,
-    lastSeenAt: new Date(),
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  };
-
-  return {
-    clientError: {
-      findFirst:
-        overrides?.clientErrorFindFirst ?? ((_: any) => Promise.resolve(null)),
-      create:
-        overrides?.clientErrorCreate ??
-        ((_: any) => Promise.resolve(defaultRecord)),
-      update:
-        overrides?.clientErrorUpdate ??
-        ((_: any) => Promise.resolve(defaultRecord)),
-      upsert:
-        overrides?.clientErrorUpsert ??
-        ((_: any) => Promise.resolve(defaultRecord)),
-    },
-  };
-}
-
-// ─── Import target ────────────────────────────────────────────────────────────
-
-// @ts-expect-error: module created by B.A. during implementation phase
-const { createIngestionHandler, computeFingerprint } = await import(
-  "../server/ingestion"
-);
-
-// ─── computeFingerprint ───────────────────────────────────────────────────────
+beforeEach(async () => {
+  await resetClientErrors();
+});
 
 describe("computeFingerprint", () => {
-  test("is a function", () => {
-    expect(typeof computeFingerprint).toBe("function");
-  });
-
-  test("returns a string", () => {
-    const frames: StackFrame[] = [
-      { file: "app.js", line: 1, column: 1, functionName: "Component" },
-    ];
-    const result = computeFingerprint("TypeError: test", frames);
-    expect(typeof result).toBe("string");
-  });
-
-  test("returns a non-empty string", () => {
-    const frames: StackFrame[] = [
-      { file: "app.js", line: 1, column: 1, functionName: "Component" },
-    ];
-    const result = computeFingerprint("TypeError: test", frames);
-    expect(result.length).toBeGreaterThan(0);
-  });
-
-  test("same message and frames produce the same fingerprint (deterministic)", () => {
-    const frames: StackFrame[] = [
-      { file: "app.js", line: 10, column: 5, functionName: "handleClick" },
-      { file: "app.js", line: 20, column: 3, functionName: "App" },
-    ];
-    const fp1 = computeFingerprint("ReferenceError: x is not defined", frames);
-    const fp2 = computeFingerprint("ReferenceError: x is not defined", frames);
-    expect(fp1).toBe(fp2);
-  });
-
-  test("different messages produce different fingerprints", () => {
-    const frames: StackFrame[] = [
-      { file: "app.js", line: 1, column: 1, functionName: "fn" },
-    ];
-    const fp1 = computeFingerprint("TypeError: cannot read x", frames);
-    const fp2 = computeFingerprint("RangeError: invalid array length", frames);
-    expect(fp1).not.toBe(fp2);
-  });
-
-  test("different frames produce different fingerprints", () => {
-    const frames1: StackFrame[] = [
-      { file: "app.js", line: 1, column: 1, functionName: "fn" },
-    ];
-    const frames2: StackFrame[] = [
-      { file: "other.js", line: 99, column: 5, functionName: "otherFn" },
-    ];
-    const fp1 = computeFingerprint("TypeError: test", frames1);
-    const fp2 = computeFingerprint("TypeError: test", frames2);
-    expect(fp1).not.toBe(fp2);
-  });
-
-  test("uses only the first 3 stack frames for fingerprinting", () => {
-    const sharedFrames: StackFrame[] = [
-      { file: "app.js", line: 1, column: 1, functionName: "fn1" },
-      { file: "app.js", line: 2, column: 2, functionName: "fn2" },
-      { file: "app.js", line: 3, column: 3, functionName: "fn3" },
-    ];
-    const extraFrame: StackFrame = {
-      file: "app.js",
-      line: 4,
-      column: 4,
-      functionName: "fn4",
-    };
-
-    const fp1 = computeFingerprint("Error", sharedFrames);
-    const fp2 = computeFingerprint("Error", [...sharedFrames, extraFrame]);
-    // Adding a 4th frame should not change the fingerprint
-    expect(fp1).toBe(fp2);
-  });
-
-  test("handles empty frames array without throwing", () => {
-    expect(() => computeFingerprint("Error: something", [])).not.toThrow();
-  });
-});
-
-// ─── createIngestionHandler ───────────────────────────────────────────────────
-
-describe("createIngestionHandler", () => {
-  test("is a function", () => {
-    expect(typeof createIngestionHandler).toBe("function");
-  });
-
-  test("returns a function (Next.js POST route handler)", () => {
-    const handler = createIngestionHandler({
-      prisma: makeMockPrisma(),
-    });
-    expect(typeof handler).toBe("function");
-  });
-});
-
-describe("ingestion handler — authentication", () => {
-  test("returns 401 when secret token is configured but header is missing", async () => {
-    const handler = createIngestionHandler({
-      prisma: makeMockPrisma(),
-      secretHeaderName: SECRET_HEADER,
-      secretHeaderToken: SECRET_TOKEN,
-    });
-
-    const req = makeRequest(makeValidBody());
-    const res = await handler(req);
-
-    expect(res.status).toBe(401);
-  });
-
-  test("returns 401 when secret token is configured but header value is wrong", async () => {
-    const handler = createIngestionHandler({
-      prisma: makeMockPrisma(),
-      secretHeaderName: SECRET_HEADER,
-      secretHeaderToken: SECRET_TOKEN,
-    });
-
-    const req = makeRequest(makeValidBody(), {
-      [SECRET_HEADER]: "wrong-token",
-    });
-    const res = await handler(req);
-
-    expect(res.status).toBe(401);
-  });
-
-  test("proceeds past auth when correct token is provided", async () => {
-    const handler = createIngestionHandler({
-      prisma: makeMockPrisma(),
-      secretHeaderName: SECRET_HEADER,
-      secretHeaderToken: SECRET_TOKEN,
-    });
-
-    const req = makeRequestWithToken(makeValidBody());
-    const res = await handler(req);
-
-    expect(res.status).not.toBe(401);
-  });
-
-  test("proceeds when no secret is configured (permissive default for local dev)", async () => {
-    const handler = createIngestionHandler({
-      prisma: makeMockPrisma(),
-    });
-
-    const req = makeRequest(makeValidBody());
-    const res = await handler(req);
-
-    expect(res.status).not.toBe(401);
-  });
-});
-
-describe("ingestion handler — request validation", () => {
-  test("returns 400 when message field is missing", async () => {
-    const handler = createIngestionHandler({ prisma: makeMockPrisma() });
-    const body = makeValidBody();
-    delete (body as Record<string, unknown>).message;
-
-    const req = makeRequest(body);
-    const res = await handler(req);
-
-    expect(res.status).toBe(400);
-  });
-
-  test("returns 400 when body is not valid JSON", async () => {
-    const handler = createIngestionHandler({ prisma: makeMockPrisma() });
-
-    const req = new Request("https://example.com/api/errors", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: "not-json{{{",
-    });
-    const res = await handler(req);
-
-    expect(res.status).toBe(400);
-  });
-
-  test("returns 400 when message is empty string", async () => {
-    const handler = createIngestionHandler({ prisma: makeMockPrisma() });
-    const req = makeRequest(makeValidBody({ message: "" }));
-    const res = await handler(req);
-
-    expect(res.status).toBe(400);
-  });
-});
-
-describe("ingestion handler — success path", () => {
-  test("returns 200 with { success: true, fingerprint } on valid request", async () => {
-    const handler = createIngestionHandler({ prisma: makeMockPrisma() });
-    const req = makeRequest(makeValidBody());
-    const res = await handler(req);
-
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.success).toBe(true);
-    expect(typeof body.fingerprint).toBe("string");
-  });
-
-  test("inserts new row when no existing record matches fingerprint", async () => {
-    const clientErrorCreate = mock((_: any) =>
-      Promise.resolve({ id: "err_new", fingerprint: "fp_abc", occurrences: 1 })
+  test("is stable for the same message and frames", () => {
+    const frames = [frame(), frame({ line: 2 })];
+    expect(computeFingerprint(MESSAGE, frames)).toBe(
+      computeFingerprint(MESSAGE, [frame(), frame({ line: 2 })])
     );
-    const prisma = makeMockPrisma({
-      clientErrorFindFirst: (_: any) => Promise.resolve(null),
-      clientErrorCreate,
-    });
-
-    const handler = createIngestionHandler({ prisma });
-    const req = makeRequest(makeValidBody());
-    await handler(req);
-
-    // Either create or upsert should have been called
-    const createOrUpsertCalled =
-      clientErrorCreate.mock.calls.length > 0 ||
-      prisma.clientError.upsert.mock?.calls?.length > 0;
-    // We verify by checking the response was successful and create was invoked
-    expect(clientErrorCreate.mock.calls.length).toBeGreaterThanOrEqual(0); // flexible: may use upsert
   });
 
-  test("increments occurrences and updates lastSeenAt when fingerprint exists within dedup window", async () => {
-    const existingRecord = {
-      id: "err_existing",
-      fingerprint: "fp_known",
-      message: "TypeError",
-      occurrences: 5,
-      resolvedAt: null,
-      lastSeenAt: new Date(Date.now() - 1000), // 1 second ago — within window
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
+  test("is a 64-character hex digest", () => {
+    expect(computeFingerprint(MESSAGE, [frame()])).toMatch(/^[0-9a-f]{64}$/);
+  });
 
-    const clientErrorUpdate = mock((_: any) =>
-      Promise.resolve({ ...existingRecord, occurrences: 6 })
+  test("changes when the message changes", () => {
+    expect(computeFingerprint("a", [frame()])).not.toBe(
+      computeFingerprint("b", [frame()])
     );
-    const prisma = makeMockPrisma({
-      clientErrorFindFirst: (_: any) => Promise.resolve(existingRecord),
-      clientErrorUpdate,
-    });
+  });
 
-    const handler = createIngestionHandler({
-      prisma,
-      deduplicationWindowMs: 86_400_000, // 24h
-    });
-    const req = makeRequest(makeValidBody());
-    await handler(req);
+  test("changes when a top frame changes", () => {
+    expect(computeFingerprint(MESSAGE, [frame()])).not.toBe(
+      computeFingerprint(MESSAGE, [frame({ line: 99 })])
+    );
+  });
 
-    // update should have been called to increment occurrences
-    expect(clientErrorUpdate.mock.calls.length).toBeGreaterThan(0);
-    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-    const callArgs = (clientErrorUpdate.mock.calls as any[][])[0][0];
-    const newOccurrences = callArgs?.data?.occurrences;
-    if (newOccurrences !== undefined) {
-      // The implementation uses Prisma's atomic increment ({ increment: 1 })
-      // rather than a computed value, so we check for the atomic form.
-      if (
-        typeof newOccurrences === "object" &&
-        newOccurrences !== null &&
-        "increment" in newOccurrences
-      ) {
-        expect(
-          (newOccurrences as { increment: number }).increment
-        ).toBeGreaterThan(0);
-      } else {
-        expect(newOccurrences).toBeGreaterThan(5);
-      }
+  test("ignores frames after the third so a deeper trace still groups", () => {
+    const topThree = [
+      frame({ line: 1 }),
+      frame({ line: 2 }),
+      frame({ line: 3 }),
+    ];
+    expect(computeFingerprint(MESSAGE, [...topThree, frame({ line: 4 })])).toBe(
+      computeFingerprint(MESSAGE, topThree)
+    );
+  });
+
+  test("groups messages with no frames at all by message alone", () => {
+    expect(computeFingerprint(MESSAGE, [])).toBe(
+      computeFingerprint(MESSAGE, [])
+    );
+    expect(computeFingerprint(MESSAGE, [])).not.toBe(
+      computeFingerprint(MESSAGE, [frame()])
+    );
+  });
+});
+
+describe("createIngestionHandler configuration", () => {
+  test("throws when no db is provided", () => {
+    expect(() =>
+      createIngestionHandler({ dialect: "sqlite" } as never)
+    ).toThrow(/A Drizzle database instance is required/);
+  });
+
+  test.each(["mysql", "sqlite3", "Postgres"])(
+    'throws Unsupported dialect "%s"',
+    (dialect) => {
+      expect(() =>
+        createIngestionHandler({ db: testDb, dialect } as never)
+      ).toThrow(`Unsupported dialect "${dialect}"`);
+    }
+  );
+
+  test("returns a request handler for each supported dialect", () => {
+    for (const dialect of ["sqlite", "postgres"] as const) {
+      expect(typeof createIngestionHandler({ db: testDb, dialect })).toBe(
+        "function"
+      );
     }
   });
+});
 
-  test("inserts new row when existing record was previously resolved", async () => {
-    const resolvedRecord = {
-      id: "err_resolved",
-      fingerprint: "fp_known",
-      message: "TypeError",
-      occurrences: 3,
-      resolvedAt: new Date(Date.now() - 3600_000), // resolved 1h ago
-      lastSeenAt: new Date(Date.now() - 3600_000),
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
-
-    const clientErrorCreate = mock((_: any) =>
-      Promise.resolve({
-        id: "err_new",
-        fingerprint: "fp_known",
-        occurrences: 1,
-      })
-    );
-    const prisma = makeMockPrisma({
-      clientErrorFindFirst: (_: any) => Promise.resolve(resolvedRecord),
-      clientErrorCreate,
+describe("ingestion handler authentication", () => {
+  const handler = () =>
+    createIngestionHandler({
+      ...sqliteConfig(),
+      secretHeaderName: SECRET_HEADER,
+      secretHeaderToken: SECRET_TOKEN,
     });
 
-    const handler = createIngestionHandler({ prisma });
-    const req = makeRequest(makeValidBody());
-    const res = await handler(req);
-
-    // Should succeed and treat it as a new issue
-    expect(res.status).toBe(200);
+  test("returns 401 and stores nothing when the token header is missing", async () => {
+    const res = await handler()(errorRequest(validBody()));
+    expect(res.status).toBe(401);
+    expect(await readClientErrors()).toHaveLength(0);
   });
 
-  test("tags environment from NODE_ENV at request time", async () => {
-    const originalEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = "production";
-
-    const clientErrorCreate = mock((_: any) =>
-      Promise.resolve({ id: "err_1", fingerprint: "fp_1", occurrences: 1 })
+  test("returns 401 and stores nothing when the token header is wrong", async () => {
+    const res = await handler()(
+      errorRequest(validBody(), { [SECRET_HEADER]: "wrong" })
     );
-    const prisma = makeMockPrisma({ clientErrorCreate });
+    expect(res.status).toBe(401);
+    expect(await readClientErrors()).toHaveLength(0);
+  });
 
+  test("stores the report when the correct token is provided", async () => {
+    const res = await handler()(
+      errorRequest(validBody(), { [SECRET_HEADER]: SECRET_TOKEN })
+    );
+    expect(res.status).toBe(200);
+    expect(await readClientErrors()).toHaveLength(1);
+  });
+
+  test("stores the report when no token is configured", async () => {
+    const res = await createIngestionHandler(sqliteConfig())(
+      errorRequest(validBody())
+    );
+    expect(res.status).toBe(200);
+    expect(await readClientErrors()).toHaveLength(1);
+  });
+});
+
+describe("ingestion handler request validation", () => {
+  const handler = createIngestionHandler(sqliteConfig());
+
+  test("returns 400 and stores nothing when the body is not JSON", async () => {
+    const res = await handler(rawRequest("not json at all"));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "Invalid JSON" });
+    expect(await readClientErrors()).toHaveLength(0);
+  });
+
+  test.each([
+    ["missing", undefined],
+    ["empty", ""],
+    ["blank", "   \t\n"],
+    ["a non-string", 42],
+  ])(
+    "returns 400 and stores nothing when message is %s",
+    async (_label, message) => {
+      const { message: _dropped, ...rest } = validBody();
+      const body = message === undefined ? rest : { ...rest, message };
+      const res = await handler(errorRequest(body));
+      expect(res.status).toBe(400);
+      expect(await readClientErrors()).toHaveLength(0);
+    }
+  );
+});
+
+describe("ingestion handler first report", () => {
+  const handler = createIngestionHandler(sqliteConfig());
+
+  test("responds with the computed fingerprint", async () => {
+    const res = await handler(errorRequest(validBody()));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      success: true,
+      fingerprint: fingerprintFor(MESSAGE, STACK),
+    });
+  });
+
+  test("stores one row carrying the reported payload", async () => {
+    const before = Date.now();
+    await handler(errorRequest(validBody()));
+    const row = await readOnlyClientError();
+
+    expect(row.message).toBe(MESSAGE);
+    expect(row.stack).toBe(STACK);
+    expect(row.componentStack).toBe("\n  at ErrorBoundary\n  at App");
+    expect(row.url).toBe("https://example.com/dashboard");
+    expect(row.userAgent).toBe("Mozilla/5.0");
+    expect(row.fingerprint).toBe(fingerprintFor(MESSAGE, STACK));
+    expect(row.occurrences).toBe(1);
+    expect(row.resolvedAt).toBeNull();
+    expect(row.resolvedStack).toBeNull();
+    expect(row.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(row.lastSeenAt.getTime()).toBeGreaterThanOrEqual(before);
+    expect(row.createdAt.getTime()).toBeGreaterThanOrEqual(before);
+    expect(row.updatedAt.getTime()).toBeGreaterThanOrEqual(before);
+  });
+
+  test("stores null for the optional fields the report omits", async () => {
+    await handler(errorRequest({ message: MESSAGE }));
+    const row = await readOnlyClientError();
+    expect(row.stack).toBeNull();
+    expect(row.componentStack).toBeNull();
+    expect(row.url).toBeNull();
+    expect(row.userAgent).toBeNull();
+  });
+
+  test("tags the row with NODE_ENV at request time", async () => {
+    const restore = stubEnv("NODE_ENV", "staging");
     try {
-      const handler = createIngestionHandler({ prisma });
-      const req = makeRequest(makeValidBody());
-      await handler(req);
-
-      if (clientErrorCreate.mock.calls.length > 0) {
-        // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-        const callArgs = (clientErrorCreate.mock.calls as any[][])[0][0];
-        const env = callArgs?.data?.environment;
-        if (env !== undefined) {
-          expect(env).toBe("production");
-        }
-      }
+      await handler(errorRequest(validBody()));
     } finally {
-      process.env.NODE_ENV = originalEnv;
+      restore();
     }
+    expect((await readOnlyClientError()).environment).toBe("staging");
+  });
+
+  test("falls back to development when NODE_ENV is unset", async () => {
+    const restore = stubEnv("NODE_ENV", undefined);
+    try {
+      await handler(errorRequest(validBody()));
+    } finally {
+      restore();
+    }
+    expect((await readOnlyClientError()).environment).toBe("development");
+  });
+
+  test("truncates a stack longer than 10,000 characters", async () => {
+    const longStack = `Error\n${"  at Component (app.js:1:100)\n".repeat(1000)}`;
+    expect(longStack.length).toBeGreaterThan(10_000);
+    await handler(errorRequest(validBody({ stack: longStack })));
+    expect((await readOnlyClientError()).stack).toBe(
+      longStack.slice(0, 10_000)
+    );
+  });
+
+  test("stores the resolved stack when the report carries one", async () => {
+    const resolvedStack = "Error\n  at Component (src/Component.tsx:12:4)";
+    await handler(errorRequest(validBody({ resolvedStack })));
+    expect((await readOnlyClientError()).resolvedStack).toBe(resolvedStack);
+  });
+
+  test("fingerprints on the resolved frames when a resolved stack is present", async () => {
+    // Minified frames differ between builds; the resolved frames do not, so the
+    // fingerprint has to come from the resolved stack when one is available.
+    const resolvedStack = "Error\n  at Component (src/Component.tsx:12:4)";
+    const res = await handler(errorRequest(validBody({ resolvedStack })));
+    const { fingerprint } = (await res.json()) as { fingerprint: string };
+
+    expect(fingerprint).toBe(fingerprintFor(MESSAGE, resolvedStack));
+    expect(fingerprint).not.toBe(fingerprintFor(MESSAGE, STACK));
+    expect((await readOnlyClientError()).fingerprint).toBe(fingerprint);
+  });
+
+  test("groups two builds of the same error under one row via the resolved stack", async () => {
+    const resolvedStack = "Error\n  at Component (src/Component.tsx:12:4)";
+    await handler(
+      errorRequest(
+        validBody({ stack: "Error\n  at a (a.min.js:1:9)", resolvedStack })
+      )
+    );
+    await handler(
+      errorRequest(
+        validBody({ stack: "Error\n  at b (b.min.js:7:31)", resolvedStack })
+      )
+    );
+
+    const row = await readOnlyClientError();
+    expect(row.occurrences).toBe(2);
   });
 });
 
-describe("ingestion handler — deduplication window", () => {
-  test("deduplicationWindowMs defaults to 24 hours (86_400_000 ms)", () => {
-    // Verify the factory accepts and applies a default by checking
-    // that it doesn't throw when no deduplicationWindowMs is provided
-    expect(() =>
-      createIngestionHandler({ prisma: makeMockPrisma() })
-    ).not.toThrow();
+describe("ingestion handler repeat reports", () => {
+  const handler = createIngestionHandler(sqliteConfig());
+  const fingerprint = fingerprintFor(MESSAGE, STACK);
+  const OLD = new Date("2026-01-01T00:00:00.000Z");
+
+  test("increments occurrences and bumps lastSeenAt however old the row is", async () => {
+    // There is no deduplication window any more: a recurrence merges into the
+    // row for its fingerprint even when the previous sighting is months old.
+    // The Prisma version inserted a second row once the window had passed.
+    await seedClientError({
+      message: MESSAGE,
+      stack: STACK,
+      fingerprint,
+      occurrences: 4,
+      lastSeenAt: OLD,
+      createdAt: OLD,
+    });
+
+    const res = await handler(errorRequest(validBody()));
+    expect(res.status).toBe(200);
+
+    const row = await readOnlyClientError();
+    expect(row.occurrences).toBe(5);
+    expect(row.lastSeenAt.getTime()).toBeGreaterThan(OLD.getTime());
+    expect(row.createdAt.getTime()).toBe(OLD.getTime());
   });
 
-  test("accepts custom deduplicationWindowMs", () => {
-    expect(() =>
-      createIngestionHandler({
-        prisma: makeMockPrisma(),
-        deduplicationWindowMs: 3600_000,
-      })
-    ).not.toThrow();
+  test("keeps the first report's message, stack, context and environment", async () => {
+    await seedClientError({
+      message: MESSAGE,
+      stack: STACK,
+      fingerprint,
+      componentStack: "first component stack",
+      url: "https://example.com/first",
+      userAgent: "FirstAgent/1.0",
+      environment: "production",
+      lastSeenAt: OLD,
+    });
+
+    const restore = stubEnv("NODE_ENV", "staging");
+    try {
+      await handler(
+        errorRequest(
+          validBody({
+            componentStack: "second component stack",
+            url: "https://example.com/second",
+            userAgent: "SecondAgent/2.0",
+          })
+        )
+      );
+    } finally {
+      restore();
+    }
+
+    const row = await readOnlyClientError();
+    expect(row.componentStack).toBe("first component stack");
+    expect(row.url).toBe("https://example.com/first");
+    expect(row.userAgent).toBe("FirstAgent/1.0");
+    expect(row.environment).toBe("production");
+    expect(row.message).toBe(MESSAGE);
+    expect(row.stack).toBe(STACK);
+  });
+
+  test("keeps the stored resolved stack when the repeat omits one", async () => {
+    await seedClientError({
+      message: MESSAGE,
+      stack: STACK,
+      fingerprint,
+      resolvedStack: "Error\n  at Component (src/Component.tsx:12:4)",
+      lastSeenAt: OLD,
+    });
+
+    await handler(errorRequest(validBody()));
+
+    expect((await readOnlyClientError()).resolvedStack).toBe(
+      "Error\n  at Component (src/Component.tsx:12:4)"
+    );
+  });
+
+  test("takes the newer resolved stack when the repeat carries one", async () => {
+    const resolvedStack = "Error\n  at Component (src/Component.tsx:12:4)";
+    await seedClientError({
+      message: MESSAGE,
+      stack: STACK,
+      fingerprint: fingerprintFor(MESSAGE, resolvedStack),
+      resolvedStack: "Error\n  at Stale (src/Stale.tsx:1:1)",
+      lastSeenAt: OLD,
+    });
+
+    await handler(errorRequest(validBody({ resolvedStack })));
+
+    expect((await readOnlyClientError()).resolvedStack).toBe(resolvedStack);
+  });
+
+  test("reopens a resolved error instead of leaving it resolved", async () => {
+    // A resolved error that happens again is not fixed. Before the Drizzle port
+    // the recurrence inserted a second row (or was swallowed) and the resolved
+    // row stayed resolved, so the recurrence never showed up in `tail`.
+    await handler(errorRequest(validBody()));
+    await handler(errorRequest(validBody()));
+
+    const resolvedAt = new Date("2026-02-01T00:00:00.000Z");
+    const { clientError } = await import("../schema/sqlite");
+    const { eq } = await import("drizzle-orm");
+    await testDb
+      .update(clientError)
+      .set({ resolvedAt })
+      .where(eq(clientError.fingerprint, fingerprint));
+    expect((await readOnlyClientError()).resolvedAt).toEqual(resolvedAt);
+
+    await handler(errorRequest(validBody()));
+
+    const row = await readOnlyClientError();
+    expect(row.resolvedAt).toBeNull();
+    expect(row.occurrences).toBe(3);
+    expect(row.fingerprint).toBe(fingerprint);
+  });
+
+  test("keeps distinct errors in distinct rows", async () => {
+    await handler(errorRequest(validBody()));
+    await handler(errorRequest(validBody({ message: "RangeError: boom" })));
+
+    const rows = await readClientErrors();
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.occurrences)).toEqual([1, 1]);
+  });
+
+  test("collapses concurrent reports of the same error into one row", async () => {
+    const responses = await Promise.all(
+      Array.from({ length: 6 }, () => handler(errorRequest(validBody())))
+    );
+    expect(responses.map((res) => res.status)).toEqual([
+      200, 200, 200, 200, 200, 200,
+    ]);
+
+    const row = await readOnlyClientError();
+    expect(row.occurrences).toBe(6);
+    expect(row.fingerprint).toBe(fingerprint);
+  });
+
+  test("keeps counts separate when concurrent reports carry different errors", async () => {
+    await Promise.all([
+      handler(errorRequest(validBody())),
+      handler(errorRequest(validBody())),
+      handler(errorRequest(validBody({ message: "RangeError: boom" }))),
+    ]);
+
+    expect(await readClientErrors()).toHaveLength(2);
+    expect((await findClientError(fingerprint))?.occurrences).toBe(2);
   });
 });
