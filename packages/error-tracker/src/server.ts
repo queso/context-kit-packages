@@ -1,45 +1,46 @@
 export {
   computeFingerprint,
   createIngestionHandler,
+  type IngestionConfig,
 } from "./server/ingestion.js";
-export { createQueryHandler } from "./server/query.js";
+export { createQueryHandler, type QueryConfig } from "./server/query.js";
 export { createRateLimiter } from "./server/rate-limiter.js";
 export { resolveStack } from "./server/source-map-resolver.js";
+export type { DatabaseConfig, ErrorTrackerDialect } from "./types.js";
 
 import { createIngestionHandler } from "./server/ingestion.js";
 import { createQueryHandler } from "./server/query.js";
 import { createRateLimiter } from "./server/rate-limiter.js";
 import { resolveStack } from "./server/source-map-resolver.js";
+import type { DatabaseConfig } from "./types.js";
 
-export interface ErrorHandlersConfig {
-  // biome-ignore lint/suspicious/noExplicitAny: Prisma client type varies per consumer
-  prisma: any;
+export interface ErrorHandlersConfig extends DatabaseConfig {
   secretHeaderName?: string;
   secretHeaderToken?: string;
   sourceMapDir?: string;
-  deduplicationWindowMs?: number;
   rateLimiter?: { windowMs: number; maxRequests: number };
 }
 
 export function createErrorHandlers(config: ErrorHandlersConfig) {
   const {
-    prisma,
+    db,
+    dialect,
     secretHeaderName,
     secretHeaderToken,
     sourceMapDir,
-    deduplicationWindowMs,
     rateLimiter: rateLimiterOptions,
   } = config;
 
   const ingestionHandler = createIngestionHandler({
-    prisma,
+    db,
+    dialect,
     secretHeaderName,
     secretHeaderToken,
-    deduplicationWindowMs,
   });
 
   const queryHandler = createQueryHandler({
-    prisma,
+    db,
+    dialect,
     secretHeaderName,
     secretHeaderToken,
   });

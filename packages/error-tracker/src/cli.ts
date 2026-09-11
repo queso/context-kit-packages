@@ -1,96 +1,117 @@
 #!/usr/bin/env node
 
-export interface TailOptions {
-  // biome-ignore lint/suspicious/noExplicitAny: Prisma client type varies per consumer
-  prisma?: any;
+import type { ErrorTrackerDialect } from "./types.js";
+import { connectFromDatabaseUrl } from "./server/connect.js";
+import { createStore, type ErrorStore } from "./server/store.js";
+
+export interface DatabaseOptions {
+  /** The app's Drizzle instance. Omit to connect from DATABASE_URL. */
+  db?: object;
+  /** Required whenever `db` is passed. */
+  dialect?: ErrorTrackerDialect;
+}
+
+export interface TailOptions extends DatabaseOptions {
   limit?: number;
   env?: string;
   since?: Date;
   exitOnComplete?: boolean;
 }
 
-export interface ResolveOptions {
-  // biome-ignore lint/suspicious/noExplicitAny: Prisma client type varies per consumer
-  prisma?: any;
+export interface ResolveOptions extends DatabaseOptions {
   fingerprint: string;
   exitOnComplete?: boolean;
 }
 
-async function getPrisma(provided?: unknown): Promise<unknown | null> {
-  if (provided) return provided;
+interface Session {
+  store: ErrorStore;
+  /** Closes the connection the CLI opened; a no-op for a caller-supplied db. */
+  close(): Promise<void>;
+}
+
+/**
+ * Resolves the database for a command: the caller's Drizzle instance when one
+ * is passed, otherwise a connection opened from DATABASE_URL. Returns null
+ * (after printing why) when there is nothing to connect to, so the caller can
+ * exit 1 without a stack trace.
+ */
+async function openSession(options: DatabaseOptions): Promise<Session | null> {
+  if (options.db) {
+    if (!options.dialect) {
+      throw new Error(
+        'A `dialect` is required alongside `db`. Pass `getDialect()` from "@/db" with your Drizzle instance.'
+      );
+    }
+    return {
+      store: createStore({ db: options.db, dialect: options.dialect }),
+      close: async () => {},
+    };
+  }
+
   const url = process.env.DATABASE_URL;
-  if (!url) return null;
-  try {
-    // Dynamic import — works when consumer has @prisma/client installed
-    // biome-ignore lint/suspicious/noExplicitAny: runtime import of consumer's PrismaClient
-    const mod = (await import("@prisma/client")) as any;
-    const PrismaClient = mod.PrismaClient ?? mod.default?.PrismaClient;
-    if (!PrismaClient) return null;
-    return new PrismaClient();
-  } catch {
+  if (!url) {
+    console.error(
+      "Error: DATABASE_URL is not set. Set it to your database URL (e.g. sqlite:./data/dev.sqlite), or pass a Drizzle instance as the `db` option."
+    );
     return null;
   }
+
+  const connection = await connectFromDatabaseUrl(url);
+  return {
+    store: createStore({ db: connection.db, dialect: connection.dialect }),
+    close: () => connection.close(),
+  };
 }
 
 export async function runTail(options: TailOptions): Promise<void> {
-  const prisma = await getPrisma(options.prisma);
+  const session = await openSession(options);
 
-  if (!prisma) {
-    console.error(
-      "Error: Could not initialize Prisma client. Ensure DATABASE_URL is set and @prisma/client is installed."
-    );
+  if (!session) {
     process.exit(1);
     return;
   }
 
   const limit = options.limit ?? 20;
 
-  // biome-ignore lint/suspicious/noExplicitAny: dynamic Prisma query
-  const where: Record<string, any> = {
-    resolvedAt: null,
-  };
+  try {
+    const { errors } = await session.store.list({
+      filters: {
+        resolved: false,
+        environment: options.env,
+        since: options.since,
+      },
+      limit,
+    });
 
-  if (options.env) {
-    where.environment = options.env;
-  }
-
-  if (options.since) {
-    where.lastSeenAt = { gte: options.since };
-  }
-
-  // biome-ignore lint/suspicious/noExplicitAny: Prisma client
-  const errors = await (prisma as any).clientError.findMany({
-    where,
-    orderBy: { lastSeenAt: "desc" },
-    take: limit,
-  });
-
-  if (errors.length === 0) {
-    console.log("No unresolved errors found.");
-  } else {
-    console.log(`\nRecent errors (${errors.length}):\n`);
-    console.log(
-      padRight("Fingerprint", 20) +
-        padRight("Occurrences", 12) +
-        padRight("Last Seen", 26) +
-        "Message"
-    );
-    console.log("-".repeat(90));
-
-    for (const err of errors) {
-      const lastSeen =
-        err.lastSeenAt instanceof Date
-          ? err.lastSeenAt.toISOString()
-          : String(err.lastSeenAt);
-      const msg = String(err.message ?? "").slice(0, 50);
+    if (errors.length === 0) {
+      console.log("No unresolved errors found.");
+    } else {
+      console.log(`\nRecent errors (${errors.length}):\n`);
       console.log(
-        padRight(String(err.fingerprint ?? "").slice(0, 18), 20) +
-          padRight(String(err.occurrences ?? 0), 12) +
-          padRight(lastSeen, 26) +
-          msg
+        padRight("Fingerprint", 20) +
+          padRight("Occurrences", 12) +
+          padRight("Last Seen", 26) +
+          "Message"
       );
+      console.log("-".repeat(90));
+
+      for (const err of errors) {
+        const lastSeen =
+          err.lastSeenAt instanceof Date
+            ? err.lastSeenAt.toISOString()
+            : String(err.lastSeenAt);
+        const msg = String(err.message ?? "").slice(0, 50);
+        console.log(
+          padRight(String(err.fingerprint ?? "").slice(0, 18), 20) +
+            padRight(String(err.occurrences ?? 0), 12) +
+            padRight(lastSeen, 26) +
+            msg
+        );
+      }
+      console.log();
     }
-    console.log();
+  } finally {
+    await session.close();
   }
 
   if (options.exitOnComplete) {
@@ -99,31 +120,39 @@ export async function runTail(options: TailOptions): Promise<void> {
 }
 
 export async function runResolve(options: ResolveOptions): Promise<void> {
-  const prisma = await getPrisma(options.prisma);
+  const session = await openSession(options);
 
-  if (!prisma) {
+  if (!session) {
+    process.exit(1);
+    return;
+  }
+
+  let updated: number;
+  try {
+    updated = await session.store.resolve(options.fingerprint);
+  } catch (err) {
+    await session.close();
+    console.error(`Failed to resolve error: ${(err as Error).message}`);
+    process.exit(1);
+    return;
+  }
+
+  await session.close();
+
+  // The store only touches rows that are still open, so resolving an unknown
+  // or already-resolved fingerprint changes nothing and is reported as failure.
+  if (updated === 0) {
     console.error(
-      "Error: Could not initialize Prisma client. Ensure DATABASE_URL is set and @prisma/client is installed."
+      `Failed to resolve error: no unresolved error with fingerprint ${options.fingerprint}`
     );
     process.exit(1);
     return;
   }
 
-  try {
-    // biome-ignore lint/suspicious/noExplicitAny: Prisma client
-    await (prisma as any).clientError.update({
-      where: { fingerprint: options.fingerprint },
-      data: { resolvedAt: new Date() },
-    });
+  console.log(`Resolved error with fingerprint: ${options.fingerprint}`);
 
-    console.log(`Resolved error with fingerprint: ${options.fingerprint}`);
-
-    if (options.exitOnComplete) {
-      process.exit(0);
-    }
-  } catch (err) {
-    console.error(`Failed to resolve error: ${(err as Error).message}`);
-    process.exit(1);
+  if (options.exitOnComplete) {
+    process.exit(0);
   }
 }
 

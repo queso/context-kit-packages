@@ -3,7 +3,7 @@
   "private": true,
   "workspaces": ["packages/*"],
   "scripts": {
-    "build": "bun --filter @context-kit/auth build && bun --filter @context-kit/auth-ui build",
+    "build": "bun --filter @context-kit/auth build && bun --filter @context-kit/auth-ui build && bun --filter @context-kit/error-tracker build",
     "typecheck": "bun --filter './packages/*' typecheck",
     "test": "bun --filter './packages/*' test"
   }

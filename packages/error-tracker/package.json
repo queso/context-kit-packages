@@ -15,6 +15,11 @@
       "import": "./dist/server.js",
       "default": "./dist/server.js"
     },
+    "./cli": {
+      "types": "./dist/cli.d.ts",
+      "import": "./dist/cli.js",
+      "default": "./dist/cli.js"
+    },
     "./schema/sqlite": {
       "types": "./dist/schema/sqlite.d.ts",
       "import": "./dist/schema/sqlite.js",

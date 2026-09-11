@@ -1,16 +1,20 @@
-export interface QueryConfig {
-  // biome-ignore lint/suspicious/noExplicitAny: Prisma client type varies per consumer
-  prisma: any;
+import type { DatabaseConfig } from "../types.js";
+import { createStore, type ListFilters } from "./store.js";
+
+export interface QueryConfig extends DatabaseConfig {
   secretHeaderName?: string;
   secretHeaderToken?: string;
 }
 
 export function createQueryHandler(config: QueryConfig) {
   const {
-    prisma,
     secretHeaderName = "x-error-tracker-token",
     secretHeaderToken,
   } = config;
+
+  // Validates the database configuration up front so a misconfigured route
+  // fails at module load rather than on the first request.
+  const store = createStore(config);
 
   return async function GET(request: Request): Promise<Response> {
     // Auth check
@@ -28,41 +32,31 @@ export function createQueryHandler(config: QueryConfig) {
     const limit = Math.min(parseInt(params.get("limit") ?? "50", 10), 200);
     const offset = parseInt(params.get("offset") ?? "0", 10);
 
-    // Build where clause
-    // biome-ignore lint/suspicious/noExplicitAny: dynamic Prisma where
-    const where: Record<string, any> = {};
+    const filters: ListFilters = {};
 
     const env = params.get("env");
     if (env) {
-      where.environment = env;
+      filters.environment = env;
     }
 
     const since = params.get("since");
     if (since) {
-      where.lastSeenAt = { gte: new Date(since) };
+      filters.since = new Date(since);
     }
 
     const fingerprint = params.get("fingerprint");
     if (fingerprint) {
-      where.fingerprint = fingerprint;
+      filters.fingerprint = fingerprint;
     }
 
     const resolved = params.get("resolved");
     if (resolved === "false") {
-      where.resolvedAt = null;
+      filters.resolved = false;
     } else if (resolved === "true") {
-      where.resolvedAt = { not: null };
+      filters.resolved = true;
     }
 
-    const [errors, total] = await Promise.all([
-      prisma.clientError.findMany({
-        where,
-        orderBy: { lastSeenAt: "desc" },
-        take: limit,
-        skip: offset,
-      }),
-      prisma.clientError.count({ where }),
-    ]);
+    const { errors, total } = await store.list({ filters, limit, offset });
 
     return Response.json({ errors, total });
   };
