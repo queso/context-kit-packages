@@ -22,6 +22,8 @@ jobs:
         run: bun install --frozen-lockfile
 
       # Build first: auth-ui's typecheck resolves @context-kit/auth types from packages/auth/dist.
+      # The root build script builds auth before auth-ui for the same reason; `bun --filter`
+      # runs packages in parallel on Bun 1.3.x and auth-ui's DTS build races auth's.
       - name: Build
         run: bun run build
 
