@@ -278,6 +278,43 @@ describe("parseTailArgs", () => {
       "--since expects a valid date"
     );
   });
+
+  test("rejects an unknown flag instead of silently skipping it", () => {
+    // A typo like `--limmit` must not be silently ignored (which would leave
+    // the default limit in place with no indication the flag did nothing).
+    expect(() => parseTailArgs(["--limmit", "50"])).toThrow(CliUsageError);
+    expect(() => parseTailArgs(["--limmit", "50"])).toThrow(
+      "Unknown option: --limmit"
+    );
+  });
+
+  test("rejects another unknown flag, naming it", () => {
+    expect(() => parseTailArgs(["--enviroment", "production"])).toThrow(
+      "Unknown option: --enviroment"
+    );
+  });
+
+  test("rejects a stray non-flag token", () => {
+    expect(() => parseTailArgs(["production"])).toThrow(
+      "Unknown argument: production"
+    );
+  });
+
+  test("still parses a valid combination of flags", () => {
+    const result = parseTailArgs([
+      "--limit",
+      "5",
+      "--env",
+      "production",
+      "--since",
+      "2026-01-01T00:00:00.000Z",
+    ]);
+    expect(result).toEqual({
+      limit: 5,
+      env: "production",
+      since: new Date("2026-01-01T00:00:00.000Z"),
+    });
+  });
 });
 
 describe("captureConsole", () => {

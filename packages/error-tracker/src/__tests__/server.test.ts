@@ -341,6 +341,26 @@ describe("createErrorHandlers source map resolution", () => {
     expect(res.status).toBe(400);
     expect(await readClientErrors()).toHaveLength(0);
   });
+
+  test("returns 400 with a distinct message when the body stream itself fails", async () => {
+    const { POST } = createErrorHandlers({ ...sqliteConfig(), sourceMapDir });
+    const stream = new ReadableStream<Uint8Array>({
+      pull() {
+        throw new Error("stream failed");
+      },
+    });
+    const res = await POST(
+      new Request("https://example.com/api/errors", {
+        method: "POST",
+        body: stream,
+        // Streaming request bodies require duplex on this runtime's fetch impl.
+        duplex: "half",
+      } as RequestInit)
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "Failed to read request body" });
+    expect(await readClientErrors()).toHaveLength(0);
+  });
 });
 
 describe("createErrorHandlers rate limiting", () => {
@@ -438,19 +458,22 @@ describe("createErrorHandlers query token", () => {
 });
 
 describe("createErrorHandlers unauthenticated production warning", () => {
-  test("warns when NODE_ENV is production and no secretHeaderToken is configured", async () => {
+  test("warns twice, once per handler, when NODE_ENV is production and no secretHeaderToken is configured", async () => {
     const restore = stubEnv("NODE_ENV", "production");
     try {
       const out = await captureWarnings(() => {
         createErrorHandlers(sqliteConfig());
       });
-      expect(out).toContain("no secretHeaderToken configured");
+      const lines = out.split("\n").filter(Boolean);
+      expect(lines).toHaveLength(2);
+      expect(out).toContain("The ingestion endpoint accepts unauthenticated requests");
+      expect(out).toContain("The query endpoint accepts unauthenticated requests");
     } finally {
       restore();
     }
   });
 
-  test("warns when only queryHeaderToken is set and no secretHeaderToken is configured", async () => {
+  test("warns for ingestion only when queryHeaderToken is set and no secretHeaderToken is configured", async () => {
     const restore = stubEnv("NODE_ENV", "production");
     try {
       const out = await captureWarnings(() => {
@@ -459,7 +482,9 @@ describe("createErrorHandlers unauthenticated production warning", () => {
           queryHeaderToken: "query-only-token",
         });
       });
-      expect(out).toContain("no secretHeaderToken configured");
+      const lines = out.split("\n").filter(Boolean);
+      expect(lines).toHaveLength(1);
+      expect(out).toContain("The ingestion endpoint accepts unauthenticated requests");
     } finally {
       restore();
     }

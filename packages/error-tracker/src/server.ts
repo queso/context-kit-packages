@@ -63,11 +63,9 @@ export function createErrorHandlers(config: ErrorHandlersConfig) {
     ? createRateLimiter(rateLimiterOptions)
     : null;
 
-  if (process.env.NODE_ENV === "production" && !secretHeaderToken) {
-    console.warn(
-      "[error-tracker] Warning: no secretHeaderToken configured. The ingestion and query endpoints accept unauthenticated requests. Set `secretHeaderToken` in production."
-    );
-  }
+  // createIngestionHandler and createQueryHandler each warn for themselves
+  // (naming their own endpoint) when created without a token in production,
+  // so no separate warning is needed here.
 
   async function POST(request: Request): Promise<Response> {
     // Rate limit check before anything else
@@ -91,9 +89,12 @@ export function createErrorHandlers(config: ErrorHandlersConfig) {
         capped = await readBodyWithCap(request, MAX_BODY_BYTES);
       } catch {
         // The body stream itself failed; there is no text left to hand the
-        // ingestion handler, so answer the same way it would for a body it
-        // could not read.
-        return Response.json({ error: "Invalid JSON" }, { status: 400 });
+        // ingestion handler, so answer with the same distinct message it
+        // would use for a body it could not read.
+        return Response.json(
+          { error: "Failed to read request body" },
+          { status: 400 }
+        );
       }
       if (!capped.ok) {
         return Response.json({ error: "Payload too large" }, { status: 413 });

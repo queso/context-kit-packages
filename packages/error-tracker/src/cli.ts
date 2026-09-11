@@ -233,6 +233,12 @@ export function parseTailArgs(args: string[]): TailArgs {
       }
       since = parsed;
       i++;
+    } else if (flag.startsWith("--")) {
+      throw new CliUsageError(`Unknown option: ${flag}`);
+    } else {
+      // A non-flag token here isn't a value being consumed by a prior flag
+      // (those are skipped via `i++` above) — it's a stray positional arg.
+      throw new CliUsageError(`Unknown argument: ${flag}`);
     }
   }
 

@@ -135,6 +135,59 @@ describe("createIngestionHandler configuration", () => {
   });
 });
 
+describe("createIngestionHandler production warning", () => {
+  /** Mirrors captureWarnings in server.test.ts: captureConsole only intercepts log/error. */
+  function captureWarnings(fn: () => void): string {
+    const lines: string[] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "));
+    };
+    try {
+      fn();
+    } finally {
+      console.warn = original;
+    }
+    return lines.join("\n");
+  }
+
+  test("warns when NODE_ENV is production and no secretHeaderToken is configured", () => {
+    const restore = stubEnv("NODE_ENV", "production");
+    try {
+      const out = captureWarnings(() => {
+        createIngestionHandler(sqliteConfig());
+      });
+      expect(out).toContain("The ingestion endpoint accepts unauthenticated requests");
+    } finally {
+      restore();
+    }
+  });
+
+  test("does not warn when a secretHeaderToken is configured", () => {
+    const restore = stubEnv("NODE_ENV", "production");
+    try {
+      const out = captureWarnings(() => {
+        createIngestionHandler({ ...sqliteConfig(), secretHeaderToken: "shh" });
+      });
+      expect(out).toBe("");
+    } finally {
+      restore();
+    }
+  });
+
+  test("does not warn outside production", () => {
+    const restore = stubEnv("NODE_ENV", "test");
+    try {
+      const out = captureWarnings(() => {
+        createIngestionHandler(sqliteConfig());
+      });
+      expect(out).toBe("");
+    } finally {
+      restore();
+    }
+  });
+});
+
 describe("ingestion handler authentication", () => {
   const handler = () =>
     createIngestionHandler({
@@ -425,6 +478,32 @@ describe("readBodyWithCap", () => {
     const chunks = ["hello ", "world"];
     const result = await readBodyWithCap(streamRequest(chunks), 1024);
     expect(result).toEqual({ ok: true, text: "hello world" });
+  });
+});
+
+describe("ingestion handler body read failures", () => {
+  const handler = createIngestionHandler(sqliteConfig());
+
+  /** A request whose body stream errors as soon as it is first read. */
+  function erroringStreamRequest(): Request {
+    const stream = new ReadableStream<Uint8Array>({
+      pull() {
+        throw new Error("stream failed");
+      },
+    });
+    return new Request("https://example.com/api/errors", {
+      method: "POST",
+      body: stream,
+      // Streaming request bodies require duplex on this runtime's fetch impl.
+      duplex: "half",
+    } as RequestInit);
+  }
+
+  test("returns 400 with a distinct message when the body stream itself fails", async () => {
+    const res = await handler(erroringStreamRequest());
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "Failed to read request body" });
+    expect(await readClientErrors()).toHaveLength(0);
   });
 });
 

@@ -1,5 +1,5 @@
 import type { DatabaseConfig } from "../types.js";
-import { tokenMatches } from "./auth.js";
+import { tokenMatches, warnIfUnauthenticated } from "./auth.js";
 import { createStore, type ListFilters } from "./store.js";
 
 export interface QueryConfig extends DatabaseConfig {
@@ -33,6 +33,8 @@ export function createQueryHandler(config: QueryConfig) {
   // Validates the database configuration up front so a misconfigured route
   // fails at module load rather than on the first request.
   const store = createStore(config);
+
+  warnIfUnauthenticated("query", secretHeaderToken);
 
   return async function GET(request: Request): Promise<Response> {
     // Auth check

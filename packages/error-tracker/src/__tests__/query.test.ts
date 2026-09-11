@@ -7,6 +7,7 @@ import {
   seedClientError,
   seedClientErrors,
   sqliteConfig,
+  stubEnv,
   testDb,
 } from "./helpers";
 
@@ -50,6 +51,59 @@ describe("createQueryHandler configuration", () => {
     expect(() =>
       createQueryHandler({ db: testDb, dialect: "mysql" } as never)
     ).toThrow('Unsupported dialect "mysql"');
+  });
+});
+
+describe("createQueryHandler production warning", () => {
+  /** Mirrors captureWarnings in server.test.ts: captureConsole only intercepts log/error. */
+  function captureWarnings(fn: () => void): string {
+    const lines: string[] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "));
+    };
+    try {
+      fn();
+    } finally {
+      console.warn = original;
+    }
+    return lines.join("\n");
+  }
+
+  test("warns when NODE_ENV is production and no secretHeaderToken is configured", () => {
+    const restore = stubEnv("NODE_ENV", "production");
+    try {
+      const out = captureWarnings(() => {
+        createQueryHandler(sqliteConfig());
+      });
+      expect(out).toContain("The query endpoint accepts unauthenticated requests");
+    } finally {
+      restore();
+    }
+  });
+
+  test("does not warn when a secretHeaderToken is configured", () => {
+    const restore = stubEnv("NODE_ENV", "production");
+    try {
+      const out = captureWarnings(() => {
+        createQueryHandler({ ...sqliteConfig(), secretHeaderToken: "shh" });
+      });
+      expect(out).toBe("");
+    } finally {
+      restore();
+    }
+  });
+
+  test("does not warn outside production", () => {
+    const restore = stubEnv("NODE_ENV", "test");
+    try {
+      const out = captureWarnings(() => {
+        createQueryHandler(sqliteConfig());
+      });
+      expect(out).toBe("");
+    } finally {
+      restore();
+    }
   });
 });
 

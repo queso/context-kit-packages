@@ -136,46 +136,86 @@ async function getCachedConsumer(
   let pending = inFlightLoads.get(mapFilePath);
   if (!pending) {
     pending = loadConsumer(mapFilePath);
-    // Clear the in-flight entry once it settles, on rejection too, so a
-    // later call retries instead of being stuck on a rejected promise. The
-    // `.catch` here just marks this derived promise as handled: `pending`
-    // itself is untouched, so its awaiters still see the real result/error.
-    pending
-      .finally(() => {
-        inFlightLoads.delete(mapFilePath);
-      })
-      .catch(() => {});
+    // On rejection, clear the in-flight entry right away so a later call
+    // retries instead of being stuck on a rejected promise. On success, the
+    // entry is cleared inside insertOrReuseConsumer below, only after the
+    // consumer has actually been inserted into the cache: deleting it here
+    // instead (as soon as `pending` settles) would open a window where a
+    // caller arriving between settlement and insertion finds no in-flight
+    // entry and no cache entry, and starts a redundant duplicate load. The
+    // `.catch` also marks this derived promise as handled; `pending` itself
+    // is untouched, so its other awaiters still see the real result/error.
+    pending.catch(() => {
+      inFlightLoads.delete(mapFilePath);
+    });
     inFlightLoads.set(mapFilePath, pending);
   }
 
   const consumer = await pending;
+  return insertOrReuseConsumer(mapFilePath, consumer);
+}
 
-  // A concurrent caller may have already cached this while we were awaiting.
-  if (!sourceMapCache.has(mapFilePath)) {
-    if (sourceMapCache.size >= SOURCE_MAP_CACHE_LIMIT) {
-      const oldestKey = sourceMapCache.keys().next().value;
-      if (oldestKey) {
-        const evicted = sourceMapCache.get(oldestKey);
-        sourceMapCache.delete(oldestKey);
-        if (evicted) {
-          const timer = setTimeout(() => {
-            // If the same consumer instance has been re-inserted under this
-            // path within the grace period, it's back in active use: leave
-            // it alone and let a future eviction destroy it instead.
-            if (sourceMapCache.get(oldestKey) === evicted) {
-              return;
-            }
-            evicted.destroy();
-          }, evictedConsumerGraceMs);
-          if (typeof timer.unref === "function") {
-            timer.unref();
+// Reconciles a freshly loaded consumer against the cache. Every awaiter of
+// one `pending` promise receives the same instance, so the common case here
+// is a no-op merge. But if a duplicate load still raced past the dedup
+// window above (or, in a test, is constructed directly), a concurrent caller
+// may have already cached a different consumer for this path by the time
+// this one is ready: that cached instance is the one to keep, and this one,
+// never handed to any caller, is destroyed rather than leaked. Otherwise
+// this consumer is inserted (evicting the LRU entry if the cache is full),
+// and only now is the in-flight marker for this path cleared, so a caller
+// arriving mid-load always joins `pending` instead of starting a duplicate.
+function insertOrReuseConsumer(
+  mapFilePath: string,
+  consumer: SourceMapConsumerInstance
+): SourceMapConsumerInstance {
+  // Whatever happens below, this load is finished: clear the in-flight
+  // marker here rather than only on insert, so a discarded duplicate's
+  // promise cannot linger and hand a destroyed consumer to a later caller.
+  inFlightLoads.delete(mapFilePath);
+
+  const existing = sourceMapCache.get(mapFilePath);
+  if (existing) {
+    if (existing !== consumer) {
+      consumer.destroy();
+    }
+    return existing;
+  }
+
+  if (sourceMapCache.size >= SOURCE_MAP_CACHE_LIMIT) {
+    const oldestKey = sourceMapCache.keys().next().value;
+    if (oldestKey) {
+      const evicted = sourceMapCache.get(oldestKey);
+      sourceMapCache.delete(oldestKey);
+      if (evicted) {
+        const timer = setTimeout(() => {
+          // If the same consumer instance has been re-inserted under this
+          // path within the grace period, it's back in active use: leave
+          // it alone and let a future eviction destroy it instead.
+          if (sourceMapCache.get(oldestKey) === evicted) {
+            return;
           }
+          evicted.destroy();
+        }, evictedConsumerGraceMs);
+        if (typeof timer.unref === "function") {
+          timer.unref();
         }
       }
     }
-    sourceMapCache.set(mapFilePath, consumer);
   }
+  sourceMapCache.set(mapFilePath, consumer);
   return consumer;
+}
+
+// Test-only: exercises the post-load cache reconciliation directly, so tests
+// can simulate two independently loaded consumers racing for the same path
+// without having to force the real (and now much narrower) timing window.
+// Never called from production code.
+export function __reconcileLoadedConsumerForTest(
+  mapFilePath: string,
+  consumer: SourceMapConsumerInstance
+): SourceMapConsumerInstance {
+  return insertOrReuseConsumer(mapFilePath, consumer);
 }
 
 export async function resolveStack(

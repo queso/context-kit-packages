@@ -69,9 +69,11 @@ afterAll(() => {
 
 // ─── Import target ────────────────────────────────────────────────────────────
 
-const { resolveStack, __setEvictedConsumerGraceMs } = await import(
-  "../server/source-map-resolver"
-);
+const {
+  resolveStack,
+  __setEvictedConsumerGraceMs,
+  __reconcileLoadedConsumerForTest,
+} = await import("../server/source-map-resolver");
 
 // ─── deferred destroy() on eviction ──────────────────────────────────────────
 //
@@ -397,6 +399,23 @@ describe("resolveStack — async read with in-flight dedup", () => {
       return (realReadFile as any)(...args);
     });
 
+    // Also spy on destroy() (via a probe instance's prototype, as in the
+    // deferred-destroy tests above) so a regression that lets a duplicate
+    // load slip past the in-flight dedup window — and then gets discarded
+    // via insertOrReuseConsumer — would show up here too, not just in the
+    // single-read count.
+    const probe = await new SourceMapConsumer(JSON.parse(buildSourceMap()));
+    const consumerProto = Object.getPrototypeOf(probe);
+    probe.destroy();
+    const originalDestroy: () => void = consumerProto.destroy;
+    let destroyCount = 0;
+    const destroySpy = spyOn(consumerProto, "destroy").mockImplementation(
+      function (this: unknown) {
+        destroyCount++;
+        return originalDestroy.call(this);
+      }
+    );
+
     try {
       const rawStack = `TypeError: test\n    at http://localhost:3000/_next/static/chunks/app.js:1:0`;
       const expected =
@@ -414,7 +433,11 @@ describe("resolveStack — async read with in-flight dedup", () => {
         expect(result).toBe(expected);
       }
       expect(readCount).toBe(1);
+      // Exactly one consumer was ever created for this path, so none of the
+      // five concurrent callers ever had a duplicate to discard.
+      expect(destroyCount).toBe(0);
     } finally {
+      destroySpy.mockRestore();
       spy.mockRestore();
       rmSync(dedupDir, { recursive: true, force: true });
     }
@@ -449,6 +472,107 @@ describe("resolveStack — async read with in-flight dedup", () => {
       spy.mockRestore();
       rmSync(dedupDir, { recursive: true, force: true });
     }
+  });
+});
+
+// ─── discarding a duplicate loaded consumer ──────────────────────────────────
+//
+// The in-flight dedup window is now narrow enough that a genuine duplicate
+// load for the same path is very hard to force deterministically through
+// resolveStack alone (that's the point of the fix). So this exercises the
+// reconciliation logic directly via the test-only hook: it simulates exactly
+// the scenario the reviewer described — a second, independently loaded
+// consumer arriving for a path that another caller already cached — and
+// checks it is destroyed rather than leaked, while the cached instance
+// keeps serving lookups.
+describe("getCachedConsumer — duplicate load discard", () => {
+  test("a duplicate consumer reconciled against an already-cached one is destroyed, and the cached one keeps serving lookups", async () => {
+    const dir = join(tmpdir(), `error-tracker-dup-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const mapFilePath = join(dir, "dup.js.map");
+    writeFileSync(mapFilePath, buildSourceMap(), "utf-8");
+
+    const probe = await new SourceMapConsumer(JSON.parse(buildSourceMap()));
+    const consumerProto = Object.getPrototypeOf(probe);
+    probe.destroy();
+    const originalDestroy: () => void = consumerProto.destroy;
+    let destroyCount = 0;
+    const destroySpy = spyOn(consumerProto, "destroy").mockImplementation(
+      function (this: unknown) {
+        destroyCount++;
+        return originalDestroy.call(this);
+      }
+    );
+
+    try {
+      const rawStack = "TypeError: test\n    at dup.js:1:0";
+      const expected =
+        "TypeError: test\n    at handleClick (../src/components/Dashboard.tsx:5:0)";
+
+      // Populate the cache for this path the normal way.
+      const first = await resolveStack(rawStack, { sourceMapDir: dir });
+      expect(first).toBe(expected);
+      expect(destroyCount).toBe(0);
+
+      // Build a second, independent consumer for the same map — standing in
+      // for a duplicate load that raced past the in-flight dedup window.
+      const duplicate = await new SourceMapConsumer(
+        JSON.parse(buildSourceMap())
+      );
+
+      const winner = __reconcileLoadedConsumerForTest(mapFilePath, duplicate);
+
+      // The duplicate was never handed to any caller, so it's discarded
+      // rather than leaked, and the survivor is the one already cached.
+      expect(destroyCount).toBe(1);
+      expect(winner).not.toBe(duplicate);
+
+      // The cache is still consistent: a later lookup resolves correctly
+      // from the surviving consumer, without reading the map file again.
+      const realReadFile = fsp.readFile.bind(fsp);
+      let readCount = 0;
+      const readSpy = spyOn(fsp, "readFile").mockImplementation(
+        (...args: any[]) => {
+          readCount++;
+          return (realReadFile as any)(...args);
+        }
+      );
+      try {
+        const second = await resolveStack(rawStack, { sourceMapDir: dir });
+        expect(second).toBe(expected);
+        expect(readCount).toBe(0);
+      } finally {
+        readSpy.mockRestore();
+      }
+    } finally {
+      destroySpy.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("reconciling against an empty cache slot inserts the consumer and returns it unchanged", () => {
+    // The no-existing-entry branch of insertOrReuseConsumer: nothing to
+    // discard, so the passed-in consumer becomes the cached one as-is.
+    const dir = join(tmpdir(), `error-tracker-dup-fresh-${Date.now()}`);
+    const mapFilePath = join(dir, "fresh.js.map");
+
+    const probe = { destroy: () => {} } as unknown as Parameters<
+      typeof __reconcileLoadedConsumerForTest
+    >[1];
+    const result = __reconcileLoadedConsumerForTest(mapFilePath, probe);
+    expect(result).toBe(probe);
+
+    // A second reconciliation for the same path now finds it cached and
+    // discards whatever is passed in place of it.
+    let destroyed = false;
+    const duplicate = {
+      destroy: () => {
+        destroyed = true;
+      },
+    } as unknown as Parameters<typeof __reconcileLoadedConsumerForTest>[1];
+    const winner = __reconcileLoadedConsumerForTest(mapFilePath, duplicate);
+    expect(winner).toBe(probe);
+    expect(destroyed).toBe(true);
   });
 });
 

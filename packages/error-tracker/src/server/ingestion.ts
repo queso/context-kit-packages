@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DatabaseConfig, StackFrame } from "../types.js";
-import { tokenMatches } from "./auth.js";
+import { tokenMatches, warnIfUnauthenticated } from "./auth.js";
 import { parseFrames } from "./parse-stack.js";
 import { createStore } from "./store.js";
 
@@ -93,6 +93,8 @@ export function createIngestionHandler(config: IngestionConfig) {
   // fails at module load rather than on the first report.
   const store = createStore(config);
 
+  warnIfUnauthenticated("ingestion", secretHeaderToken);
+
   return async function POST(request: Request): Promise<Response> {
     // Auth check
     if (secretHeaderName && secretHeaderToken) {
@@ -109,7 +111,12 @@ export function createIngestionHandler(config: IngestionConfig) {
     try {
       capped = await readBodyWithCap(request, MAX_BODY_BYTES);
     } catch {
-      return Response.json({ error: "Invalid JSON" }, { status: 400 });
+      // The body stream itself failed, distinct from a body that read fine
+      // but did not parse as JSON.
+      return Response.json(
+        { error: "Failed to read request body" },
+        { status: 400 }
+      );
     }
     if (!capped.ok) {
       return Response.json({ error: "Payload too large" }, { status: 413 });
