@@ -58,7 +58,7 @@ Context-kit developers have no visibility into client-side runtime errors in the
 - **Secret header auth** — the ingestion endpoint requires a configurable header token to block unauthenticated public writes in production
 - **Rate limiting** — when `rateLimiter` is configured on `createErrorHandlers`, the same per-IP fixed-window limit applies to both the ingestion and query endpoints, compatible with the context-kit middleware pattern
 - **Environment tagging** — every error row includes `environment`, taken from the client-reported value in the payload when it is a non-empty string (truncated to 64 characters), falling back to the server's `NODE_ENV` (or `development`) when absent
-- **`npx error-tracker` CLI** — `tail` command that streams recent unresolved errors from the DB; `resolve <fingerprint>` command to mark an issue resolved
+- **`error-tracker` CLI** (an unscoped `bin` entry installed by `@context-kit/error-tracker`, run as `npx error-tracker` or `bunx error-tracker` from the project that depends on it) — `tail` command that streams recent unresolved errors from the DB; `resolve <fingerprint>` command to mark an issue resolved
 - **TypeScript types** for all public APIs, strict mode compatible
 
 ### Out of Scope
@@ -172,7 +172,7 @@ No open questions remaining.
 **Phasing:**
 - **Phase 1 — Core capture:** `client_error` schema module, ingestion endpoint, React error boundary, unhandled rejection listener. Enough to replace manual error boundary logging in KindredShelf.
 - **Phase 2 — Production readiness:** Source map resolution, secret header auth, rate limiting, deduplication, loop prevention. Ready to deploy to production apps.
-- **Phase 3 — DX polish:** `console.error` patching, query endpoint with filters, `npx error-tracker tail` and `resolve` CLI commands, documented SQL recipes, README with copy-paste integration guide.
+- **Phase 3 — DX polish:** `console.error` patching, query endpoint with filters, the `error-tracker tail` and `resolve` CLI commands, documented SQL recipes, README with copy-paste integration guide.
 
 **Measurement:**
 - Integration test: errors thrown in a test app appear in the `client_error` table within one request cycle

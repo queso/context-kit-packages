@@ -256,6 +256,8 @@ Props:
 
 The GET `/api/errors` endpoint supports filtering and offset-based pagination. Requests are authorized with the query token: `queryHeaderToken` when it is configured, otherwise `secretHeaderToken`.
 
+Protect this endpoint in every deployment. Its responses include full stack traces, and with `sourceMapDir` configured they include resolved stacks that name your source files, components and functions. Without a token the endpoint answers everyone, so set `queryHeaderToken` (a server-only value) before storing resolved stacks anywhere reachable from the internet.
+
 ```ts
 const response = await fetch("/api/errors?env=production&resolved=false&limit=50&offset=0", {
   headers: { "x-error-tracker-token": "your-query-token" },
