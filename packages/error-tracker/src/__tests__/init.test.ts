@@ -1,4 +1,13 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  test,
+} from "bun:test";
+import * as reporterModule from "../reporter";
 import type { ErrorTrackerConfig } from "../types";
 
 // ─── Mock reportError ─────────────────────────────────────────────────────────
@@ -7,9 +16,21 @@ const mockReportError = mock(
   (_config: ErrorTrackerConfig, _data: unknown) => undefined
 );
 
+// Bun's `mock.module` registry is process-wide and survives across test files
+// in one `bun test` run, so this stub has to be handed back before
+// reporter.test.ts runs. The snapshot must be a spread copy taken before the
+// stub is registered: `mock.module` rewrites an already-imported module's live
+// namespace in place, so re-registering the namespace object itself would only
+// reinstall the stub.
+const realReporter = { ...reporterModule };
+
 mock.module("../reporter", () => ({
   reportError: mockReportError,
 }));
+
+afterAll(() => {
+  mock.module("../reporter", () => realReporter);
+});
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -64,7 +85,6 @@ function simulateUnhandledRejection(reason: unknown) {
 
 // ─── Import target ────────────────────────────────────────────────────────────
 
-// @ts-expect-error: module created by B.A. during implementation phase
 const { initErrorTracker } = await import("../init");
 
 // ─── initErrorTracker ─────────────────────────────────────────────────────────
@@ -266,6 +286,33 @@ describe("initErrorTracker — idempotency", () => {
       cleanup1();
       cleanup2();
     }).not.toThrow();
+  });
+
+  test("cleaning up in installation order leaves no live handler behind", async () => {
+    const cleanup1 = initErrorTracker(TEST_CONFIG);
+    const cleanup2 = initErrorTracker(TEST_CONFIG);
+    cleanup1();
+    cleanup2();
+    mockReportError.mockClear();
+
+    simulateWindowError(new Error("after both cleanups"));
+    simulateUnhandledRejection(new Error("after both cleanups"));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(mockReportError).not.toHaveBeenCalled();
+  });
+
+  test("cleaning up the newer tracker first keeps the older one reporting", async () => {
+    const cleanup1 = initErrorTracker(TEST_CONFIG);
+    const cleanup2 = initErrorTracker(TEST_CONFIG);
+    cleanup2();
+    mockReportError.mockClear();
+
+    simulateWindowError(new Error("older tracker still installed"));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(mockReportError).toHaveBeenCalledTimes(1);
+    cleanup1();
   });
 });
 

@@ -42,7 +42,18 @@ export function initErrorTracker(config: ErrorTrackerConfig): () => void {
   const g = globalThis as unknown as Record<string, unknown>;
   const previousOnError = g.onerror as WindowErrorHandler | undefined;
 
+  // Set to false by cleanup. `window.onerror` is a single slot, so when two
+  // trackers are installed and cleaned up in installation order, the second
+  // cleanup restores the first handler; the flag keeps that handler inert
+  // instead of reporting again.
+  let active = true;
+
   const onError: WindowErrorHandler = (event, source, lineno, colno, error) => {
+    if (!active) {
+      return typeof previousOnError === "function"
+        ? previousOnError(event, source, lineno, colno, error)
+        : false;
+    }
     const message =
       error?.message ?? (typeof event === "string" ? event : "Unknown error");
     const stack = error?.stack;
@@ -68,11 +79,15 @@ export function initErrorTracker(config: ErrorTrackerConfig): () => void {
   globalThis.addEventListener("unhandledrejection", onUnhandledRejection);
 
   return () => {
-    // Restore previous onerror
-    if (typeof previousOnError === "function") {
-      g.onerror = previousOnError;
-    } else {
-      g.onerror = undefined;
+    active = false;
+    // Restore the previous onerror only while this handler is still the one
+    // installed; a later tracker that chained on top keeps its own slot.
+    if (g.onerror === onError) {
+      if (typeof previousOnError === "function") {
+        g.onerror = previousOnError;
+      } else {
+        g.onerror = undefined;
+      }
     }
     globalThis.removeEventListener("unhandledrejection", onUnhandledRejection);
   };
