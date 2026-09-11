@@ -1,0 +1,19 @@
+// error-tracker.prisma
+// Copy this model into your application's schema.prisma file.
+
+model ClientError {
+  id             String    @id @default(cuid())
+  message        String
+  stack          String?
+  componentStack String?
+  resolvedStack  String?
+  fingerprint    String    @unique
+  occurrences    Int       @default(1)
+  environment    String
+  url            String?
+  userAgent      String?
+  resolvedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  lastSeenAt     DateTime
+}
