@@ -230,6 +230,8 @@ describe("initErrorTracker — existing handler chaining", () => {
     // (it will be called alongside the new one, not discarded)
     simulateWindowError(new Error("chain test"));
 
+    expect(originalHandler).toHaveBeenCalledTimes(1);
+
     cleanup();
 
     // Restore
@@ -330,12 +332,11 @@ describe("initErrorTracker — config passthrough", () => {
     await new Promise((r) => setTimeout(r, 0));
     cleanup();
 
-    if (mockReportError.mock.calls.length > 0) {
-      // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
-      const [calledConfig] = (mockReportError.mock.calls as any[][])[0];
-      expect(calledConfig?.endpoint).toBe(
-        "https://custom.example.com/api/errors"
-      );
-    }
+    expect(mockReportError).toHaveBeenCalledTimes(1);
+    // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
+    const [calledConfig] = (mockReportError.mock.calls as any[][])[0];
+    expect(calledConfig?.endpoint).toBe(
+      "https://custom.example.com/api/errors"
+    );
   });
 });

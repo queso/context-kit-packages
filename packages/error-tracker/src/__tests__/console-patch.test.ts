@@ -142,9 +142,9 @@ describe("patchConsoleError — calling original first", () => {
     const originalIdx = callOrder.indexOf("original");
     const reporterIdx = callOrder.indexOf("reporter");
 
-    if (originalIdx !== -1 && reporterIdx !== -1) {
-      expect(originalIdx).toBeLessThan(reporterIdx);
-    }
+    expect(originalIdx).toBeGreaterThanOrEqual(0);
+    expect(reporterIdx).toBeGreaterThanOrEqual(0);
+    expect(originalIdx).toBeLessThan(reporterIdx);
 
     mockReportError.mockImplementation(() => undefined);
   });
@@ -185,9 +185,9 @@ describe("patchConsoleError — Error arguments", () => {
     console.error(err);
     // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
     const [, payload] = (mockReportError.mock.calls as any[][])[0] ?? [];
-    if (err.stack && payload?.stack) {
-      expect(typeof payload.stack).toBe("string");
-    }
+    expect(err.stack).toBeDefined();
+    expect(payload?.stack).toBeDefined();
+    expect(typeof payload.stack).toBe("string");
   });
 });
 

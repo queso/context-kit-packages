@@ -9,7 +9,7 @@ Column names are `snake_case` and all lowercase, so no identifier quoting is nee
 Timestamps are the one place the two dialects differ:
 
 - **Postgres:** `created_at`, `updated_at`, `last_seen_at`, `resolved_at` are `timestamp` columns. Compare them to timestamps and format them with the usual date functions.
-- **SQLite:** the same four columns are integers holding milliseconds since the Unix epoch (Drizzle's `timestamp_ms` mode). Divide by 1000 before handing them to `datetime()`, and multiply by 1000 when comparing against `unixepoch()`.
+- **SQLite:** the same four columns are integers holding milliseconds since the Unix epoch (Drizzle's `timestamp_ms` mode). Divide by 1000 before handing them to `datetime()`, and multiply by 1000 when comparing against `strftime('%s', ...)`.
 
 Recipes that only select, filter on text, and order by a timestamp are identical in both. Recipes that compare or format a timestamp are given twice.
 
@@ -59,7 +59,7 @@ SELECT fingerprint, message, occurrences,
        datetime(created_at / 1000, 'unixepoch') AS created,
        datetime(last_seen_at / 1000, 'unixepoch') AS last_seen
 FROM client_error
-WHERE last_seen_at >= unixepoch('2026-03-15 00:00:00') * 1000
+WHERE last_seen_at >= strftime('%s', '2026-03-15 00:00:00') * 1000
   AND resolved_at IS NULL
 ORDER BY occurrences DESC;
 ```
@@ -165,7 +165,7 @@ SELECT date(created_at / 1000, 'unixepoch') AS day,
        COUNT(*) AS new_errors,
        SUM(occurrences) AS total_hits
 FROM client_error
-WHERE created_at >= (unixepoch() - 30 * 86400) * 1000
+WHERE created_at >= (strftime('%s', 'now') - 30 * 86400) * 1000
 GROUP BY day
 ORDER BY day DESC;
 ```
@@ -206,7 +206,7 @@ SQLite:
 
 ```sql
 UPDATE client_error
-SET resolved_at = unixepoch() * 1000
+SET resolved_at = strftime('%s', 'now') * 1000
 WHERE fingerprint = 'your-fingerprint-here';
 ```
 
@@ -227,9 +227,9 @@ SQLite:
 
 ```sql
 UPDATE client_error
-SET resolved_at = unixepoch() * 1000
+SET resolved_at = strftime('%s', 'now') * 1000
 WHERE resolved_at IS NULL
-  AND last_seen_at < (unixepoch() - 30 * 86400) * 1000;
+  AND last_seen_at < (strftime('%s', 'now') - 30 * 86400) * 1000;
 ```
 
 ### Delete old resolved errors (cleanup)
@@ -247,7 +247,7 @@ SQLite:
 ```sql
 DELETE FROM client_error
 WHERE resolved_at IS NOT NULL
-  AND resolved_at < (unixepoch() - 90 * 86400) * 1000;
+  AND resolved_at < (strftime('%s', 'now') - 90 * 86400) * 1000;
 ```
 
 Deleting a row throws away its history. If that error fires again, ingestion inserts a fresh row with `occurrences` at 1 and today's `created_at`.

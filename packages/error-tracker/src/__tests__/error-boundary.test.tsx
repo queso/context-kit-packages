@@ -157,9 +157,7 @@ describe("ErrorBoundary", () => {
     // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
     const [, payload] = (mockReportError.mock.calls as any[][])[0];
     // componentStack comes from React's componentDidCatch info argument
-    expect(
-      payload?.componentStack !== undefined || payload?.stack !== undefined
-    ).toBe(true);
+    expect(payload?.componentStack).toBeDefined();
   });
 
   test("does not throw when reportError fails internally", () => {

@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { tokenMatches } from "../server/auth";
 import {
   computeFingerprint,
   createIngestionHandler,
@@ -302,6 +303,104 @@ describe("ingestion handler first report", () => {
 
     const row = await readOnlyClientError();
     expect(row.occurrences).toBe(2);
+  });
+});
+
+describe("ingestion handler field size caps", () => {
+  const handler = createIngestionHandler(sqliteConfig());
+
+  test("truncates an oversized message to 2,000 characters", async () => {
+    const longMessage = "M".repeat(2_500);
+    const res = await handler(errorRequest(validBody({ message: longMessage })));
+    expect(res.status).toBe(200);
+    const row = await readOnlyClientError();
+    expect(row.message).toBe(longMessage.slice(0, 2_000));
+    expect(row.message.length).toBe(2_000);
+  });
+
+  test("fingerprints on the truncated message, not the full one", async () => {
+    const longMessage = "M".repeat(2_500);
+    const res = await handler(errorRequest(validBody({ message: longMessage })));
+    const { fingerprint } = (await res.json()) as { fingerprint: string };
+    expect(fingerprint).toBe(fingerprintFor(longMessage.slice(0, 2_000), STACK));
+  });
+
+  test("truncates an oversized componentStack to 10,000 characters", async () => {
+    const longComponentStack = "  at Component\n".repeat(1000);
+    expect(longComponentStack.length).toBeGreaterThan(10_000);
+    await handler(
+      errorRequest(validBody({ componentStack: longComponentStack }))
+    );
+    expect((await readOnlyClientError()).componentStack).toBe(
+      longComponentStack.slice(0, 10_000)
+    );
+  });
+
+  test("truncates an oversized url to 2,048 characters", async () => {
+    const longUrl = `https://example.com/${"a".repeat(2_100)}`;
+    expect(longUrl.length).toBeGreaterThan(2_048);
+    await handler(errorRequest(validBody({ url: longUrl })));
+    expect((await readOnlyClientError()).url).toBe(longUrl.slice(0, 2_048));
+  });
+
+  test("truncates an oversized userAgent to 1,024 characters", async () => {
+    const longUserAgent = "Mozilla/5.0 ".repeat(100);
+    expect(longUserAgent.length).toBeGreaterThan(1_024);
+    await handler(errorRequest(validBody({ userAgent: longUserAgent })));
+    expect((await readOnlyClientError()).userAgent).toBe(
+      longUserAgent.slice(0, 1_024)
+    );
+  });
+});
+
+describe("ingestion handler body size limit", () => {
+  const handler = createIngestionHandler(sqliteConfig());
+
+  test("returns 413 when content-length exceeds the cap", async () => {
+    const res = await handler(
+      errorRequest(validBody(), { "content-length": String(64 * 1024 + 1) })
+    );
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: "Payload too large" });
+    expect(await readClientErrors()).toHaveLength(0);
+  });
+
+  test("returns 413 when the body exceeds the cap and no content-length header is present", async () => {
+    const body = validBody({ message: "M".repeat(70 * 1024) });
+    const request = errorRequest(body);
+    expect(request.headers.get("content-length")).toBeNull();
+
+    const res = await handler(request);
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: "Payload too large" });
+    expect(await readClientErrors()).toHaveLength(0);
+  });
+
+  test("accepts a body just under the cap", async () => {
+    const body = validBody({ message: "M".repeat(60 * 1024) });
+    expect(Buffer.byteLength(JSON.stringify(body))).toBeLessThan(64 * 1024);
+
+    const res = await handler(errorRequest(body));
+    expect(res.status).toBe(200);
+    expect(await readClientErrors()).toHaveLength(1);
+  });
+});
+
+describe("tokenMatches", () => {
+  test("returns true for equal tokens", () => {
+    expect(tokenMatches("secret", "secret")).toBe(true);
+  });
+
+  test("returns false for different tokens of the same length", () => {
+    expect(tokenMatches("secreu", "secret")).toBe(false);
+  });
+
+  test("returns false for tokens of different length", () => {
+    expect(tokenMatches("short", "a-much-longer-token")).toBe(false);
+  });
+
+  test("returns false for a null provided token", () => {
+    expect(tokenMatches(null, "secret")).toBe(false);
   });
 });
 

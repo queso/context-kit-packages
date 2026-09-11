@@ -1,5 +1,14 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  expect,
+  spyOn,
+  test,
+} from "bun:test";
+import * as fs from "node:fs";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SourceMapGenerator } from "source-map";
@@ -26,6 +35,19 @@ function makeMinifiedStack(mapDir: string) {
   return `TypeError: Cannot read properties of undefined (reading 'map')
     at http://localhost:3000/_next/static/chunks/app.js:1:0
     at processTicksAndRejections (node:internal/process/task_queues:95:5)`;
+}
+
+// A distinct, uniquely-named source map for cache-eviction tests, so each
+// index's resolved output is distinguishable from every other index's.
+function buildIndexedSourceMap(index: number): string {
+  const generator = new SourceMapGenerator({ file: `lru${index}.js` });
+  generator.addMapping({
+    generated: { line: 1, column: 0 },
+    original: { line: 1, column: 0 },
+    source: `Original${index}.tsx`,
+    name: `fn${index}`,
+  });
+  return generator.toString();
 }
 
 // ─── Temp directory setup ─────────────────────────────────────────────────────
@@ -180,5 +202,213 @@ describe("resolveStack — default source map directory", () => {
     // This will likely fall back to raw since .next/ won't exist in test env,
     // but must not throw
     await expect(resolveStack(rawStack)).resolves.toBeDefined();
+  });
+});
+
+describe("resolveStack — async read with in-flight dedup", () => {
+  test("concurrent misses on the same never-before-seen map share a single read", async () => {
+    const dedupDir = join(tmpdir(), `error-tracker-dedup-${Date.now()}`);
+    mkdirSync(dedupDir, { recursive: true });
+    writeFileSync(join(dedupDir, "app.js.map"), buildSourceMap(), "utf-8");
+
+    // Wrap the real implementation so the read still happens, just counted.
+    const realReadFile = fsp.readFile.bind(fsp);
+    let readCount = 0;
+    const spy = spyOn(fsp, "readFile").mockImplementation((...args: any[]) => {
+      readCount++;
+      return (realReadFile as any)(...args);
+    });
+
+    try {
+      const rawStack = `TypeError: test\n    at http://localhost:3000/_next/static/chunks/app.js:1:0`;
+      const expected =
+        "TypeError: test\n    at handleClick (../src/components/Dashboard.tsx:5:0)";
+
+      // Five concurrent resolutions all miss the cache for the same map file.
+      // Without in-flight dedup, each would perform its own read and parse.
+      const results = await Promise.all(
+        Array.from({ length: 5 }, () =>
+          resolveStack(rawStack, { sourceMapDir: dedupDir })
+        )
+      );
+
+      for (const result of results) {
+        expect(result).toBe(expected);
+      }
+      expect(readCount).toBe(1);
+    } finally {
+      spy.mockRestore();
+      rmSync(dedupDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a later, separate resolution after the first settles reads again", async () => {
+    // Sanity check for the dedup bookkeeping: once the in-flight promise for
+    // a path settles and the map is cached, a later call for the same path
+    // should be served from the cache, not trigger a second file read.
+    const dedupDir = join(tmpdir(), `error-tracker-dedup2-${Date.now()}`);
+    mkdirSync(dedupDir, { recursive: true });
+    writeFileSync(join(dedupDir, "app.js.map"), buildSourceMap(), "utf-8");
+
+    const realReadFile = fsp.readFile.bind(fsp);
+    let readCount = 0;
+    const spy = spyOn(fsp, "readFile").mockImplementation(
+      (...args: any[]) => {
+        readCount++;
+        return (realReadFile as any)(...args);
+      }
+    );
+
+    try {
+      const rawStack = `TypeError: test\n    at http://localhost:3000/_next/static/chunks/app.js:1:0`;
+      await resolveStack(rawStack, { sourceMapDir: dedupDir });
+      expect(readCount).toBe(1);
+
+      await resolveStack(rawStack, { sourceMapDir: dedupDir });
+      // Second call hits the now-populated sourceMapCache, no additional read.
+      expect(readCount).toBe(1);
+    } finally {
+      spy.mockRestore();
+      rmSync(dedupDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("resolveStack — true LRU eviction", () => {
+  test("a repeatedly-hit entry survives eviction while an untouched entry is evicted", async () => {
+    const lruDir = join(tmpdir(), `error-tracker-lru-${Date.now()}`);
+    mkdirSync(lruDir, { recursive: true });
+
+    const CACHE_LIMIT = 20;
+    const frameFor = (i: number) => `TypeError: test\n    at lru${i}.js:1:0`;
+    const expectedFor = (i: number) =>
+      `TypeError: test\n    at fn${i} (Original${i}.tsx:1:0)`;
+
+    try {
+      for (let i = 0; i < CACHE_LIMIT; i++) {
+        writeFileSync(
+          join(lruDir, `lru${i}.js.map`),
+          buildIndexedSourceMap(i),
+          "utf-8"
+        );
+      }
+
+      // Fill the cache to its limit, in order, so entry 0 is the oldest insert.
+      for (let i = 0; i < CACHE_LIMIT; i++) {
+        const result = await resolveStack(frameFor(i), {
+          sourceMapDir: lruDir,
+        });
+        expect(result).toBe(expectedFor(i));
+      }
+
+      // Hit entry 0 again. True LRU promotes it to most-recently-used; FIFO
+      // eviction (keying off insertion order only) would leave it untouched.
+      const hitResult = await resolveStack(frameFor(0), {
+        sourceMapDir: lruDir,
+      });
+      expect(hitResult).toBe(expectedFor(0));
+
+      // Add one more distinct entry, forcing exactly one eviction.
+      writeFileSync(
+        join(lruDir, `lru${CACHE_LIMIT}.js.map`),
+        buildIndexedSourceMap(CACHE_LIMIT),
+        "utf-8"
+      );
+      const newResult = await resolveStack(frameFor(CACHE_LIMIT), {
+        sourceMapDir: lruDir,
+      });
+      expect(newResult).toBe(expectedFor(CACHE_LIMIT));
+
+      // Corrupt entry 0's map file on disk (the file still exists, so the
+      // filesystem probe still finds it — only its content is now garbage).
+      // If entry 0 is still cached in memory (true LRU), resolution succeeds
+      // from the cached consumer without ever reading this file. Under FIFO
+      // eviction, entry 0 would have been evicted as the oldest insert, so
+      // the resolver would re-read this now-corrupt file, fail to parse it,
+      // and fall back to the raw (unresolved) frame line instead.
+      writeFileSync(join(lruDir, "lru0.js.map"), "not-valid-json{{{{", "utf-8");
+      const survivorResult = await resolveStack(frameFor(0), {
+        sourceMapDir: lruDir,
+      });
+      expect(survivorResult).toBe(expectedFor(0));
+    } finally {
+      rmSync(lruDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("resolveStack — filename validation and negative cache", () => {
+  test("rejects an unsafe filename without any filesystem probe", async () => {
+    // The Bun runtime itself calls existsSync in the background (module
+    // resolution, watchers) while a test runs, so a bare call counter is
+    // noisy. Only count probes that actually mention our target filename.
+    const realExistsSync = fs.existsSync.bind(fs);
+    const spy = spyOn(fs, "existsSync");
+    let relevantCalls = 0;
+    const countRelevant = (needle: string) => {
+      spy.mockImplementation((...args: Parameters<typeof fs.existsSync>) => {
+        if (String(args[0]).includes(needle)) relevantCalls++;
+        return realExistsSync(...args);
+      });
+    };
+
+    try {
+      const traversalStack = "TypeError: test\n  at fn (../../etc/passwd:1:1)";
+      relevantCalls = 0;
+      countRelevant("passwd");
+      const traversalResult = await resolveStack(traversalStack, {
+        sourceMapDir: testMapDir,
+      });
+      expect(traversalResult).toBe(traversalStack);
+      expect(relevantCalls).toBe(0);
+
+      const weirdNameStack = "TypeError: test\n  at fn (weird$name.js:1:1)";
+      relevantCalls = 0;
+      countRelevant("weird");
+      const weirdNameResult = await resolveStack(weirdNameStack, {
+        sourceMapDir: testMapDir,
+      });
+      expect(weirdNameResult).toBe(weirdNameStack);
+      expect(relevantCalls).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test("probes a missing chunk's map file once and reuses the negative cache on repeat lookups", async () => {
+    const missingDir = join(tmpdir(), `error-tracker-negcache-${Date.now()}`);
+    mkdirSync(missingDir, { recursive: true });
+    const targetMapPath = join(missingDir, "nope.js.map");
+
+    const realExistsSync = fs.existsSync.bind(fs);
+    const spy = spyOn(fs, "existsSync");
+    let probeCount = 0;
+    spy.mockImplementation((...args: Parameters<typeof fs.existsSync>) => {
+      // Only count probes against the exact map path this test cares about;
+      // unrelated background existsSync calls from the runtime don't count.
+      if (args[0] === targetMapPath) probeCount++;
+      return realExistsSync(...args);
+    });
+
+    try {
+      const rawStack = "TypeError: test\n  at fn (nope.js:1:1)";
+
+      const result1 = await resolveStack(rawStack, {
+        sourceMapDir: missingDir,
+      });
+      expect(result1).toBe(rawStack);
+      expect(probeCount).toBe(1);
+
+      const result2 = await resolveStack(rawStack, {
+        sourceMapDir: missingDir,
+      });
+      expect(result2).toBe(rawStack);
+      // The second lookup for the same missing map path is served from the
+      // negative cache: no additional filesystem probe.
+      expect(probeCount).toBe(1);
+    } finally {
+      spy.mockRestore();
+      rmSync(missingDir, { recursive: true, force: true });
+    }
   });
 });

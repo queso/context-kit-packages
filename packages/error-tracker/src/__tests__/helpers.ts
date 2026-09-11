@@ -169,15 +169,28 @@ export function queryRequest(
   return new Request(url, { method: "GET", headers });
 }
 
+/** Thrown by the stubbed `process.exit` so code after the call cannot run. */
+export class ProcessExitError extends Error {
+  constructor(readonly code: number) {
+    super(`process.exit(${code})`);
+    this.name = "ProcessExitError";
+  }
+}
+
 /**
  * Replaces `console.log`/`console.error` with collectors for the duration of
  * `fn`, returning everything written alongside the callback's result. The
- * console is restored even when `fn` throws (which is how the stubbed
- * `process.exit` below reports itself).
+ * console is restored even when `fn` throws.
+ *
+ * Only a `ProcessExitError` (the stubbed `process.exit`'s sentinel) is caught
+ * and reported back via `error`; any other thrown error means the code under
+ * test crashed, so it is rethrown after the console is restored rather than
+ * swallowed. A test that destructures only `{ out, lines }` would otherwise
+ * pass even when `fn` threw for real.
  */
 export async function captureConsole<T>(
   fn: () => Promise<T>
-): Promise<{ out: string; lines: string[]; result?: T; error?: unknown }> {
+): Promise<{ out: string; lines: string[]; result?: T; error?: ProcessExitError }> {
   const lines: string[] = [];
   const originalLog = console.log;
   const originalError = console.error;
@@ -190,18 +203,13 @@ export async function captureConsole<T>(
     const result = await fn();
     return { out: lines.join("\n"), lines, result };
   } catch (error) {
-    return { out: lines.join("\n"), lines, error };
+    if (error instanceof ProcessExitError) {
+      return { out: lines.join("\n"), lines, error };
+    }
+    throw error;
   } finally {
     console.log = originalLog;
     console.error = originalError;
-  }
-}
-
-/** Thrown by the stubbed `process.exit` so code after the call cannot run. */
-export class ProcessExitError extends Error {
-  constructor(readonly code: number) {
-    super(`process.exit(${code})`);
-    this.name = "ProcessExitError";
   }
 }
 

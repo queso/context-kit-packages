@@ -186,9 +186,7 @@ describe("createErrorTracker — environment default", () => {
     tracker.init();
     // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
     const [calledConfig] = (mockInitErrorTracker.mock.calls as any[][])[0];
-    if (calledConfig?.environment !== undefined) {
-      expect(calledConfig.environment).toBe("production");
-    }
+    expect(calledConfig?.environment).toBe("production");
   });
 
   test("uses provided environment over NODE_ENV", () => {
@@ -200,9 +198,7 @@ describe("createErrorTracker — environment default", () => {
     tracker.init();
     // biome-ignore lint/suspicious/noExplicitAny: accessing mock call args
     const [calledConfig] = (mockInitErrorTracker.mock.calls as any[][])[0];
-    if (calledConfig?.environment !== undefined) {
-      expect(calledConfig.environment).toBe("staging");
-    }
+    expect(calledConfig?.environment).toBe("staging");
   });
 });
 
@@ -234,7 +230,7 @@ describe("createErrorTracker — production warning", () => {
     const tracker = createErrorTracker({ endpoint: "/api/errors" });
     tracker.init();
     const allWarnings = warnCalls.flat().join(" ").toLowerCase();
-    expect(allWarnings).toMatch(/token|secret|auth/);
+    expect(allWarnings).toContain("no token configured");
   });
 
   test("does not warn when NODE_ENV=production and a token is configured", () => {

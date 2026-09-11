@@ -10,13 +10,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LibSQLDatabase } from "drizzle-orm/libsql";
-import { runResolve, runTail } from "../cli";
+import { CliUsageError, parseTailArgs, runResolve, runTail } from "../cli";
 import * as schema from "../schema/sqlite";
 import {
   captureConsole,
   findClientError,
   prepareTestDb,
-  ProcessExitError,
   readClientErrors,
   resetClientErrors,
   seedClientError,
@@ -46,12 +45,15 @@ beforeEach(async () => {
 /**
  * Runs a CLI function with the console captured and `process.exit` stubbed, so
  * an `exit()` call is recorded instead of killing the test runner.
+ *
+ * `captureConsole` already rethrows anything other than the stubbed exit's
+ * `ProcessExitError`, so a crash in `fn` fails the calling test instead of
+ * silently passing.
  */
 async function runCli(fn: () => Promise<void>) {
   const exit = stubProcessExit();
   try {
-    const { out, lines, error } = await captureConsole(fn);
-    if (error && !(error instanceof ProcessExitError)) throw error;
+    const { out, lines } = await captureConsole(fn);
     return { out, lines, codes: exit.codes };
   } finally {
     exit.restore();
@@ -192,6 +194,112 @@ describe("runTail", () => {
       runTail({ db: testDb, dialect: DIALECT })
     );
     expect(codes).toEqual([]);
+  });
+
+  test("rejects a non-finite or non-positive limit and exits 1", async () => {
+    const { out, codes } = await runCli(() =>
+      runTail({ db: testDb, dialect: DIALECT, limit: -5 })
+    );
+    expect(codes).toEqual([1]);
+    expect(out).toContain("--limit expects a positive integer");
+  });
+
+  test("rejects limit 0 and exits 1", async () => {
+    const { out, codes } = await runCli(() =>
+      runTail({ db: testDb, dialect: DIALECT, limit: 0 })
+    );
+    expect(codes).toEqual([1]);
+    expect(out).toContain("--limit expects a positive integer");
+  });
+
+  test("rejects an invalid `since` Date and exits 1", async () => {
+    const { out, codes } = await runCli(() =>
+      runTail({ db: testDb, dialect: DIALECT, since: new Date("garbage") })
+    );
+    expect(codes).toEqual([1]);
+    expect(out).toContain("--since expects a valid date");
+  });
+});
+
+describe("parseTailArgs", () => {
+  test("defaults to limit 20 with no env or since", () => {
+    expect(parseTailArgs([])).toEqual({
+      limit: 20,
+      env: undefined,
+      since: undefined,
+    });
+  });
+
+  test("parses a valid combination of flags", () => {
+    const result = parseTailArgs([
+      "--limit",
+      "5",
+      "--env",
+      "production",
+      "--since",
+      "2026-01-01T00:00:00.000Z",
+    ]);
+    expect(result).toEqual({
+      limit: 5,
+      env: "production",
+      since: new Date("2026-01-01T00:00:00.000Z"),
+    });
+  });
+
+  test("rejects a non-numeric --limit", () => {
+    expect(() => parseTailArgs(["--limit", "abc"])).toThrow(CliUsageError);
+    expect(() => parseTailArgs(["--limit", "abc"])).toThrow(
+      "--limit expects a positive integer"
+    );
+  });
+
+  test("rejects a negative --limit", () => {
+    expect(() => parseTailArgs(["--limit", "-5"])).toThrow(
+      "--limit expects a positive integer"
+    );
+  });
+
+  test("rejects a zero --limit", () => {
+    expect(() => parseTailArgs(["--limit", "0"])).toThrow(
+      "--limit expects a positive integer"
+    );
+  });
+
+  test("rejects an unparseable --since", () => {
+    expect(() => parseTailArgs(["--since", "garbage"])).toThrow(
+      "--since expects a valid date"
+    );
+  });
+
+  test("does not consume a following flag as --since's value", () => {
+    // `--env` looks like the next flag, not a date, so it must be reported
+    // as a missing `--since` value rather than silently consumed.
+    expect(() => parseTailArgs(["--since", "--env", "production"])).toThrow(
+      "--since expects a valid date"
+    );
+  });
+});
+
+describe("captureConsole", () => {
+  test("rethrows an error that is not the stubbed process.exit", async () => {
+    const boom = new Error("boom");
+    await expect(
+      captureConsole(async () => {
+        throw boom;
+      })
+    ).rejects.toBe(boom);
+  });
+
+  test("restores the console before rethrowing a non-exit error", async () => {
+    const originalLog = console.log;
+    const originalError = console.error;
+    await expect(
+      captureConsole(async () => {
+        throw new Error("boom");
+      })
+    ).rejects.toThrow("boom");
+    expect(console.log).toBe(originalLog);
+    expect(console.error).toBe(originalError);
   });
 });
 

@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
+import fsp from "node:fs/promises";
 import { basename, join } from "node:path";
 import {
   type BasicSourceMapConsumer,
@@ -17,6 +18,26 @@ export interface ResolveStackOptions {
 
 const DEFAULT_SOURCE_MAP_DIR = ".next/static/chunks";
 
+// A client-submitted stack frame's filename must look like a plain script
+// name before it touches the filesystem. Rejects path traversal segments
+// (e.g. "../../etc/passwd") and anything outside word/dot/dash characters.
+const SAFE_MAP_FILENAME_RE = /^[\w.-]+\.(m?js)$/;
+
+// Map file paths that were probed and did not exist. Bounded so repeated
+// misses for the same chunk (a very common case — most frames belong to
+// chunks with no source map at all) skip re-probing the filesystem. Cleared
+// wholesale on overflow rather than evicting individually: it is a cheap
+// negative cache, not a source of truth.
+const negativeMapCache = new Set<string>();
+const NEGATIVE_CACHE_LIMIT = 200;
+
+function rememberMiss(mapPath: string): void {
+  if (negativeMapCache.size >= NEGATIVE_CACHE_LIMIT) {
+    negativeMapCache.clear();
+  }
+  negativeMapCache.add(mapPath);
+}
+
 function getMapFilePath(sourceMapDir: string, fileRef: string): string | null {
   // Extract just the filename portion (last path segment)
   let fileName: string;
@@ -27,35 +48,82 @@ function getMapFilePath(sourceMapDir: string, fileRef: string): string | null {
   } catch {
     fileName = basename(fileRef);
   }
+
+  // Reject anything that isn't a plain script filename before touching disk.
+  if (!SAFE_MAP_FILENAME_RE.test(fileName)) {
+    return null;
+  }
+
   const mapPath = join(sourceMapDir, `${fileName}.map`);
-  return existsSync(mapPath) ? mapPath : null;
+  if (negativeMapCache.has(mapPath)) {
+    return null;
+  }
+  if (!existsSync(mapPath)) {
+    rememberMiss(mapPath);
+    return null;
+  }
+  return mapPath;
 }
 
 // Cache parsed source maps to avoid re-reading from disk on repeated errors.
-// Entries are SourceMapConsumer instances keyed by map file path.
-// Limited to 20 entries to bound memory; oldest entry evicted on overflow.
+// Entries are SourceMapConsumer instances keyed by map file path. A hit
+// deletes and re-sets the key so Map iteration order reflects recency
+// (true LRU, not insertion order). Limited to 20 entries to bound memory;
+// the least-recently-used entry is evicted on overflow.
 const sourceMapCache = new Map<string, SourceMapConsumerInstance>();
 const SOURCE_MAP_CACHE_LIMIT = 20;
+
+// In-flight loads keyed by map file path, so concurrent cache misses for the
+// same chunk share one read + parse instead of each performing its own.
+const inFlightLoads = new Map<string, Promise<SourceMapConsumerInstance>>();
+
+async function loadConsumer(
+  mapFilePath: string
+): Promise<SourceMapConsumerInstance> {
+  const rawMap = await fsp.readFile(mapFilePath, "utf-8");
+  const sourceMap = JSON.parse(rawMap);
+  return await new SourceMapConsumer(sourceMap);
+}
 
 async function getCachedConsumer(
   mapFilePath: string
 ): Promise<SourceMapConsumerInstance> {
   const cached = sourceMapCache.get(mapFilePath);
-  if (cached) return cached;
-
-  const rawMap = readFileSync(mapFilePath, "utf-8");
-  const sourceMap = JSON.parse(rawMap);
-  const consumer = await new SourceMapConsumer(sourceMap);
-
-  // Evict oldest entry if at limit
-  if (sourceMapCache.size >= SOURCE_MAP_CACHE_LIMIT) {
-    const firstKey = sourceMapCache.keys().next().value;
-    if (firstKey) {
-      sourceMapCache.get(firstKey)?.destroy();
-      sourceMapCache.delete(firstKey);
-    }
+  if (cached) {
+    // Re-insert on hit so this key becomes the most recently used.
+    sourceMapCache.delete(mapFilePath);
+    sourceMapCache.set(mapFilePath, cached);
+    return cached;
   }
-  sourceMapCache.set(mapFilePath, consumer);
+
+  let pending = inFlightLoads.get(mapFilePath);
+  if (!pending) {
+    pending = loadConsumer(mapFilePath);
+    // Clear the in-flight entry once it settles, on rejection too, so a
+    // later call retries instead of being stuck on a rejected promise. The
+    // `.catch` here just marks this derived promise as handled: `pending`
+    // itself is untouched, so its awaiters still see the real result/error.
+    pending
+      .finally(() => {
+        inFlightLoads.delete(mapFilePath);
+      })
+      .catch(() => {});
+    inFlightLoads.set(mapFilePath, pending);
+  }
+
+  const consumer = await pending;
+
+  // A concurrent caller may have already cached this while we were awaiting.
+  if (!sourceMapCache.has(mapFilePath)) {
+    if (sourceMapCache.size >= SOURCE_MAP_CACHE_LIMIT) {
+      const oldestKey = sourceMapCache.keys().next().value;
+      if (oldestKey) {
+        sourceMapCache.get(oldestKey)?.destroy();
+        sourceMapCache.delete(oldestKey);
+      }
+    }
+    sourceMapCache.set(mapFilePath, consumer);
+  }
   return consumer;
 }
 

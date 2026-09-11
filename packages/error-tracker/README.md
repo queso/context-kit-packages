@@ -6,7 +6,7 @@ Client-side error tracking for Next.js App Router apps. Captures React render cr
 
 - **Error Boundary** - React component that catches render errors and reports them
 - **Global Error Listeners** - Captures `window.onerror` and `unhandledrejection` events
-- **Fire-and-Forget Reporter** - Non-blocking error reporting with loop prevention
+- **Fire-and-Forget Reporter** - Non-blocking error reporting with loop prevention, bounded by a 5 second request timeout where the browser supports `AbortSignal.timeout`
 - **Server Ingestion** - Route handler that validates, fingerprints, and upserts errors
 - **Drizzle Schema Modules** - One `client_error` table, shipped for SQLite and Postgres, re-exported from your own schema file
 - **Source Map Resolution** - Resolves minified stack traces on the server using build-time source maps
@@ -126,6 +126,11 @@ const tracker = createErrorTracker({
 
 // Re-export the pre-configured ErrorBoundary (config is pre-bound)
 export const { ErrorBoundary } = tracker;
+```
+
+`NEXT_PUBLIC_ERROR_TRACKER_TOKEN` is bundled into client-side JavaScript, so it is visible to anyone who loads the page. It is a shared, publicly visible credential, not a secret: its purpose is to stop unsolicited reports from other origins and scripts, not to authenticate a specific caller. The protection that does not depend on the token staying secret is per-IP rate limiting on the ingestion endpoint (`rateLimiter`, configured in step 2).
+
+```tsx
 
 export function ErrorTrackerInit() {
   useEffect(() => {
@@ -183,6 +188,8 @@ interface CreateErrorTrackerOptions {
   patchConsoleError?: boolean; // Wrap console.error to report calls (default: false)
 }
 ```
+
+**Data risk:** when `patchConsoleError` is on, every argument passed to `console.error` is serialized into the report, along with the page's full URL including its query string. The package applies no redaction. Do not enable this option in an application that logs personal data or secrets through `console.error`, and be aware that a query string carrying a token or similar value travels with the report.
 
 Returns:
 
@@ -245,11 +252,11 @@ const { errors, total } = await response.json();
 
 Query parameters:
 - `env` - Filter by environment (`development`, `production`)
-- `since` - ISO timestamp; return errors with `lastSeenAt >= since`
+- `since` - ISO timestamp; return errors with `lastSeenAt >= since`. A value that does not parse as a valid date returns 400.
 - `fingerprint` - Filter by exact fingerprint
 - `resolved` - `"true"` or `"false"`; filter by resolution status
-- `limit` - Results per page (default: 50, max: 200)
-- `offset` - Number of results to skip (default: 0)
+- `limit` - Results per page. Falls back to 50 when missing, non-numeric, or below 1. Capped at 200.
+- `offset` - Number of results to skip. Falls back to 0 when non-numeric or negative.
 
 Each entry in `errors` is a Drizzle row, so its keys are the TypeScript property names: `lastSeenAt`, `resolvedAt`, `componentStack`, `resolvedStack`, `userAgent`, and the rest.
 
@@ -276,6 +283,12 @@ Because the whole thing is one statement, two concurrent reports of the same err
 
 **Fingerprint collisions:** Two distinct errors that share the same message and top-3 frames merge under one fingerprint. This is an acceptable tradeoff in v1. Query by fingerprint and inspect full stacks if you suspect a collision.
 
+## Request Limits
+
+- The ingestion endpoint rejects request bodies over 64 KB with a 413 response. The size is checked against the `content-length` header, then checked again after the body is read.
+- Fields are capped in length before storage rather than rejected: `message` at 2,000 characters, `stack` and `resolved_stack` at 10,000, `component_stack` at 10,000, `url` at 2,048, `user_agent` at 1,024. A longer value is truncated, not rejected.
+- Header token comparison is constant-time: both endpoints compare SHA-256 digests of the provided and expected token with `timingSafeEqual`, rather than comparing the raw strings.
+
 ## CLI
 
 The CLI reads `DATABASE_URL` and picks a driver the same way context-kit does:
@@ -288,6 +301,8 @@ The CLI reads `DATABASE_URL` and picks a driver the same way context-kit does:
 | `postgres://...` or `postgresql://...` | `postgres` (postgres-js) |
 
 Install whichever one your app uses. It is already there if you are running on that database.
+
+`--limit` must be a positive integer and `--since` must be a valid date; either one failing that check is a usage error. A flag missing its value, or immediately followed by another flag, is also a usage error. Any usage error exits 1.
 
 ### Tail recent errors
 
@@ -345,6 +360,8 @@ const tracker = createErrorTracker({
 });
 ```
 
+`secretHeaderToken` and the client `token` are the same shared value. The client copy ships in the browser bundle, so it is visible to anyone who loads the page: it screens out unsolicited reports, it does not authenticate the caller. `rateLimiter` is what keeps the endpoint safe from abuse regardless of who has read the token out of the bundle.
+
 ### Development with console patching
 
 ```ts
@@ -353,6 +370,8 @@ const tracker = createErrorTracker({
   patchConsoleError: true,
 });
 ```
+
+**Data risk:** every argument passed to `console.error` is serialized and sent to the ingestion endpoint, along with the page's full URL including its query string. There is no redaction. Do not turn this on where console logs may contain personal data or secrets, and note that a token or similar value in the query string travels with the report.
 
 ### Custom header name
 
@@ -399,7 +418,9 @@ NEXT_PUBLIC_ERROR_TRACKER_TOKEN=your-secret-token
 
 The route handlers reach the database through the `db` instance you pass them, not through `DATABASE_URL`. Only the CLI reads that variable.
 
-When no token is configured, the ingestion endpoint accepts all requests (permissive default for local dev). In production, a console warning is emitted if `token` is not set.
+`ERROR_TRACKER_TOKEN` and `NEXT_PUBLIC_ERROR_TRACKER_TOKEN` should hold the same value. The `NEXT_PUBLIC_` copy ships in the client bundle and is visible to anyone who loads the page: it is a shared, publicly visible credential, not a secret. Its job is to stop unsolicited reports from other origins and scripts; it is not what keeps the endpoint safe from a determined caller. Per-IP rate limiting (`rateLimiter`) is the protection that does not depend on the token staying secret, so configure it.
+
+When no token is configured, the ingestion and query endpoints accept all requests (permissive default for local dev). `createErrorHandlers` logs a warning at creation time when `NODE_ENV` is `production` and no `secretHeaderToken` is set; until one is set, the endpoints accept every request.
 
 ## Further Reading
 

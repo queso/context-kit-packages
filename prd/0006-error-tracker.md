@@ -8,8 +8,6 @@ The storage layer is Drizzle, not Prisma. The package ships `client_error` as a 
 
 Deduplication is a single upsert on the unique `fingerprint` column. A repeat increments `occurrences`, bumps `last_seen_at`, and clears `resolved_at`, so an error marked resolved is reopened when it happens again. The configurable dedup window described below is gone: one row per fingerprint, for the life of the table.
 
-Prisma references in the rest of this document are historical.
-
 ## 1. Context & Background
 
 Client-side JavaScript errors are invisible to server logs. When a React component crashes, an unhandled promise rejects, or `console.error` fires in a user's browser, nothing appears in stdout, nothing lands in your log aggregator, and the developer finds out via a screenshot or a confused user message.
@@ -49,13 +47,13 @@ Context-kit developers have no visibility into client-side runtime errors in the
 
 ### In Scope
 
-- **`ClientError` Prisma model** — schema fragment consumers add to their schema; includes message, stack, component stack, fingerprint, occurrences counter, environment, URL, user agent, and timestamps
+- **`client_error` Drizzle schema module** — one table per dialect (SQLite and Postgres) that consumers re-export from their own `db/schema/<dialect>.ts`; includes message, stack, component stack, fingerprint, occurrences counter, environment, URL, user agent, and timestamps
 - **Ingestion route handler** — `POST /api/errors` that validates the payload, resolves the stack trace against source maps, deduplicates by fingerprint, and upserts to the DB
 - **Query route handler** — `GET /api/errors` that returns recent errors with filtering by environment, date range, and fingerprint
 - **React error boundary component** — drop-in `<ErrorBoundary>` that catches React render errors and reports them via the ingestion endpoint
 - **Global error hooks** — `initErrorTracker()` function that installs `window.onerror` and `unhandledrejection` listeners; monkey-patches `console.error` with a configurable opt-in flag
 - **Server-side source map resolution** — resolves minified stack traces using the `source-map` npm package against maps generated at build time; maps are read from the server filesystem, never served publicly
-- **Deduplication** — errors with the same message + stack fingerprint within a configurable time window are collapsed into one row with an incrementing `occurrences` counter
+- **Deduplication** — errors with the same message + stack fingerprint are collapsed into one row via a single upsert on the unique `fingerprint` column, with an incrementing `occurrences` counter; there is no configurable time window
 - **Loop prevention** — the reporter detects if an error originates from within the error tracker itself and skips reporting to prevent infinite loops
 - **Secret header auth** — the ingestion endpoint requires a configurable header token to block unauthenticated public writes in production
 - **Rate limiting** — per-IP rate limiting on the ingestion endpoint, compatible with the context-kit middleware pattern
@@ -83,20 +81,20 @@ Context-kit developers have no visibility into client-side runtime errors in the
 4. The `<ErrorBoundary>` component shall catch React render errors and report them to the ingestion endpoint via a fire-and-forget `fetch` (not awaited, shall not block rendering of the fallback UI).
 5. The ingestion endpoint shall reject requests that do not include the configured secret header token with a 401 response.
 6. The ingestion endpoint shall compute a fingerprint from the error message and the first three frames of the resolved stack trace.
-7. The ingestion endpoint shall upsert by fingerprint: if a matching row exists and was last seen within the deduplication window, it shall increment the `occurrences` counter and update `lastSeenAt`; otherwise it shall insert a new row.
+7. The ingestion endpoint shall upsert by fingerprint: a single upsert on the unique `fingerprint` column shall increment the `occurrences` counter and update `lastSeenAt` when a matching row exists, or insert a new row when it does not. There is no deduplication window; one row exists per fingerprint for the life of the table.
 8. The ingestion endpoint shall attempt to resolve the minified stack trace against source maps on the server filesystem before writing to the database; if resolution fails, the raw stack shall be stored.
 9. The ingestion endpoint shall tag every error with `env` derived from `NODE_ENV` at request time.
 10. The query endpoint shall require the same secret header token as the ingestion endpoint; unauthenticated requests shall be rejected with a 401.
 11. The query endpoint shall return errors ordered by `lastSeenAt` descending and shall support filtering by `env`, `since` (ISO timestamp), `fingerprint`, and `resolved` (boolean) query parameters.
-12. The `ClientError` model shall include a `resolvedAt` nullable timestamp. When an error is marked resolved, `resolvedAt` is set and `occurrences` stops incrementing. If the same fingerprint is seen again after resolution, a new row shall be inserted (treating it as a new issue).
-13. The package shall export the Prisma schema fragment as a documented copy-paste block and as a `prisma/error-tracker.prisma` file consumers can reference.
+12. The `client_error` table shall include a `resolvedAt` nullable timestamp. When an error is marked resolved, `resolvedAt` is set on that row. If the same fingerprint is seen again after resolution, the upsert shall clear `resolvedAt` on the same row, reopening it, and shall continue incrementing `occurrences`; no new row is inserted.
+13. The package shall export Drizzle schema modules at `@context-kit/error-tracker/schema/sqlite` and `@context-kit/error-tracker/schema/postgres`, each defining the `client_error` table for that dialect. Consumers re-export the module for their dialect from their own `db/schema/<dialect>.ts` and generate the migration with their own Drizzle tooling; the app owns the migration history.
 14. The reporter shall detect if the error originates within the error tracker module itself (by inspecting the stack) and shall skip reporting to prevent feedback loops.
 
 ### Non-Functional Requirements
 
 1. The client-side `fetch` to the ingestion endpoint shall be fire-and-forget — it shall not be awaited and shall not block error boundary fallback rendering or any other UI path.
 2. The ingestion endpoint shall respond within 200ms under normal load (deduplication lookup + optional source map resolution + upsert).
-3. The package shall not bundle any runtime dependencies beyond what the consuming app already has (Next.js, Prisma); `source-map` is a server-only dependency.
+3. The package shall not bundle any runtime dependencies beyond what the consuming app already has (Next.js, Drizzle and its database driver); `source-map` is a server-only dependency.
 4. All exported types shall be compatible with TypeScript strict mode (`strict: true`).
 5. The package shall not make any outbound network requests; all writes go to the consuming app's own Postgres instance.
 6. Per-IP rate limiting on the ingestion endpoint shall reject excess requests with a 429 before they reach database logic.
@@ -110,7 +108,7 @@ Context-kit developers have no visibility into client-side runtime errors in the
 - **Extremely large stack traces** — stack strings shall be truncated at 10,000 characters before storage.
 - **`console.error` called with non-Error arguments** — the monkey-patch shall serialize the arguments to a string and report as `message` with no stack.
 - **Error during error boundary `fetch`** — caught with a try/catch; not re-thrown; no cascading failure.
-- **Multiple rapid occurrences of the same error** — race condition on the upsert; Prisma upsert on fingerprint handles this; worst case is a duplicate row that gets merged on the next occurrence.
+- **Multiple rapid occurrences of the same error** — the database serializes the upsert on the unique `fingerprint` constraint, so concurrent identical reports cannot race; the counter increments correctly for each one.
 - **Secret header not configured** — if no token is set, the endpoint shall accept all requests (permissive default for local dev); documented that production deployments must set the token.
 
 ## 7. Design Principles
@@ -129,23 +127,24 @@ On the client, a lightweight initializer attaches to the browser's global error 
 
 On the server, a pair of Next.js route handlers handle ingestion and querying. The ingestion handler validates the request, resolves the stack trace against build-time source maps stored on the server filesystem, computes a deduplication fingerprint, and upserts to the `ClientError` table. The query handler provides filtered access to stored errors.
 
-The `ClientError` Prisma model lives in the consuming app's own schema. The package ships the model definition as a documented fragment; consumers copy it in, run their migration, and own the table alongside the rest of their data.
+The `client_error` table lives in the consuming app's own schema. The package ships it as a Drizzle schema module per dialect; consumers re-export the module from their schema file, generate and run the migration, and own the table alongside the rest of their data.
 
 ## 9. Technical Considerations
 
 **Constraints:**
 - Next.js App Router only; route handlers use the `export async function POST/GET` pattern
-- Prisma 5+ required; the upsert relies on `createOrUpdate` with a unique constraint on `fingerprint`
+- Drizzle ORM required (>= 0.41.0); the upsert relies on `insert ... on conflict (fingerprint) do update` against a unique constraint on `fingerprint`. SQLite and Postgres are both supported; MySQL is not
 - Source map resolution requires build-time source maps to be present on the server at runtime; for Next.js this means `productionBrowserSourceMaps: true` in `next.config.ts` (or equivalent), which writes maps to `.next/static/chunks/` — the server can read these at request time
 - Source maps are read from the filesystem, never served as static assets; consumers must ensure the deployment includes the `.next/` directory (standard for self-hosted Next.js, not valid for edge runtimes)
 
 **Dependencies:**
 - `source-map` (npm) — server-only, for stack frame resolution
-- `Prisma` — peer dependency; consumers provide their own client instance
+- `drizzle-orm` (npm, >= 0.41.0) — peer dependency; consumers provide their own Drizzle instance
+- `@libsql/client` and `postgres` — optional peer dependencies the CLI loads on demand, matching whichever `DATABASE_URL` the consuming app uses
 - No additional runtime dependencies
 
 **Integration points:**
-- Consuming app's Prisma schema (model fragment addition)
+- Consuming app's Drizzle schema (re-exporting `@context-kit/error-tracker/schema/<dialect>` from `db/schema/<dialect>.ts`, then generating and applying the migration)
 - Consuming app's Next.js route structure (two route handlers mounted at `/api/errors`)
 - Consuming app's middleware (rate limiting — package documents the pattern, consumers wire it in)
 - Next.js build config (`productionBrowserSourceMaps: true` for production resolution)

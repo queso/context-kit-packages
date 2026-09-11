@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DatabaseConfig, StackFrame } from "../types.js";
+import { tokenMatches } from "./auth.js";
 import { parseFrames } from "./parse-stack.js";
 import { createStore } from "./store.js";
 
@@ -9,6 +10,13 @@ export interface IngestionConfig extends DatabaseConfig {
 }
 
 const MAX_STACK_LENGTH = 10_000;
+const MAX_MESSAGE_LENGTH = 2_000;
+const MAX_COMPONENT_STACK_LENGTH = 10_000;
+const MAX_URL_LENGTH = 2_048;
+const MAX_USER_AGENT_LENGTH = 1_024;
+
+/** Requests whose body is larger than this are rejected with 413 before parsing. */
+export const MAX_BODY_BYTES = 64 * 1024;
 
 export function computeFingerprint(
   message: string,
@@ -35,15 +43,34 @@ export function createIngestionHandler(config: IngestionConfig) {
     // Auth check
     if (secretHeaderName && secretHeaderToken) {
       const provided = request.headers.get(secretHeaderName);
-      if (provided !== secretHeaderToken) {
+      if (!tokenMatches(provided, secretHeaderToken)) {
         return Response.json({ error: "Unauthorized" }, { status: 401 });
       }
     }
 
-    // Parse body
+    // Reject an oversized body before buffering it, when the caller declares
+    // its size up front.
+    const contentLength = request.headers.get("content-length");
+    if (contentLength && Number(contentLength) > MAX_BODY_BYTES) {
+      return Response.json({ error: "Payload too large" }, { status: 413 });
+    }
+
+    // Read as text first so a body with no (or an understated) content-length
+    // header still gets the same size check before it is parsed.
+    let text: string;
+    try {
+      text = await request.text();
+    } catch {
+      return Response.json({ error: "Invalid JSON" }, { status: 400 });
+    }
+
+    if (Buffer.byteLength(text) > MAX_BODY_BYTES) {
+      return Response.json({ error: "Payload too large" }, { status: 413 });
+    }
+
     let body: Record<string, unknown>;
     try {
-      body = await request.json();
+      body = JSON.parse(text);
     } catch {
       return Response.json({ error: "Invalid JSON" }, { status: 400 });
     }
@@ -57,7 +84,7 @@ export function createIngestionHandler(config: IngestionConfig) {
       return Response.json({ error: "message is required" }, { status: 400 });
     }
 
-    const message = body.message as string;
+    const message = (body.message as string).slice(0, MAX_MESSAGE_LENGTH);
     const rawStack =
       typeof body.stack === "string"
         ? (body.stack as string).slice(0, MAX_STACK_LENGTH)
@@ -65,6 +92,18 @@ export function createIngestionHandler(config: IngestionConfig) {
     const resolvedStack =
       typeof body.resolvedStack === "string"
         ? (body.resolvedStack as string).slice(0, MAX_STACK_LENGTH)
+        : null;
+    const componentStack =
+      typeof body.componentStack === "string"
+        ? body.componentStack.slice(0, MAX_COMPONENT_STACK_LENGTH)
+        : null;
+    const url =
+      typeof body.url === "string"
+        ? body.url.slice(0, MAX_URL_LENGTH)
+        : null;
+    const userAgent =
+      typeof body.userAgent === "string"
+        ? body.userAgent.slice(0, MAX_USER_AGENT_LENGTH)
         : null;
 
     // Fix 2: use resolved frames for fingerprinting when available so the same
@@ -78,13 +117,12 @@ export function createIngestionHandler(config: IngestionConfig) {
     await store.recordOccurrence({
       message,
       stack: rawStack || null,
-      componentStack:
-        typeof body.componentStack === "string" ? body.componentStack : null,
+      componentStack,
       resolvedStack,
       fingerprint,
       environment: process.env.NODE_ENV ?? "development",
-      url: typeof body.url === "string" ? body.url : null,
-      userAgent: typeof body.userAgent === "string" ? body.userAgent : null,
+      url,
+      userAgent,
       now: new Date(),
     });
 

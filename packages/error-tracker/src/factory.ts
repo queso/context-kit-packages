@@ -33,7 +33,7 @@ export function createErrorTracker(options: CreateErrorTrackerOptions = {}) {
     const env = config.environment ?? process.env.NODE_ENV;
     if (env === "production" && !config.token) {
       console.warn(
-        "[error-tracker] Warning: no secret token configured. Set `token` to protect your ingestion endpoint in production."
+        "[error-tracker] Warning: no token configured. The token is a shared credential visible in the client bundle; it damps unsolicited reports but is not a secret. Set `token` here and `secretHeaderToken` on the server so unauthenticated requests are rejected."
       );
     }
 

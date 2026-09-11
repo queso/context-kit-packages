@@ -306,10 +306,40 @@ describe("reportError", () => {
       );
       await new Promise((r) => setTimeout(r, 0));
       const body = JSON.parse(fetchMock.calls[0].init?.body as string);
-      if (body.componentStack) {
-        expect(body.componentStack.length).toBeLessThanOrEqual(10_000);
-      }
+      expect(body.componentStack).toBeDefined();
+      expect(body.componentStack.length).toBeLessThanOrEqual(10_000);
     } finally {
+      fetchMock.restore();
+    }
+  });
+});
+
+describe("reportError — fetch timeout", () => {
+  test("passes a signal that is an unaborted AbortSignal", async () => {
+    const fetchMock = mockGlobalFetch();
+    try {
+      reportError(makeConfig(), makePayload());
+      await new Promise((r) => setTimeout(r, 0));
+      const signal = fetchMock.calls[0].init?.signal;
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect((signal as AbortSignal).aborted).toBe(false);
+    } finally {
+      fetchMock.restore();
+    }
+  });
+
+  test("still reports when AbortSignal.timeout is unavailable", async () => {
+    const fetchMock = mockGlobalFetch();
+    const originalTimeout = AbortSignal.timeout;
+    // biome-ignore lint/suspicious/noExplicitAny: simulating an older environment
+    (AbortSignal as any).timeout = undefined;
+    try {
+      expect(() => reportError(makeConfig(), makePayload())).not.toThrow();
+      await new Promise((r) => setTimeout(r, 0));
+      expect(fetchMock.calls.length).toBe(1);
+      expect(fetchMock.calls[0].init?.signal).toBeUndefined();
+    } finally {
+      AbortSignal.timeout = originalTimeout;
       fetchMock.restore();
     }
   });

@@ -224,6 +224,55 @@ describe("query handler filters", () => {
   });
 });
 
+describe("query handler parameter validation", () => {
+  async function seedDaily(count: number): Promise<void> {
+    await seedClientErrors(
+      Array.from({ length: count }, (_, i) => ({
+        fingerprint: `fp-valid-${String(i).padStart(4, "0")}`,
+        lastSeenAt: new Date(Date.UTC(2026, 0, 1) + i * 86_400_000),
+      }))
+    );
+  }
+
+  test("limit=abc falls back to the default of 50", async () => {
+    await seedDaily(60);
+    const body = await query({ limit: "abc" });
+    expect(body.errors).toHaveLength(50);
+    expect(body.total).toBe(60);
+  });
+
+  test("limit=-1 falls back to the default of 50", async () => {
+    await seedDaily(60);
+    const body = await query({ limit: "-1" });
+    expect(body.errors).toHaveLength(50);
+  });
+
+  test("offset=-5 is clamped to 0", async () => {
+    await seedClientErrors([
+      { fingerprint: "fp-a", lastSeenAt: new Date("2026-03-03T00:00:00Z") },
+      { fingerprint: "fp-b", lastSeenAt: new Date("2026-03-02T00:00:00Z") },
+    ]);
+    const body = await query({ offset: "-5" });
+    expect(fingerprints(body)).toEqual(["fp-a", "fp-b"]);
+  });
+
+  test("offset=abc is clamped to 0", async () => {
+    await seedClientErrors([
+      { fingerprint: "fp-a", lastSeenAt: new Date("2026-03-03T00:00:00Z") },
+    ]);
+    const body = await query({ offset: "abc" });
+    expect(fingerprints(body)).toEqual(["fp-a"]);
+  });
+
+  test("returns 400 when since does not parse to a valid date", async () => {
+    const res = await handler(queryRequest({ since: "not-a-date" }));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: "since must be an ISO 8601 date",
+    });
+  });
+});
+
 describe("query handler pagination", () => {
   /** Rows dated one day apart, newest first once sorted. */
   async function seedDaily(count: number): Promise<void> {

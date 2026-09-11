@@ -20,8 +20,28 @@ import {
   readOnlyClientError,
   resetClientErrors,
   sqliteConfig,
+  stubEnv,
   testDb,
 } from "./helpers";
+
+/**
+ * Replaces `console.warn` for the duration of `fn`, returning everything
+ * written. `captureConsole` in helpers.ts only intercepts log/error, so the
+ * production-warning check (which uses `console.warn`) needs its own stub.
+ */
+async function captureWarnings(fn: () => void): Promise<string> {
+  const lines: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => {
+    lines.push(args.map((arg) => String(arg)).join(" "));
+  };
+  try {
+    fn();
+  } finally {
+    console.warn = original;
+  }
+  return lines.join("\n");
+}
 
 const SECRET_HEADER = "x-error-token";
 const SECRET_TOKEN = "test-secret-token";
@@ -219,6 +239,25 @@ describe("createErrorHandlers source map resolution", () => {
     expect((await readOnlyClientError()).stack).toBe(MINIFIED_STACK);
   });
 
+  test("ignores stale content-length/content-encoding on the rebuilt request and still ingests with the resolved stack", async () => {
+    const { POST } = createErrorHandlers({ ...sqliteConfig(), sourceMapDir });
+
+    const res = await POST(
+      errorRequest(validBody({ stack: MINIFIED_STACK }), {
+        // Wrong on purpose: copying these onto the re-serialized request would
+        // either misreport its size or make the handler try to gunzip plain JSON.
+        "content-length": "1",
+        "content-encoding": "gzip",
+      })
+    );
+    expect(res.status).toBe(200);
+
+    const row = await readOnlyClientError();
+    expect(String(row.resolvedStack)).toContain(
+      "handleClick (../src/components/Dashboard.tsx:42:8)"
+    );
+  });
+
   test("still returns 400 on an unparseable body when resolution is configured", async () => {
     const { POST } = createErrorHandlers({ ...sqliteConfig(), sourceMapDir });
     const res = await POST(
@@ -278,6 +317,44 @@ describe("createErrorHandlers rate limiting", () => {
       expect(res.status).toBe(200);
     }
     expect((await readOnlyClientError()).occurrences).toBe(5);
+  });
+});
+
+describe("createErrorHandlers unauthenticated production warning", () => {
+  test("warns when NODE_ENV is production and no secretHeaderToken is configured", async () => {
+    const restore = stubEnv("NODE_ENV", "production");
+    try {
+      const out = await captureWarnings(() => {
+        createErrorHandlers(sqliteConfig());
+      });
+      expect(out).toContain("no secretHeaderToken configured");
+    } finally {
+      restore();
+    }
+  });
+
+  test("does not warn when a secretHeaderToken is configured", async () => {
+    const restore = stubEnv("NODE_ENV", "production");
+    try {
+      const out = await captureWarnings(() => {
+        createErrorHandlers({ ...sqliteConfig(), secretHeaderToken: "shh" });
+      });
+      expect(out).toBe("");
+    } finally {
+      restore();
+    }
+  });
+
+  test("does not warn outside production", async () => {
+    const restore = stubEnv("NODE_ENV", "test");
+    try {
+      const out = await captureWarnings(() => {
+        createErrorHandlers(sqliteConfig());
+      });
+      expect(out).toBe("");
+    } finally {
+      restore();
+    }
   });
 });
 

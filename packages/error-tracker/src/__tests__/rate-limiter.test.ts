@@ -56,16 +56,44 @@ describe("createRateLimiter", () => {
     expect(() => createRateLimiter()).not.toThrow();
   });
 
-  test("defaults windowMs to 60,000 ms (1 minute)", () => {
-    // Verify default by creating without options and checking behavior is consistent
-    const limiter = createRateLimiter();
-    expect(limiter).toBeDefined();
+  test("defaults windowMs to 60,000 ms (1 minute)", async () => {
+    const originalNow = Date.now;
+    let currentTime = 1_000_000;
+    // biome-ignore lint/suspicious/noExplicitAny: controlling time deterministically
+    (Date as any).now = () => currentTime;
+    try {
+      // Omit windowMs — should default to 60,000ms
+      const limiter = createRateLimiter({ maxRequests: 1 });
+      const ip = "50.50.50.50";
+
+      await limiter.check(makeRequest(ip));
+
+      // Just under the default window: still limited
+      currentTime += 59_999;
+      const stillLimited = await limiter.check(makeRequest(ip));
+      expect(stillLimited?.status).toBe(429);
+
+      // Just past the default window: reset
+      currentTime += 2;
+      const afterWindow = await limiter.check(makeRequest(ip));
+      expect(afterWindow).toBeNull();
+    } finally {
+      Date.now = originalNow;
+    }
   });
 
-  test("defaults maxRequests to 60", () => {
-    // Create with explicit window, omit maxRequests — should default to 60
+  test("defaults maxRequests to 60", async () => {
+    // Omit maxRequests — should default to 60
     const limiter = createRateLimiter({ windowMs: 60_000 });
-    expect(limiter).toBeDefined();
+    const ip = "60.60.60.60";
+
+    for (let i = 0; i < 60; i++) {
+      const result = await limiter.check(makeRequest(ip));
+      expect(result).toBeNull();
+    }
+
+    const blocked = await limiter.check(makeRequest(ip));
+    expect(blocked?.status).toBe(429);
   });
 });
 
@@ -160,30 +188,46 @@ describe("createRateLimiter — IP extraction", () => {
     const fwdIp = "203.0.113.10";
     const realIp = "203.0.113.20";
 
-    const req = makeRequest(null, {
-      "x-forwarded-for": fwdIp,
-      "x-real-ip": realIp,
-    });
+    // Exhaust the quota keyed by the x-forwarded-for IP
+    await limiter.check(
+      makeRequest(null, { "x-forwarded-for": fwdIp, "x-real-ip": realIp })
+    );
 
-    await limiter.check(req);
-    const result = await limiter.check(req);
+    // A later request carrying only the same x-real-ip value must be unaffected —
+    // if the limiter had keyed on x-real-ip, this would be blocked
+    const realIpOnlyResult = await limiter.check(makeRequestWithRealIp(realIp));
+    expect(realIpOnlyResult).toBeNull();
 
-    // The request should be limited because the same x-forwarded-for IP was seen twice
-    expect(result?.status).toBe(429);
+    // A later request carrying only the same x-forwarded-for value should be
+    // blocked, confirming the limiter keyed on x-forwarded-for
+    const fwdIpOnlyResult = await limiter.check(
+      makeRequestWithForwardedFor(fwdIp)
+    );
+    expect(fwdIpOnlyResult?.status).toBe(429);
   });
 
   test("handles x-forwarded-for with multiple IPs (uses first)", async () => {
     const limiter = createRateLimiter({ windowMs: 60_000, maxRequests: 1 });
 
-    const chainedIp = "203.0.113.5, 10.0.0.1, 172.16.0.1";
-    const req1 = makeRequest(null, { "x-forwarded-for": chainedIp });
-    const req2 = makeRequest(null, { "x-forwarded-for": chainedIp });
+    const firstIp = "203.0.113.5";
+    const secondIp = "10.0.0.1";
+    const chainedIp = `${firstIp}, ${secondIp}, 172.16.0.1`;
 
-    await limiter.check(req1);
-    const result = await limiter.check(req2);
+    await limiter.check(makeRequest(null, { "x-forwarded-for": chainedIp }));
 
-    // Same first IP — should be rate-limited
-    expect(result?.status).toBe(429);
+    // A follow-up using only the first IP in the chain should be blocked,
+    // confirming the limiter keyed on the first IP
+    const firstIpOnly = await limiter.check(
+      makeRequestWithForwardedFor(firstIp)
+    );
+    expect(firstIpOnly?.status).toBe(429);
+
+    // A follow-up using only the second IP in the chain should be unaffected,
+    // confirming the limiter did NOT key on it
+    const secondIpOnly = await limiter.check(
+      makeRequestWithForwardedFor(secondIp)
+    );
+    expect(secondIpOnly).toBeNull();
   });
 
   test("handles requests with no IP headers (falls back to default key)", async () => {

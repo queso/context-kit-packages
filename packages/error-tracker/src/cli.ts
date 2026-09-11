@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { pathToFileURL } from "node:url";
 import type { ErrorTrackerDialect } from "./types.js";
 import { connectFromDatabaseUrl } from "./server/connect.js";
 import { createStore, type ErrorStore } from "./server/store.js";
@@ -64,14 +65,29 @@ async function openSession(options: DatabaseOptions): Promise<Session | null> {
 }
 
 export async function runTail(options: TailOptions): Promise<void> {
+  // Validate before touching the database so a bad option never opens a
+  // connection it is about to throw away; programmatic callers get the same
+  // protection the CLI arg parser gives `tail`.
+  const limit = options.limit ?? 20;
+  if (!Number.isFinite(limit) || limit < 1) {
+    console.error(`Error: ${LIMIT_USAGE_ERROR}`);
+    printUsage();
+    process.exit(1);
+    return;
+  }
+  if (options.since !== undefined && Number.isNaN(options.since.getTime())) {
+    console.error(`Error: ${SINCE_USAGE_ERROR}`);
+    printUsage();
+    process.exit(1);
+    return;
+  }
+
   const session = await openSession(options);
 
   if (!session) {
     process.exit(1);
     return;
   }
-
-  const limit = options.limit ?? 20;
 
   try {
     const { errors } = await session.store.list({
@@ -162,27 +178,85 @@ function padRight(str: string, width: number): string {
     : str + " ".repeat(width - str.length);
 }
 
+function printUsage(): void {
+  console.error("Usage: error-tracker <tail|resolve> [options]");
+  console.error("  tail     --limit N --env ENV --since DATE");
+  console.error("  resolve  <fingerprint>");
+}
+
+const LIMIT_USAGE_ERROR = "--limit expects a positive integer";
+const ENV_USAGE_ERROR = "--env expects a value";
+const SINCE_USAGE_ERROR = "--since expects a valid date";
+
+/** Thrown by `parseTailArgs` on any invalid or missing flag value. */
+export class CliUsageError extends Error {}
+
+export interface TailArgs {
+  limit: number;
+  env?: string;
+  since?: Date;
+}
+
+/**
+ * Parses `tail` subcommand flags. A flag's value must exist and must not
+ * itself look like another flag (`--since --env production` should not treat
+ * `--env` as the date), so this stops short of the next `--...` token and
+ * reports it as missing.
+ */
+export function parseTailArgs(args: string[]): TailArgs {
+  let limit = 20;
+  let env: string | undefined;
+  let since: Date | undefined;
+
+  for (let i = 0; i < args.length; i++) {
+    const flag = args[i];
+    const value = args[i + 1];
+    const hasValue = value !== undefined && !value.startsWith("--");
+
+    if (flag === "--limit") {
+      if (!hasValue) throw new CliUsageError(LIMIT_USAGE_ERROR);
+      const parsed = Number(value);
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        throw new CliUsageError(LIMIT_USAGE_ERROR);
+      }
+      limit = parsed;
+      i++;
+    } else if (flag === "--env") {
+      if (!hasValue) throw new CliUsageError(ENV_USAGE_ERROR);
+      env = value;
+      i++;
+    } else if (flag === "--since") {
+      if (!hasValue) throw new CliUsageError(SINCE_USAGE_ERROR);
+      const parsed = new Date(value);
+      if (Number.isNaN(parsed.getTime())) {
+        throw new CliUsageError(SINCE_USAGE_ERROR);
+      }
+      since = parsed;
+      i++;
+    }
+  }
+
+  return { limit, env, since };
+}
+
 // CLI entry point
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const command = args[0];
 
   if (command === "tail") {
-    let limit = 20;
-    let env: string | undefined;
-    let since: Date | undefined;
-
-    for (let i = 1; i < args.length; i++) {
-      if (args[i] === "--limit" && args[i + 1]) {
-        limit = parseInt(args[++i], 10);
-      } else if (args[i] === "--env" && args[i + 1]) {
-        env = args[++i];
-      } else if (args[i] === "--since" && args[i + 1]) {
-        since = new Date(args[++i]);
-      }
+    let parsed: TailArgs;
+    try {
+      parsed = parseTailArgs(args.slice(1));
+    } catch (err) {
+      if (!(err instanceof CliUsageError)) throw err;
+      console.error(`Error: ${err.message}`);
+      printUsage();
+      process.exit(1);
+      return;
     }
 
-    await runTail({ limit, env, since, exitOnComplete: true });
+    await runTail({ ...parsed, exitOnComplete: true });
   } else if (command === "resolve") {
     const fingerprint = args[1];
     if (!fingerprint) {
@@ -191,15 +265,15 @@ async function main(): Promise<void> {
     }
     await runResolve({ fingerprint, exitOnComplete: true });
   } else {
-    console.error("Usage: error-tracker <tail|resolve> [options]");
-    console.error("  tail     --limit N --env ENV --since DATE");
-    console.error("  resolve  <fingerprint>");
+    printUsage();
     process.exit(1);
   }
 }
 
-// Only run main when executed directly as a script
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Only run main when executed directly as a script. Comparing file URLs
+// (rather than reconstructing one with a `file://` prefix) keeps this
+// working on Windows, where argv[1] is a POSIX-incompatible drive path.
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   main().catch((err) => {
     console.error(err);
     process.exit(1);

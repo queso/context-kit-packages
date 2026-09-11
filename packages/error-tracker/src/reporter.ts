@@ -2,6 +2,7 @@ import type { ErrorPayload, ErrorTrackerConfig } from "./types.js";
 
 const MAX_STACK_LENGTH = 10_000;
 const LOOP_GUARD = "@context-kit/error-tracker";
+const REPORT_TIMEOUT_MS = 5_000;
 
 function truncate(str: string): string {
   return str.length > MAX_STACK_LENGTH ? str.slice(0, MAX_STACK_LENGTH) : str;
@@ -40,12 +41,23 @@ export function reportError(
     headers[config.secretHeaderName] = config.token;
   }
 
-  // Fire-and-forget: intentionally not awaited, errors are swallowed
-  fetch(config.endpoint, {
+  const init: RequestInit = {
     method: "POST",
     headers,
     body: JSON.stringify(body),
-  }).catch(() => {
+  };
+
+  // Older browsers lack AbortSignal.timeout; skip the signal there rather
+  // than throw, since the reporter must never throw.
+  if (
+    typeof AbortSignal !== "undefined" &&
+    typeof AbortSignal.timeout === "function"
+  ) {
+    init.signal = AbortSignal.timeout(REPORT_TIMEOUT_MS);
+  }
+
+  // Fire-and-forget: intentionally not awaited, errors are swallowed
+  fetch(config.endpoint, init).catch(() => {
     // Swallow errors — error reporter must never throw
   });
 }

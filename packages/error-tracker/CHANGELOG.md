@@ -22,6 +22,13 @@ First release. Client-side error tracking for Next.js App Router apps, stored in
 - `npx error-tracker tail [--limit N] [--env ENV] [--since DATE]` and `npx error-tracker resolve <fingerprint>`. The CLI reads `DATABASE_URL` and loads `@libsql/client` for `sqlite:` URLs or `postgres` for `postgres://` and `postgresql://` URLs. `resolve` exits 1 on an unknown or already-resolved fingerprint
 - `runTail` and `runResolve` exported from the `@context-kit/error-tracker/cli` entry point, for programmatic use with `{ db, dialect }`
 - `ErrorTrackerDialect` and `DatabaseConfig` type exports
+- Ingestion rejects request bodies over 64 KB with a 413 response, checked against the `content-length` header and again after the body is read
+- Stored fields are capped in length rather than rejected: `message` at 2,000 characters, `stack` and `resolved_stack` at 10,000, `component_stack` at 10,000, `url` at 2,048, `user_agent` at 1,024
+- Header token comparison is constant-time, comparing SHA-256 digests with `timingSafeEqual`
+- Query endpoint `limit` falls back to 50 when missing, non-numeric, or below 1, and is capped at 200; `offset` falls back to 0 when non-numeric or negative; an invalid `since` value returns 400
+- CLI validates `--limit` as a positive integer and `--since` as a valid date; a flag missing its value, or followed by another flag, is a usage error that exits 1
+- The client reporter's fetch is bounded by a 5 second timeout via `AbortSignal.timeout` where the browser supports it
+- Source map resolution reads maps asynchronously, dedups concurrent loads of the same file so simultaneous errors share one read, evicts its cache with true LRU (20 entries), validates chunk filenames against `[\w.-]+\.m?js` before touching the filesystem, and remembers a missing map so it is not reprobed on later reports
 
 ### Compared to the unreleased Prisma draft
 
