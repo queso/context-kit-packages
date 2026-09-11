@@ -307,10 +307,44 @@ describe("createRateLimiter — maxEntries cap", () => {
   });
 
   test("defaults maxEntries to 10,000", async () => {
-    // No option provided — should not throw and should behave normally.
-    const limiter = createRateLimiter({ windowMs: 60_000, maxRequests: 5 });
-    const result = await limiter.check(makeRequestWithForwardedFor("30.30.30.30"));
-    expect(result).toBeNull();
+    // A single request passes for any maxEntries >= 1, so that alone does not
+    // pin the default. Instead, fill the store to exactly 10,000 distinct
+    // IPs (each already at its limit, via maxRequests: 1), then show the
+    // 10,001st distinct IP evicts the first: the first is admitted again
+    // (its old entry is gone) while the second, still in the store, stays
+    // limited. That behavior only appears once the store has actually held
+    // 10,000 entries, so it would fail were the default larger (e.g. 20,000).
+    const limiter = createRateLimiter({ windowMs: 60_000, maxRequests: 1 });
+
+    for (let i = 0; i < 10_000; i++) {
+      const result = await limiter.check(
+        makeRequestWithForwardedFor(`10.${Math.floor(i / 65_536)}.${Math.floor(i / 256) % 256}.${i % 256}`)
+      );
+      expect(result).toBeNull();
+    }
+
+    const firstIp = "10.0.0.0";
+    const secondIp = "10.0.0.1";
+
+    // A brand-new, 10,001st distinct IP forces an eviction.
+    const overflow = await limiter.check(makeRequestWithForwardedFor("20.20.20.20"));
+    expect(overflow).toBeNull();
+
+    // Check the second IP first: it is still in the store, so this read
+    // doesn't insert a new key and can't trigger another eviction. Checking
+    // the first IP first would: it is gone, so re-checking it inserts a new
+    // key while the store is still at capacity, evicting the second IP too
+    // and hiding the very thing this test is pinning down.
+    //
+    // The second IP was never evicted, so its original entry (already at
+    // maxRequests: 1) is still limiting it.
+    const secondStillLimited = await limiter.check(makeRequestWithForwardedFor(secondIp));
+    expect(secondStillLimited?.status).toBe(429);
+
+    // The first IP inserted was evicted to make room, so it is treated as new
+    // again rather than being rejected on its (already-used) old quota.
+    const firstAgain = await limiter.check(makeRequestWithForwardedFor(firstIp));
+    expect(firstAgain).toBeNull();
   });
 });
 

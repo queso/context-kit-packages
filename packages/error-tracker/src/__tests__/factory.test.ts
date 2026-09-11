@@ -283,20 +283,16 @@ describe("src/index.ts barrel exports", () => {
     expect(typeof mod.default).toBe("function");
   });
 
-  test("ErrorTrackerConfig type is re-exported (module loads without error)", async () => {
-    // Type exports are erased at runtime; verify module loads cleanly
+  test("the module's runtime export keys are exactly the expected set", async () => {
+    // `ErrorTrackerConfig`, `ErrorPayload` and `StackFrame` are type-only
+    // exports: erased at compile time, so there is nothing of them left to
+    // assert on at runtime (the compile check below stands in for those).
+    // What *can* be checked here is the full set of runtime exports, so an
+    // export silently added or dropped from src/index.ts fails this test.
     const mod = await import("../index");
-    expect(mod).toBeDefined();
-  });
-
-  test("ErrorPayload type is accessible (module loads without error)", async () => {
-    const mod = await import("../index");
-    expect(mod).toBeDefined();
-  });
-
-  test("StackFrame type is accessible (module loads without error)", async () => {
-    const mod = await import("../index");
-    expect(mod).toBeDefined();
+    expect(Object.keys(mod).sort()).toEqual(
+      ["ErrorBoundary", "createErrorTracker", "default"].sort()
+    );
   });
 });
 

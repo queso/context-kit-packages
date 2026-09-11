@@ -402,6 +402,26 @@ describe("runResolve", () => {
     expect((await findClientError("fp-already"))?.resolvedAt).toEqual(resolvedAt);
   });
 
+  test("rejects with the store's own error instead of killing the process", async () => {
+    // Stands in for a Drizzle instance whose update fails (a broken
+    // connection, a missing table, a constraint). A programmatic caller of
+    // `runResolve` must get a catchable rejection, not a killed process.
+    const boom = new Error("store exploded");
+    const failingDb = {
+      update: () => ({
+        set: () => ({
+          where: () => ({
+            returning: () => Promise.reject(boom),
+          }),
+        }),
+      }),
+    };
+
+    await expect(
+      runResolve({ db: failingDb, dialect: DIALECT, fingerprint: "fp-anything" })
+    ).rejects.toBe(boom);
+  });
+
   test("exits 0 when exitOnComplete is set", async () => {
     await seedClientError({ fingerprint: "fp-exit" });
     const { codes } = await runCli(() =>
@@ -604,6 +624,25 @@ describe("runMain", () => {
       expect(out).toContain(
         "Failed to resolve error: no unresolved error with fingerprint fp-missing"
       );
+    } finally {
+      restore();
+    }
+  });
+
+  test("prints the `Failed to resolve error:` prefix and exits 1 when the store itself throws", async () => {
+    // Point DATABASE_URL at a fresh sqlite file with the schema never
+    // pushed, so `UPDATE client_error` fails on a missing table: an
+    // unexpected store error rather than one of the three typed CLI errors.
+    const file = join(workDir, "runmain-resolve-broken-store.db");
+    const restore = stubEnv("DATABASE_URL", `sqlite:${file}`);
+    try {
+      const { out, codes } = await runCli(() =>
+        runMain(["node", "error-tracker", "resolve", "fp-anything"])
+      );
+      expect(codes).toEqual([1]);
+      expect(out).toContain("Failed to resolve error:");
+      // Distinguish this from the NotFoundError-prefixed message above.
+      expect(out).not.toContain("no unresolved error with fingerprint");
     } finally {
       restore();
     }

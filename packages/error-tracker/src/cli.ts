@@ -129,29 +129,29 @@ export async function runTail(options: TailOptions): Promise<void> {
 export async function runResolve(options: ResolveOptions): Promise<void> {
   const session = await openSession(options);
 
-  let updated: number;
   try {
-    updated = await session.store.resolve(options.fingerprint);
-  } catch (err) {
+    const updated = await session.store.resolve(options.fingerprint);
+
+    // The store only touches rows that are still open, so resolving an unknown
+    // or already-resolved fingerprint changes nothing and is reported as
+    // failure. Thrown, not printed-and-exited, so a library consumer gets a
+    // catchable rejection; runCommand adds the `Failed to resolve error:`
+    // prefix. A store error (thrown by `session.store.resolve` itself) is
+    // left to propagate the same way, rather than being caught here and
+    // turned into a process.exit: that killed a programmatic caller's
+    // process on any store error instead of giving it a catchable rejection.
+    if (updated === 0) {
+      throw new NotFoundError(
+        `no unresolved error with fingerprint ${options.fingerprint}`
+      );
+    }
+
+    console.log(`Resolved error with fingerprint: ${options.fingerprint}`);
+  } finally {
+    // Close the session on every path, success, NotFoundError, or a store
+    // error, without swallowing whatever is propagating.
     await session.close();
-    console.error(`Failed to resolve error: ${(err as Error).message}`);
-    process.exit(1);
-    return;
   }
-
-  await session.close();
-
-  // The store only touches rows that are still open, so resolving an unknown
-  // or already-resolved fingerprint changes nothing and is reported as
-  // failure. Thrown, not printed-and-exited, so a library consumer gets a
-  // catchable rejection; main() adds the `Failed to resolve error:` prefix.
-  if (updated === 0) {
-    throw new NotFoundError(
-      `no unresolved error with fingerprint ${options.fingerprint}`
-    );
-  }
-
-  console.log(`Resolved error with fingerprint: ${options.fingerprint}`);
 
   if (options.exitOnComplete) {
     process.exit(0);
@@ -243,10 +243,20 @@ export function parseTailArgs(args: string[]): TailArgs {
 /**
  * Runs `fn` (a `tail` or `resolve` invocation) and turns the errors
  * `runTail`/`runResolve`/`parseTailArgs` throw for programmatic callers back
- * into the binary's original printed messages and `exit(1)`. Any other error
- * is rethrown so the top-level `main().catch(...)` catch-all handles it.
+ * into the binary's original printed messages and `exit(1)`.
+ *
+ * `unexpectedPrefix`, when given, is used for an error that is none of the
+ * three typed classes below (e.g. a store failure): it is printed as
+ * `${unexpectedPrefix}: ${message}` and exits 1, instead of being rethrown.
+ * `resolve` passes `"Failed to resolve error"` so an unexpected store error
+ * keeps the binary's original prefixed message; `tail` passes nothing, so its
+ * unexpected errors keep reaching the top-level `main().catch(...)`
+ * catch-all.
  */
-async function runCommand(fn: () => Promise<void>): Promise<void> {
+async function runCommand(
+  fn: () => Promise<void>,
+  unexpectedPrefix?: string
+): Promise<void> {
   try {
     await fn();
   } catch (err) {
@@ -257,6 +267,8 @@ async function runCommand(fn: () => Promise<void>): Promise<void> {
       printUsage();
     } else if (err instanceof CliConfigError) {
       console.error(`Error: ${err.message}`);
+    } else if (unexpectedPrefix) {
+      console.error(`${unexpectedPrefix}: ${(err as Error).message}`);
     } else {
       throw err;
     }
@@ -285,7 +297,10 @@ export async function runMain(argv: string[]): Promise<void> {
       process.exit(1);
       return;
     }
-    await runCommand(() => runResolve({ fingerprint, exitOnComplete: true }));
+    await runCommand(
+      () => runResolve({ fingerprint, exitOnComplete: true }),
+      "Failed to resolve error"
+    );
   } else {
     printUsage();
     process.exit(1);
