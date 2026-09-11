@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { runResolve } from "../cli";
@@ -42,20 +42,28 @@ describe("postgres dialect", () => {
       client = postgres(url, { max: 1 });
       const db = drizzle(client, { schema });
 
-      const { pushSchema } = await import("drizzle-kit/api");
-      // drizzle-kit's pushSchema reads `result.rows` off every `execute()`, but
-      // postgres-js returns the rows array directly. Hand it a shim that puts
-      // the rows back where it looks for them.
-      const pushTarget = {
-        execute: async (query: unknown) => ({
-          rows: await db.execute(query as never),
-        }),
-      };
-      const { apply } = await pushSchema(
-        schema,
-        pushTarget as unknown as Parameters<typeof pushSchema>[1]
+      // Create only this package's table. drizzle-kit's pushSchema diffs the
+      // whole database against the schema it is given, so with another
+      // package's tables present (the auth tests run first in CI's Postgres
+      // job) it asks whether to drop them and fails without a TTY. Generating
+      // the migration from an empty snapshot yields just the CREATE statements
+      // for `client_error`; IF NOT EXISTS keeps reruns idempotent.
+      const { generateDrizzleJson, generateMigration } = await import(
+        "drizzle-kit/api"
       );
-      await apply();
+      const statements = await generateMigration(
+        generateDrizzleJson({}),
+        generateDrizzleJson(schema)
+      );
+      for (const statement of statements) {
+        await db.execute(
+          sql.raw(
+            statement
+              .replace(/^CREATE TABLE /, "CREATE TABLE IF NOT EXISTS ")
+              .replace(/^CREATE INDEX /, "CREATE INDEX IF NOT EXISTS ")
+          )
+        );
+      }
 
       // A run-specific message keeps this test's rows apart from anything else
       // in a shared database.
