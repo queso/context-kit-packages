@@ -41,7 +41,7 @@ jobs:
         run: bun run test
 
   test-postgres:
-    name: Auth tests (Postgres)
+    name: Package tests (Postgres)
     runs-on: ubuntu-latest
 
     services:
@@ -78,4 +78,12 @@ jobs:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
           # Fail (rather than skip) the Postgres round-trip if DATABASE_URL is ever
           # missing here, so this job cannot pass vacuously.
+          REQUIRE_POSTGRES: "1"
+
+      - name: Test error-tracker against Postgres
+        run: bun --filter @context-kit/error-tracker test
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+          # Same reason as above: a missing DATABASE_URL must fail the job, not
+          # skip the Postgres round-trip.
           REQUIRE_POSTGRES: "1"
