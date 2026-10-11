@@ -4,6 +4,14 @@ All notable changes to `@context-kit/error-tracker` will be documented in this f
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- Reports sent while the page unloads or navigates are no longer dropped: the reporter now sends with `fetch(..., { keepalive: true })`
+- If the browser rejects the keepalive request (in-flight keepalive bodies are limited to 64 KB in total), the reporter retries once without `keepalive`. Timeouts are not retried
+- The reporter truncates `message` to 2,000 characters before sending, matching the server's stored cap, so a long `console.error` message cannot push a report past the 64 KB body limit
+
 ## [0.1.0] - 2026-09-11
 
 First release. Client-side error tracking for Next.js App Router apps, stored in the app's own database through its Drizzle instance.

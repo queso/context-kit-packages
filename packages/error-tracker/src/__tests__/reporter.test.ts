@@ -376,3 +376,141 @@ describe("loop prevention", () => {
     }
   });
 });
+
+describe("reportError — delivery during page unload", () => {
+  function mockFetchSequence(
+    results: Array<() => Promise<Response>>
+  ): { calls: FetchCall[]; restore: () => void } {
+    const calls: FetchCall[] = [];
+    const originalFetch = globalThis.fetch;
+    // biome-ignore lint/suspicious/noExplicitAny: test mock
+    (globalThis as any).fetch = (url: string, init?: RequestInit) => {
+      calls.push({ url, init });
+      const next = results[calls.length - 1] ?? results[results.length - 1];
+      return next();
+    };
+    return {
+      calls,
+      restore: () => {
+        // biome-ignore lint/suspicious/noExplicitAny: test mock
+        (globalThis as any).fetch = originalFetch;
+      },
+    };
+  }
+
+  const ok = () =>
+    Promise.resolve(new Response(JSON.stringify({ success: true })));
+
+  test("sends the request with keepalive so it survives navigation and tab close", async () => {
+    const fetchMock = mockGlobalFetch();
+    try {
+      reportError(makeConfig(), makePayload());
+      await new Promise((r) => setTimeout(r, 0));
+      expect(fetchMock.calls[0].init?.keepalive).toBe(true);
+    } finally {
+      fetchMock.restore();
+    }
+  });
+
+  test("retries once without keepalive when the keepalive request is rejected", async () => {
+    const fetchMock = mockFetchSequence([
+      () => Promise.reject(new TypeError("keepalive quota exceeded")),
+      ok,
+    ]);
+    try {
+      reportError(makeConfig(), makePayload({ message: "retry me" }));
+      await new Promise((r) => setTimeout(r, 10));
+      expect(fetchMock.calls.length).toBe(2);
+      expect(fetchMock.calls[1].init?.keepalive).toBeUndefined();
+      expect(fetchMock.calls[1].url).toBe(fetchMock.calls[0].url);
+      expect(fetchMock.calls[1].init?.body).toBe(fetchMock.calls[0].init?.body);
+      expect(fetchMock.calls[1].init?.headers).toEqual(
+        fetchMock.calls[0].init?.headers
+      );
+    } finally {
+      fetchMock.restore();
+    }
+  });
+
+  test("the retry gets its own timeout signal", async () => {
+    const fetchMock = mockFetchSequence([
+      () => Promise.reject(new TypeError("keepalive quota exceeded")),
+      ok,
+    ]);
+    try {
+      reportError(makeConfig(), makePayload());
+      await new Promise((r) => setTimeout(r, 10));
+      const retrySignal = fetchMock.calls[1].init?.signal;
+      expect(retrySignal).toBeInstanceOf(AbortSignal);
+      expect(retrySignal).not.toBe(fetchMock.calls[0].init?.signal);
+    } finally {
+      fetchMock.restore();
+    }
+  });
+
+  test("does not retry when the first request timed out", async () => {
+    const fetchMock = mockFetchSequence([
+      () =>
+        Promise.reject(new DOMException("signal timed out", "TimeoutError")),
+      ok,
+    ]);
+    try {
+      reportError(makeConfig(), makePayload());
+      await new Promise((r) => setTimeout(r, 10));
+      expect(fetchMock.calls.length).toBe(1);
+    } finally {
+      fetchMock.restore();
+    }
+  });
+
+  test("does not retry when the server answers with an error status", async () => {
+    const fetchMock = mockFetchSequence([
+      () => Promise.resolve(new Response("{}", { status: 500 })),
+      ok,
+    ]);
+    try {
+      reportError(makeConfig(), makePayload());
+      await new Promise((r) => setTimeout(r, 10));
+      expect(fetchMock.calls.length).toBe(1);
+    } finally {
+      fetchMock.restore();
+    }
+  });
+
+  test("retries at most once and swallows a second rejection", async () => {
+    const fetchMock = mockFetchSequence([
+      () => Promise.reject(new TypeError("Failed to fetch")),
+    ]);
+    try {
+      expect(() => reportError(makeConfig(), makePayload())).not.toThrow();
+      await new Promise((r) => setTimeout(r, 10));
+      expect(fetchMock.calls.length).toBe(2);
+    } finally {
+      fetchMock.restore();
+    }
+  });
+
+  test("truncates message strings longer than 2,000 characters", async () => {
+    const fetchMock = mockGlobalFetch();
+    try {
+      reportError(makeConfig(), makePayload({ message: "x".repeat(50_000) }));
+      await new Promise((r) => setTimeout(r, 0));
+      const body = JSON.parse(fetchMock.calls[0].init?.body as string);
+      expect(body.message).toBe("x".repeat(2_000));
+    } finally {
+      fetchMock.restore();
+    }
+  });
+
+  test("leaves a message of 2,000 characters or fewer unchanged", async () => {
+    const fetchMock = mockGlobalFetch();
+    try {
+      reportError(makeConfig(), makePayload({ message: "y".repeat(2_000) }));
+      await new Promise((r) => setTimeout(r, 0));
+      const body = JSON.parse(fetchMock.calls[0].init?.body as string);
+      expect(body.message).toBe("y".repeat(2_000));
+    } finally {
+      fetchMock.restore();
+    }
+  });
+});

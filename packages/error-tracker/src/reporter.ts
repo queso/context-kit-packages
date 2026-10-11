@@ -1,11 +1,21 @@
 import type { ErrorPayload, ErrorTrackerConfig } from "./types.js";
 
 const MAX_STACK_LENGTH = 10_000;
+// Matches the server's stored cap. Without it a long console.error message
+// could push the body past the 64 KB keepalive quota and the server's limit.
+const MAX_MESSAGE_LENGTH = 2_000;
 const LOOP_GUARD = "@context-kit/error-tracker";
 const REPORT_TIMEOUT_MS = 5_000;
 
-function truncate(str: string): string {
-  return str.length > MAX_STACK_LENGTH ? str.slice(0, MAX_STACK_LENGTH) : str;
+function truncate(str: string, max = MAX_STACK_LENGTH): string {
+  return str.length > max ? str.slice(0, max) : str;
+}
+
+function isTimeout(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    (err.name === "TimeoutError" || err.name === "AbortError")
+  );
 }
 
 /**
@@ -26,7 +36,7 @@ export function reportError(
   }
 
   const body: Record<string, unknown> = {
-    message: data.message,
+    message: truncate(data.message, MAX_MESSAGE_LENGTH),
     url: data.url,
     userAgent: data.userAgent,
     environment: data.environment,
@@ -49,23 +59,37 @@ export function reportError(
     headers[config.secretHeaderName] = config.token;
   }
 
-  const init: RequestInit = {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-  };
-
   // Older browsers lack AbortSignal.timeout; skip the signal there rather
   // than throw, since the reporter must never throw.
-  if (
-    typeof AbortSignal !== "undefined" &&
-    typeof AbortSignal.timeout === "function"
-  ) {
-    init.signal = AbortSignal.timeout(REPORT_TIMEOUT_MS);
-  }
+  const makeInit = (keepalive: boolean): RequestInit => {
+    const init: RequestInit = {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    };
+    // keepalive lets the request finish after the page unloads or navigates,
+    // which is when errors thrown during navigation or tab close are sent.
+    if (keepalive) {
+      init.keepalive = true;
+    }
+    if (
+      typeof AbortSignal !== "undefined" &&
+      typeof AbortSignal.timeout === "function"
+    ) {
+      init.signal = AbortSignal.timeout(REPORT_TIMEOUT_MS);
+    }
+    return init;
+  };
 
-  // Fire-and-forget: intentionally not awaited, errors are swallowed
-  fetch(config.endpoint, init).catch(() => {
-    // Swallow errors — error reporter must never throw
+  // Fire-and-forget: intentionally not awaited, errors are swallowed.
+  // Browsers reject a keepalive request when in-flight keepalive bodies would
+  // exceed 64 KB in total, so a rejection is retried once as an ordinary
+  // request, which still gets through while the page is open. A timeout is
+  // not retried, since a second request would wait on the same slow endpoint.
+  fetch(config.endpoint, makeInit(true)).catch((err: unknown) => {
+    if (isTimeout(err)) return;
+    fetch(config.endpoint, makeInit(false)).catch(() => {
+      // Swallow errors — error reporter must never throw
+    });
   });
 }
