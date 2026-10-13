@@ -39,7 +39,7 @@ All error sources funnel into `reportError()`, which:
 1. **Loop prevention** - checks if the error stack contains `@context-kit/error-tracker` (the package itself) and skips reporting to prevent infinite loops
 2. **Payload construction** - builds a JSON body with message, stack, componentStack, URL, userAgent, environment, and timestamp
 3. **Auth header** - if `token` and `secretHeaderName` are configured, attaches the token as a request header
-4. **Fire-and-forget** - calls `fetch()` without `await`; any network error is caught and swallowed
+4. **Fire-and-forget** - calls `fetch()` with `keepalive: true` and without `await`, so the request finishes even if the page unloads or navigates. Browsers reject a keepalive request when in-flight keepalive bodies would exceed 64 KB in total; any rejection other than a timeout is retried once without `keepalive`. A second failure is caught and swallowed
 
 ### Error Sources
 
@@ -52,7 +52,7 @@ All error sources funnel into `reportError()`, which:
 
 ### Stack Truncation
 
-Both `reporter.ts` (client-side) and `ingestion.ts` (server-side) truncate stack traces at 10,000 characters to prevent oversized payloads and database bloat.
+Both `reporter.ts` (client-side) and `ingestion.ts` (server-side) truncate `stack` and `componentStack` at 10,000 characters, `message` at 2,000, `url` at 2,048, `userAgent` at 1,024 and `environment` at 64 to prevent oversized payloads and database bloat. The caps count characters, not bytes, so the reporter also measures the UTF-8 encoded body and, if it exceeds 64 KB, drops `componentStack` and then `stack`. A report therefore never exceeds the server's 64 KB body limit. The browser's 64 KB keepalive quota covers all in-flight keepalive requests together, so no per-report cap can guarantee it; the retry without `keepalive` covers that case.
 
 ## Server Module
 
