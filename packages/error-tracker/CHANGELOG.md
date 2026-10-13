@@ -8,9 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Reports sent while the page unloads or navigates are no longer dropped: the reporter now sends with `fetch(..., { keepalive: true })`
+- Reports sent while the page unloads or navigates now get a chance to arrive: the reporter sends with `fetch(..., { keepalive: true })`, which lets the request continue after the page is gone. Delivery is still best-effort
 - If the browser rejects the keepalive request (in-flight keepalive bodies are limited to 64 KB in total), the reporter retries once without `keepalive`. Timeouts are not retried
-- The reporter truncates `message` to 2,000 characters before sending, matching the server's stored cap, so a long `console.error` message cannot push a report past the 64 KB body limit
+- The reporter truncates `message` (2,000 characters), `url` (2,048), `userAgent` (1,024) and `environment` (64) before sending, matching the server's stored caps. If the encoded body still exceeds 64 KB, which multi-byte or escaped characters can cause, it drops `componentStack` and then `stack`, so a report never hits the server's 64 KB body limit
 
 ## [0.1.0] - 2026-09-11
 

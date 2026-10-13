@@ -463,6 +463,98 @@ describe("reportError — delivery during page unload", () => {
     }
   });
 
+  test("does not retry when the first request was aborted", async () => {
+    const fetchMock = mockFetchSequence([
+      () => Promise.reject(new DOMException("signal aborted", "AbortError")),
+      ok,
+    ]);
+    try {
+      reportError(makeConfig(), makePayload());
+      await new Promise((r) => setTimeout(r, 10));
+      expect(fetchMock.calls.length).toBe(1);
+    } finally {
+      fetchMock.restore();
+    }
+  });
+
+  test("truncates url, userAgent and environment to the server caps", () => {
+    const fetchMock = mockGlobalFetch();
+    try {
+      reportError(
+        makeConfig(),
+        makePayload({
+          url: `https://example.com/${"a".repeat(5_000)}`,
+          userAgent: "u".repeat(5_000),
+          environment: "e".repeat(500),
+        })
+      );
+      const sent = JSON.parse(fetchMock.calls[0].init?.body as string);
+      expect(sent.url.length).toBe(2_048);
+      expect(sent.userAgent.length).toBe(1_024);
+      expect(sent.environment.length).toBe(64);
+    } finally {
+      fetchMock.restore();
+    }
+  });
+
+  test("keeps the body under 64 KB when stacks expand during JSON escaping", () => {
+    const fetchMock = mockGlobalFetch();
+    try {
+      reportError(
+        makeConfig(),
+        makePayload({
+          stack: "\u0001".repeat(10_000),
+          componentStack: "\u0001".repeat(10_000),
+        })
+      );
+      const body = fetchMock.calls[0].init?.body as string;
+      expect(new TextEncoder().encode(body).length).toBeLessThanOrEqual(
+        64 * 1024
+      );
+      const sent = JSON.parse(body);
+      // componentStack is dropped before stack
+      expect(sent.componentStack).toBeUndefined();
+      expect(sent.stack).toBe("\u0001".repeat(10_000));
+    } finally {
+      fetchMock.restore();
+    }
+  });
+
+  test("drops the stack too when it alone would exceed 64 KB", () => {
+    const fetchMock = mockGlobalFetch();
+    try {
+      reportError(
+        makeConfig(),
+        makePayload({
+          message: "\u0001".repeat(2_000),
+          stack: "\u0001".repeat(10_000),
+          componentStack: "\u0001".repeat(10_000),
+          url: "\u0001".repeat(2_048),
+          userAgent: "\u0001".repeat(1_024),
+          environment: "\u0001".repeat(64),
+        })
+      );
+      const body = fetchMock.calls[0].init?.body as string;
+      expect(new TextEncoder().encode(body).length).toBeLessThanOrEqual(
+        64 * 1024
+      );
+    } finally {
+      fetchMock.restore();
+    }
+  });
+
+  test("sends a small body unchanged", () => {
+    const fetchMock = mockGlobalFetch();
+    try {
+      reportError(makeConfig(), makePayload({ componentStack: "at Foo" }));
+      const sent = JSON.parse(fetchMock.calls[0].init?.body as string);
+      expect(sent.componentStack).toBe("at Foo");
+      expect(sent.stack).toContain("TypeError");
+    } finally {
+      fetchMock.restore();
+    }
+  });
+
   test("does not retry when the server answers with an error status", async () => {
     const fetchMock = mockFetchSequence([
       () => Promise.resolve(new Response("{}", { status: 500 })),

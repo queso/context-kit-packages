@@ -1,9 +1,16 @@
 import type { ErrorPayload, ErrorTrackerConfig } from "./types.js";
 
 const MAX_STACK_LENGTH = 10_000;
-// Matches the server's stored cap. Without it a long console.error message
-// could push the body past the 64 KB keepalive quota and the server's limit.
+// These match the server's stored caps. Together with the byte-size guard
+// below they keep every report body under the server's 64 KB limit, so the
+// server never rejects a report for size. The keepalive quota is different:
+// it applies to all in-flight keepalive bodies in total, so a cap on one
+// report cannot guarantee it. The retry without keepalive covers that case.
 const MAX_MESSAGE_LENGTH = 2_000;
+const MAX_URL_LENGTH = 2_048;
+const MAX_USER_AGENT_LENGTH = 1_024;
+const MAX_ENVIRONMENT_LENGTH = 64;
+const MAX_BODY_BYTES = 64 * 1024;
 const LOOP_GUARD = "@context-kit/error-tracker";
 const REPORT_TIMEOUT_MS = 5_000;
 
@@ -37,9 +44,9 @@ export function reportError(
 
   const body: Record<string, unknown> = {
     message: truncate(data.message, MAX_MESSAGE_LENGTH),
-    url: data.url,
-    userAgent: data.userAgent,
-    environment: data.environment,
+    url: truncate(data.url, MAX_URL_LENGTH),
+    userAgent: truncate(data.userAgent, MAX_USER_AGENT_LENGTH),
+    environment: truncate(data.environment, MAX_ENVIRONMENT_LENGTH),
     timestamp: new Date().toISOString(),
   };
 
@@ -49,6 +56,17 @@ export function reportError(
 
   if (data.componentStack !== undefined) {
     body.componentStack = truncate(data.componentStack);
+  }
+
+  // Lengths are in UTF-16 units, but the body is measured in UTF-8 bytes after
+  // JSON escaping, where one character can take up to 6 bytes. Drop the
+  // optional fields, componentStack first, until the body fits. The required
+  // fields at their caps are at most about 31 KB, so the last step always fits.
+  let serialized = JSON.stringify(body);
+  for (const field of ["componentStack", "stack"]) {
+    if (new TextEncoder().encode(serialized).length <= MAX_BODY_BYTES) break;
+    delete body[field];
+    serialized = JSON.stringify(body);
   }
 
   const headers: Record<string, string> = {
@@ -65,7 +83,7 @@ export function reportError(
     const init: RequestInit = {
       method: "POST",
       headers,
-      body: JSON.stringify(body),
+      body: serialized,
     };
     // keepalive lets the request finish after the page unloads or navigates,
     // which is when errors thrown during navigation or tab close are sent.

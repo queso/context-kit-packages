@@ -52,7 +52,7 @@ All error sources funnel into `reportError()`, which:
 
 ### Stack Truncation
 
-Both `reporter.ts` (client-side) and `ingestion.ts` (server-side) truncate stack traces at 10,000 characters and `message` at 2,000 characters to prevent oversized payloads and database bloat. The client-side caps also keep a report under the 64 KB keepalive quota and the server's 64 KB body limit.
+Both `reporter.ts` (client-side) and `ingestion.ts` (server-side) truncate `stack` and `componentStack` at 10,000 characters, `message` at 2,000, `url` at 2,048, `userAgent` at 1,024 and `environment` at 64 to prevent oversized payloads and database bloat. The caps count characters, not bytes, so the reporter also measures the UTF-8 encoded body and, if it exceeds 64 KB, drops `componentStack` and then `stack`. A report therefore never exceeds the server's 64 KB body limit. The browser's 64 KB keepalive quota covers all in-flight keepalive requests together, so no per-report cap can guarantee it; the retry without `keepalive` covers that case.
 
 ## Server Module
 
