@@ -1,11 +1,9 @@
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
+import { billingLock } from "./locks.js";
 import { billingCustomer } from "./schema/postgres.js";
 import type { BillingContext, BillingDb } from "./types.js";
 
 const MAX_SUBJECT_ID_LENGTH = 200;
-
-/** First key of the two-key advisory lock, so billing locks cannot collide with an app's own ("bill"). */
-const LOCK_NAMESPACE = 0x62696c6c;
 
 export function assertSubjectId(subjectId: string): void {
   if (
@@ -99,7 +97,7 @@ export async function ensureCustomer(
   assertSubjectId(subjectId);
   const existing = await getCustomerId(ctx.db, subjectId);
   const customerId = existing ?? (await ctx.db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(${LOCK_NAMESPACE}, hashtext(${"customer:" + subjectId}))`);
+    await billingLock(tx, "customer:" + subjectId);
     // Another caller may have stored the mapping while this one waited.
     return (await getCustomerId(tx, subjectId)) ?? (await createCustomer({ ...ctx, db: tx }, subjectId));
   }));

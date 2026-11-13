@@ -13,6 +13,8 @@ export interface ReconcileSummary {
   duplicateSubjects: number;
 }
 
+// These per-candidate checks run only for subjects with several tagged customers
+// (after a lost mapping). Bounded-concurrency reconcile is a planned follow-up.
 async function hasLiveSubscription(ctx: BillingContext, customerId: string): Promise<boolean> {
   for await (const s of ctx.stripe.subscriptions.list({ customer: customerId, status: "all", limit: 100 })) {
     if (s.status !== "canceled" && s.status !== "incomplete_expired") return true;

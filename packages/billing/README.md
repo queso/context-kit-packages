@@ -236,6 +236,16 @@ A 200 from Stripe does not mean the event was billed; Stripe validates meter eve
 
 `billing.reconcile()` re-fetches every stored customer's subscriptions with the list API and replaces the rows. `reconcile({ repairCustomers: true })` also restores missing `billing_customer` rows from the customers' `metadata.subject_id`. It counts subjects that have several tagged customers (`duplicateSubjects`) and picks the one with a live subscription, else the oldest. Run it on a schedule or whenever the tables look wrong.
 
+### Pruning `billing_webhook_event`
+
+`billing_webhook_event` keeps every delivered event id and is never pruned by the package. Delete old rows on a schedule:
+
+```sql
+delete from billing_webhook_event where processed_at < now() - interval '30 days';
+```
+
+Keep at least Stripe's live-mode retry window of three days. A row deleted inside that window means a repeat delivery is no longer recognised and the event is processed again. Rows with a null `processed_at` are events that failed and are still waiting for a retry, so the condition above leaves them alone.
+
 ## Testing
 
 ```bash

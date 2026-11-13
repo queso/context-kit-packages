@@ -1,12 +1,10 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type Stripe from "stripe";
 import { ensureCustomer, getCustomerId, assertSubjectId, type CustomerDetails } from "./customers.js";
 import { billingCustomer, billingSubscription } from "./schema/postgres.js";
 import { syncSubscription, type SyncResult } from "./subscriptions.js";
+import { billingLock } from "./locks.js";
 import type { BillingContext, BillingDb } from "./types.js";
-
-/** First key of the two-key advisory lock, shared with subscriptions.ts ("bill"). */
-const LOCK_NAMESPACE = 0x62696c6c;
 
 /** Statuses that still hold a live subscription; a second Checkout would double-bill. */
 const LIVE_STATUSES = ["active", "trialing", "past_due", "unpaid", "incomplete", "paused"];
@@ -145,7 +143,7 @@ export async function createCheckoutSession(
   // pass the check and leave two open sessions. The lock is held across a few
   // Stripe calls and only blocks Checkouts for the same subject.
   return ctx.db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(${LOCK_NAMESPACE}, hashtext(${"checkout:" + input.subjectId}))`);
+    await billingLock(tx, "checkout:" + input.subjectId);
     const txCtx = { ...ctx, db: tx };
 
     const [live] = await tx

@@ -117,6 +117,40 @@ describe("event processing", () => {
     expect(await ctx.db.select().from(billingWebhookEvent)).toHaveLength(1);
   });
 
+  test("a delivery claims its event row and reads processed_at in one statement, with no separate SELECT", async () => {
+    fake.putSubscription({ id: "sub_1", customer: "cus_1", status: "active", priceIds: ["price_pro"], metadata: { subject_id: "100" } });
+    const payload = event("customer.subscription.updated", subscriptionObject("sub_1", "test_pro_monthly"));
+    await handle(await signedRequest(payload));
+
+    let eventSelects = 0;
+    const counting = new Proxy(ctx.db, {
+      get(target, prop, receiver) {
+        const value = Reflect.get(target, prop, receiver);
+        if (prop !== "select") return typeof value === "function" ? value.bind(target) : value;
+        return (...args: unknown[]) => {
+          const builder = (value as (...a: unknown[]) => any).apply(target, args);
+          return new Proxy(builder, {
+            get(b, p2) {
+              const v = Reflect.get(b, p2);
+              if (p2 !== "from") return typeof v === "function" ? v.bind(b) : v;
+              return (table: unknown, ...rest: unknown[]) => {
+                if (table === billingWebhookEvent) eventSelects++;
+                return v.call(b, table, ...rest);
+              };
+            },
+          });
+        };
+      },
+    }) as BillingContext["db"];
+    const countingHandle = createWebhookHandler({ ...ctx, db: counting }, { secret: SECRET });
+
+    const res = await countingHandle(await signedRequest(payload));
+
+    expect(res.status).toBe(200);
+    expect(retrieves("sub_1")).toBe(1);
+    expect(eventSelects).toBe(0);
+  });
+
   test("events arriving out of order still leave Stripe's current state", async () => {
     // Stripe's current state is Team. The newer event (Team) arrives first, the
     // older one (snapshot says Pro) arrives second. The payload is never
@@ -149,6 +183,42 @@ describe("event processing", () => {
       expect.objectContaining({ subjectId: "900", stripeCustomerId: "cus_9" }),
     ]);
     expect((await ctx.db.select().from(billingSubscription))[0]).toMatchObject({ subjectId: "900", planKey: "pro" });
+  });
+
+  describe("a completed checkout never rebinds an existing mapping", () => {
+    const completed = (customer: string, subject: string, sub: string) => ({
+      ...structuredClone(checkoutSessionFixture),
+      id: `cs_test_${customer}_${subject}`,
+      mode: "subscription",
+      customer,
+      subscription: sub,
+      client_reference_id: subject,
+      livemode: false,
+    });
+
+    test("a customer already mapped to subject A stays with A when a session names subject B", async () => {
+      fake.putSubscription({ id: "sub_x", customer: "cus_X", status: "active", priceIds: ["price_pro"], metadata: { subject_id: "A" } });
+      await ctx.db.insert(billingCustomer).values({ subjectId: "A", stripeCustomerId: "cus_X", livemode: false });
+
+      const res = await handle(await signedRequest(event("checkout.session.completed", completed("cus_X", "B", "sub_x"))));
+
+      expect(res.status).toBe(200);
+      expect(await ctx.db.select().from(billingCustomer)).toEqual([
+        expect.objectContaining({ subjectId: "A", stripeCustomerId: "cus_X" }),
+      ]);
+    });
+
+    test("a subject already mapped to cus_Y keeps it when a session for the subject carries cus_Z", async () => {
+      fake.putSubscription({ id: "sub_z", customer: "cus_Z", status: "active", priceIds: ["price_pro"], metadata: { subject_id: "A" } });
+      await ctx.db.insert(billingCustomer).values({ subjectId: "A", stripeCustomerId: "cus_Y", livemode: false });
+
+      const res = await handle(await signedRequest(event("checkout.session.completed", completed("cus_Z", "A", "sub_z"))));
+
+      expect(res.status).toBe(200);
+      expect(await ctx.db.select().from(billingCustomer)).toEqual([
+        expect.objectContaining({ subjectId: "A", stripeCustomerId: "cus_Y" }),
+      ]);
+    });
   });
 
   test("checkout.session.completed in payment mode is recorded and ignored", async () => {

@@ -349,7 +349,7 @@ export class FakeStripe {
       const data = [...this.checkoutSessions.values()].filter(
         (cs) => (!params.customer || cs.customer === params.customer) && (!params.status || cs.status === params.status)
       );
-      return [200, { object: "list", data, has_more: false, url: path }];
+      return [200, paginate(data, params, path)];
     }
     if (method === "POST" && (m = path.match(/^\/v1\/checkout\/sessions\/([^/]+)\/expire$/))) {
       const cs = this.checkoutSessions.get(m[1]!);
@@ -361,7 +361,7 @@ export class FakeStripe {
       return [200, cs];
     }
     if (method === "GET" && path === "/v1/customers") {
-      return [200, { object: "list", data: [...this.customers.values()], has_more: false, url: path }];
+      return [200, paginate([...this.customers.values()], params, path)];
     }
     if (method === "GET" && (m = path.match(/^\/v1\/checkout\/sessions\/([^/]+)$/))) {
       const cs = this.checkoutSessions.get(m[1]!);
@@ -372,7 +372,15 @@ export class FakeStripe {
       const data = match
         ? [...this.customers.values()].filter((c) => (c.metadata as Json)[match[1]!] === match[2])
         : [];
-      return [200, { object: "search_result", data, has_more: false, next_page: null, url: path }];
+      // Search pages with opaque `page` tokens (here, the numeric offset).
+      const limit = pageLimit(params);
+      const start = params.page ? Number(params.page) : 0;
+      const page = data.slice(start, start + limit);
+      const hasMore = start + page.length < data.length;
+      return [
+        200,
+        { object: "search_result", data: page, has_more: hasMore, next_page: hasMore ? String(start + limit) : null, url: path },
+      ];
     }
     if (method === "GET" && (m = path.match(/^\/v1\/subscriptions\/([^/]+)$/))) {
       const s = this.subscriptions.get(m[1]!);
@@ -404,16 +412,7 @@ export class FakeStripe {
           }
           return out;
         });
-      // Honors limit and starting_after only when a limit is sent, so callers
-      // that omit it still get everything.
-      let page = data;
-      let hasMore = false;
-      if (params.limit) {
-        const start = params.starting_after ? data.findIndex((s) => s.id === params.starting_after) + 1 : 0;
-        page = data.slice(start, start + Number(params.limit));
-        hasMore = start + page.length < data.length;
-      }
-      return [200, { object: "list", data: page, has_more: hasMore, url: path }];
+      return [200, paginate(data, params, path)];
     }
     if (method === "GET" && path === "/v1/invoices") {
       // Stripe lists newest first.
@@ -423,16 +422,15 @@ export class FakeStripe {
             (!params.subscription || ((inv.parent as Json)?.subscription_details as Json)?.subscription === params.subscription) &&
             (!params.status || inv.status === params.status)
         )
-        .sort((a, b) => Number(b.created) - Number(a.created))
-        .slice(0, params.limit ? Number(params.limit) : undefined);
-      return [200, { object: "list", data, has_more: false, url: path }];
+        .sort((a, b) => Number(b.created) - Number(a.created));
+      return [200, paginate(data, params, path)];
     }
     if (method === "GET" && path === "/v1/prices") {
       const keys = (params.lookup_keys as string[] | undefined) ?? [];
       const data = [...this.prices.values()].filter(
         (p) => keys.length === 0 || keys.includes(String(p.lookup_key))
       );
-      return [200, { object: "list", data: data.filter((p) => p.active !== false), has_more: false, url: path }];
+      return [200, paginate(data.filter((p) => p.active !== false), params, path)];
     }
     if (method === "POST" && path === "/v1/products") {
       const product = clone(productFixture) as Json;
@@ -456,7 +454,7 @@ export class FakeStripe {
       return [200, price];
     }
     if (method === "GET" && path === "/v1/billing/meters") {
-      return [200, { object: "list", data: [...this.meters.values()], has_more: false, url: path }];
+      return [200, paginate([...this.meters.values()], params, path)];
     }
     if (method === "POST" && path === "/v1/billing/meters") {
       const meter = clone(meterFixture) as Json;
@@ -518,6 +516,24 @@ export class FakeStripe {
     }
     return [404, { error: { type: "invalid_request_error", message: `fake stripe: no route for ${method} ${path}` } }];
   }
+}
+
+/** Stripe's page size: `limit` (1..100) or 10 when omitted. */
+function pageLimit(params: Json): number {
+  const n = params.limit === undefined ? 10 : Number(params.limit);
+  return Math.min(Math.max(Number.isFinite(n) && n > 0 ? Math.floor(n) : 10, 1), 100);
+}
+
+/** Paginates like Stripe: `starting_after` is the id of the last object of the previous page. */
+function paginate(data: Json[], params: Json, path: string): Json {
+  const limit = pageLimit(params);
+  let start = 0;
+  if (params.starting_after) {
+    const idx = data.findIndex((o) => o.id === params.starting_after);
+    start = idx === -1 ? data.length : idx + 1;
+  }
+  const page = data.slice(start, start + limit);
+  return { object: "list", data: page, has_more: start + page.length < data.length, url: path };
 }
 
 function json(status: number, body: Json): Response {

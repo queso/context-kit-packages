@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type Stripe from "stripe";
 import { recordSessionCustomer } from "./checkout.js";
 import { billingWebhookEvent } from "./schema/postgres.js";
@@ -84,19 +84,18 @@ async function handleEvent(ctx: BillingContext, event: Stripe.Event): Promise<Sy
  * verify signatures themselves; most apps use `createWebhookHandler`.
  */
 export async function processEvent(ctx: BillingContext, event: Stripe.Event): Promise<EventOutcome> {
-  await ctx.db
-    .insert(billingWebhookEvent)
-    .values({ stripeEventId: event.id, type: event.type, objectId: objectId(event) })
-    .onConflictDoNothing({ target: billingWebhookEvent.stripeEventId });
-
-  // Two concurrent deliveries of one event can both read processedAt as null
+  // One statement records the delivery and reads processed_at. The no-op
+  // update on conflict makes Postgres return the existing row either way.
+  //
+  // Two concurrent deliveries of one event can both see processedAt as null
   // and both run handleEvent. That is accepted: a failed event must stay
   // retryable (processedAt stays null), and idempotency lives in
   // syncSubscription, which runs under an advisory lock and rewrites the same rows.
   const [stored] = await ctx.db
-    .select({ processedAt: billingWebhookEvent.processedAt })
-    .from(billingWebhookEvent)
-    .where(eq(billingWebhookEvent.stripeEventId, event.id));
+    .insert(billingWebhookEvent)
+    .values({ stripeEventId: event.id, type: event.type, objectId: objectId(event) })
+    .onConflictDoUpdate({ target: billingWebhookEvent.stripeEventId, set: { type: sql`excluded.type` } })
+    .returning({ processedAt: billingWebhookEvent.processedAt });
   if (stored?.processedAt) return "duplicate";
 
   let result: SyncResult | null;

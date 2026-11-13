@@ -1,6 +1,7 @@
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type Stripe from "stripe";
 import { planForLookupKey } from "./config.js";
+import { billingLock } from "./locks.js";
 import { billingCustomer, billingSubscription } from "./schema/postgres.js";
 import type { BillingContext } from "./types.js";
 
@@ -150,9 +151,6 @@ async function storeSubscription(
   return { outcome: "synced", subjectId, subscriptionId: sub.id };
 }
 
-/** First key of the two-key advisory lock, so billing locks cannot collide with an app's own ("bill"). */
-const LOCK_NAMESPACE = 0x62696c6c;
-
 /**
  * Fetches one subscription from Stripe and stores its current state.
  *
@@ -169,7 +167,7 @@ export async function syncSubscription(
   subscriptionId: string
 ): Promise<SyncResult> {
   return ctx.db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(${LOCK_NAMESPACE}, hashtext(${subscriptionId}))`);
+    await billingLock(tx, subscriptionId);
     const sub = await ctx.stripe.subscriptions.retrieve(subscriptionId, {
       expand: ["latest_invoice", "customer"],
     });
