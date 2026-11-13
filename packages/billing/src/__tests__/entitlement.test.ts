@@ -120,11 +120,13 @@ describe("resolveEntitlement", () => {
 
 describe("getEntitlement", () => {
   let ctx: BillingContext;
+  let fake: FakeStripe;
   let close: () => Promise<void>;
   beforeEach(async () => {
     const t = await createTestDb();
     close = t.close;
-    ctx = { db: t.db, stripe: new FakeStripe().client(), config: testConfig, now: () => NOW };
+    fake = new FakeStripe();
+    ctx = { db: t.db, stripe: fake.client(), config: testConfig, now: () => NOW };
   });
   afterEach(() => close());
 
@@ -135,6 +137,7 @@ describe("getEntitlement", () => {
     ]);
     const e = await getEntitlement(ctx, "55");
     expect(e).toMatchObject({ subjectId: "55", plan: "fleet", includedUnits: 2000, paid: true });
+    expect(fake.requests).toHaveLength(0);
   });
 
   test("a subject with no rows is free", async () => {

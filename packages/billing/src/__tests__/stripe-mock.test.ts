@@ -102,9 +102,9 @@ describe.skipIf(!enabled)("request shapes accepted by stripe-mock (Stripe's Open
     expect(list.object).toBe("list");
   });
 
-  test("open invoices of a subscription (grace period start)", async () => {
-    const list = await client().invoices.list({ subscription: "sub_123", status: "open", limit: 100 });
-    expect(list.object).toBe("list");
+  test("open and latest paid invoices of a subscription (grace period start)", async () => {
+    expect((await client().invoices.list({ subscription: "sub_123", status: "open", limit: 100 })).object).toBe("list");
+    expect((await client().invoices.list({ subscription: "sub_123", status: "paid", limit: 1 })).object).toBe("list");
   });
 
   test("Checkout Session that expires at its anchor", async () => {

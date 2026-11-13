@@ -23,13 +23,31 @@ export function nextMonthStartUtc(now: Date): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
 }
 
+/**
+ * Indexes prices by lookup key. Stripe moves a lookup key between prices
+ * atomically (`transfer_lookup_key`), so a key should name one price; if two
+ * active prices ever share one, this throws rather than pick either.
+ */
+export function indexByLookupKey<P extends { id: string; lookup_key: string | null }>(prices: P[]): Map<string, P> {
+  const out = new Map<string, P>();
+  for (const p of prices) {
+    if (!p.lookup_key) continue;
+    const other = out.get(p.lookup_key);
+    if (other) {
+      throw new Error(`Lookup key "${p.lookup_key}" matches more than one active price (${other.id}, ${p.id}); archive one`);
+    }
+    out.set(p.lookup_key, p);
+  }
+  return out;
+}
+
 /** Looks prices up by lookup key and fails with the missing keys named. */
 export async function resolvePricesByLookupKey(
   stripe: Stripe,
   lookupKeys: string[]
 ): Promise<Map<string, Stripe.Price>> {
   const list = await stripe.prices.list({ lookup_keys: lookupKeys, active: true, limit: 10 });
-  const found = new Map(list.data.filter((p) => p.lookup_key).map((p) => [p.lookup_key!, p]));
+  const found = indexByLookupKey(list.data);
   const missing = lookupKeys.filter((k) => !found.has(k));
   if (missing.length > 0) {
     throw new Error(`No active Stripe price with lookup key ${missing.join(", ")}; run bootstrapCatalog first`);

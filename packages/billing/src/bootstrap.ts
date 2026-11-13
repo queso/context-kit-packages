@@ -1,4 +1,5 @@
 import type Stripe from "stripe";
+import { indexByLookupKey } from "./checkout.js";
 import type { BillingConfig } from "./types.js";
 
 /** Amounts and names for the Stripe catalog. Amounts are in the currency's smallest unit (cents). */
@@ -46,61 +47,86 @@ export async function bootstrapCatalog(
 
   const created: string[] = [];
 
+  // Every meter, active or not: an event name belongs to one meter, so an
+  // inactive match cannot be replaced by creating another.
   let meter: Stripe.Billing.Meter | undefined;
-  for await (const m of stripe.billing.meters.list({ status: "active", limit: 100 })) {
+  for await (const m of stripe.billing.meters.list({ limit: 100 })) {
     if (m.event_name === config.overage.meterEventName) {
       meter = m;
       break;
     }
   }
+  if (meter && meter.status !== "active") {
+    throw new Error(
+      `Meter ${meter.id} for event name "${config.overage.meterEventName}" exists but is ${meter.status}; reactivate it in Stripe`
+    );
+  }
+  // Creates carry idempotency keys derived from the event name and lookup keys,
+  // so two runs racing within Stripe's 24-hour key window get the same objects.
+  const key = (kind: string, name: string) => ({ idempotencyKey: `context-kit-billing:${kind}:${name}` });
   if (!meter) {
-    meter = await stripe.billing.meters.create({
-      display_name: catalog.overage.meterDisplayName,
-      event_name: config.overage.meterEventName,
-      default_aggregation: { formula: "sum" },
-      customer_mapping: { type: "by_id", event_payload_key: "stripe_customer_id" },
-      value_settings: { event_payload_key: "value" },
-    });
+    meter = await stripe.billing.meters.create(
+      {
+        display_name: catalog.overage.meterDisplayName,
+        event_name: config.overage.meterEventName,
+        default_aggregation: { formula: "sum" },
+        customer_mapping: { type: "by_id", event_payload_key: "stripe_customer_id" },
+        value_settings: { event_payload_key: "value" },
+      },
+      key("meter", config.overage.meterEventName)
+    );
     created.push(`meter ${meter.id}`);
   }
 
   const lookupKeys = [...paid.map(([, p]) => p.priceLookupKey!), config.overage.priceLookupKey];
   const existing = await stripe.prices.list({ lookup_keys: lookupKeys, active: true, limit: 10 });
-  const byKey = new Map(existing.data.map((p) => [p.lookup_key, p.id]));
+  const byKey = new Map([...indexByLookupKey(existing.data)].map(([k, p]) => [k, p.id]));
   const prices: Record<string, string> = {};
 
-  for (const [key, plan] of paid) {
+  for (const [planKey, plan] of paid) {
     const lookupKey = plan.priceLookupKey!;
     const found = byKey.get(lookupKey);
     if (found) {
-      prices[key] = found;
+      prices[planKey] = found;
       continue;
     }
-    const product = await stripe.products.create({ name: catalog.plans[key]!.productName, metadata: { plan_key: key } });
-    const price = await stripe.prices.create({
-      product: product.id,
-      currency: catalog.currency,
-      unit_amount: catalog.plans[key]!.unitAmount,
-      recurring: { interval: "month", usage_type: "licensed" },
-      lookup_key: lookupKey,
-      metadata: { plan_key: key },
-    });
+    const product = await stripe.products.create(
+      { name: catalog.plans[planKey]!.productName, metadata: { plan_key: planKey } },
+      key("product", lookupKey)
+    );
+    const price = await stripe.prices.create(
+      {
+        product: product.id,
+        currency: catalog.currency,
+        unit_amount: catalog.plans[planKey]!.unitAmount,
+        recurring: { interval: "month", usage_type: "licensed" },
+        lookup_key: lookupKey,
+        metadata: { plan_key: planKey },
+      },
+      key("price", lookupKey)
+    );
     created.push(`product ${product.id}`, `price ${price.id} (${lookupKey})`);
-    prices[key] = price.id;
+    prices[planKey] = price.id;
   }
 
   const overageFound = byKey.get(config.overage.priceLookupKey);
   if (overageFound) {
     prices.overage = overageFound;
   } else {
-    const product = await stripe.products.create({ name: catalog.overage.productName });
-    const price = await stripe.prices.create({
-      product: product.id,
-      currency: catalog.currency,
-      unit_amount: catalog.overage.unitAmount,
-      recurring: { interval: "month", usage_type: "metered", meter: meter.id },
-      lookup_key: config.overage.priceLookupKey,
-    });
+    const product = await stripe.products.create(
+      { name: catalog.overage.productName },
+      key("product", config.overage.priceLookupKey)
+    );
+    const price = await stripe.prices.create(
+      {
+        product: product.id,
+        currency: catalog.currency,
+        unit_amount: catalog.overage.unitAmount,
+        recurring: { interval: "month", usage_type: "metered", meter: meter.id },
+        lookup_key: config.overage.priceLookupKey,
+      },
+      key("price", config.overage.priceLookupKey)
+    );
     created.push(`product ${product.id}`, `price ${price.id} (${config.overage.priceLookupKey})`);
     prices.overage = price.id;
   }

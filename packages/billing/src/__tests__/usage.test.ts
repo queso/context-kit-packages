@@ -458,6 +458,34 @@ describe("usage outbox", () => {
       });
     });
 
+    test("a database error on one row is counted as a retry and the batch goes on", async () => {
+      await enqueueUsage(ctx, { sourceId: "run_a", subjectId: "100", value: 3, occurredAt: NOW });
+      await enqueueUsage(ctx, { sourceId: "run_b", subjectId: "100", value: 4, occurredAt: NOW });
+      let selects = 0;
+      const realDb = ctx.db;
+      ctx = {
+        ...ctx,
+        db: new Proxy(realDb, {
+          get(target, prop, receiver) {
+            if (prop === "select") {
+              return (...args: unknown[]) => {
+                // 1: the claim's subquery. 2: the first row's customer lookup.
+                if (++selects === 2) throw new Error("connection reset");
+                return (target.select as (...a: unknown[]) => unknown).apply(target, args);
+              };
+            }
+            return Reflect.get(target, prop, receiver);
+          },
+        }),
+      };
+
+      const summary = await reportPendingUsage(ctx);
+
+      expect(summary).toMatchObject({ retry: 1, sent: 1 });
+      expect(await rowFor("run_a")).toMatchObject({ status: "pending", leaseId: null, lastError: "connection reset" });
+      expect((await rowFor("run_b"))?.status).toBe("sent");
+    });
+
     describe("leases", () => {
       test("Stripe is called outside any database transaction", async () => {
         let inTransaction = null as boolean | null;

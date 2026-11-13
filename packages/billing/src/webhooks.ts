@@ -11,7 +11,7 @@ export interface WebhookHandlerOptions {
   tolerance?: number;
 }
 
-export type EventOutcome = "processed" | "duplicate" | "ignored" | "unknown_subject";
+export type EventOutcome = "processed" | "duplicate" | "ignored" | "unknown_subject" | "subject_mismatch";
 
 const SUBSCRIPTION_EVENTS = new Set([
   "customer.subscription.created",
@@ -123,13 +123,24 @@ export async function processEvent(ctx: BillingContext, event: Stripe.Event): Pr
     throw err;
   }
 
-  const unknown = result?.outcome === "unknown_subject";
+  if (result?.outcome === "unknown_subject") {
+    // Not marked processed: the customer may be mapped moments later (by
+    // ensureCustomer or completeCheckout), and Stripe's retry will then succeed.
+    // The handler answers 500 so that retry happens.
+    await ctx.db
+      .update(billingWebhookEvent)
+      .set({ lastError: "unknown_subject" })
+      .where(eq(billingWebhookEvent.stripeEventId, event.id));
+    return "unknown_subject";
+  }
+
+  const mismatch = result?.outcome === "subject_mismatch";
   await ctx.db
     .update(billingWebhookEvent)
-    .set({ processedAt: ctx.now?.() ?? new Date(), lastError: unknown ? "unknown_subject" : null })
+    .set({ processedAt: ctx.now?.() ?? new Date(), lastError: mismatch ? "subject_mismatch" : null })
     .where(eq(billingWebhookEvent.stripeEventId, event.id));
 
-  if (unknown) return "unknown_subject";
+  if (mismatch) return "subject_mismatch";
   return result ? "processed" : "ignored";
 }
 
@@ -167,6 +178,9 @@ export function createWebhookHandler(
 
     try {
       const outcome = await processEvent(ctx, event);
+      if (outcome === "unknown_subject") {
+        return Response.json({ error: "subscription's subject is not known yet" }, { status: 500 });
+      }
       return Response.json({ received: true, outcome });
     } catch {
       return Response.json({ error: "processing failed" }, { status: 500 });

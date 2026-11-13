@@ -83,7 +83,13 @@ const runId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6
 const cleanups: (() => Promise<unknown>)[] = [];
 
 afterAll(async () => {
-  for (const fn of cleanups.reverse()) await fn().catch(() => {});
+  // Failures are logged so leaked sandbox objects are visible; the message is
+  // Stripe's, which never contains the key.
+  for (const fn of cleanups.reverse()) {
+    await fn().catch((err: unknown) =>
+      console.warn(`[billing] live-test cleanup failed: ${err instanceof Error ? err.message : String(err)}`)
+    );
+  }
 });
 
 let stripeClient: Stripe | undefined;

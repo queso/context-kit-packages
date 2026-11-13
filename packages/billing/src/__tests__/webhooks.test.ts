@@ -220,12 +220,32 @@ describe("event processing", () => {
     expect(ev?.processedAt).toBeInstanceOf(Date);
   });
 
-  test("a subscription with no known subject is acknowledged and flagged", async () => {
+  test("a subscription with no known subject answers 500 so Stripe retries, and succeeds once the customer is mapped", async () => {
     fake.putSubscription({ id: "sub_x", customer: "cus_unknown", status: "active", priceIds: ["price_pro"] });
-    const res = await handle(await signedRequest(event("customer.subscription.created", subscriptionObject("sub_x", "test_pro_monthly"))));
-    expect(res.status).toBe(200);
+    const payload = event("customer.subscription.created", subscriptionObject("sub_x", "test_pro_monthly"));
+
+    const first = await handle(await signedRequest(payload));
+    expect(first.status).toBe(500);
     const [ev] = await ctx.db.select().from(billingWebhookEvent);
     expect(ev?.lastError).toBe("unknown_subject");
+    expect(ev?.processedAt).toBeNull();
+
+    await ctx.db.insert(billingCustomer).values({ subjectId: "late", stripeCustomerId: "cus_unknown", livemode: false });
+    const retry = await handle(await signedRequest(payload));
+    expect(retry.status).toBe(200);
+    expect((await ctx.db.select().from(billingSubscription))[0]?.subjectId).toBe("late");
+    const [after] = await ctx.db.select().from(billingWebhookEvent);
+    expect(after).toMatchObject({ lastError: null });
+    expect(after?.processedAt).toBeInstanceOf(Date);
+  });
+
+  test("a subject mismatch is acknowledged and flagged; retrying cannot fix it", async () => {
+    await ctx.db.insert(billingCustomer).values({ subjectId: "real", stripeCustomerId: "cus_m", livemode: false });
+    fake.putSubscription({ id: "sub_m", customer: "cus_m", status: "active", priceIds: ["price_pro"], metadata: { subject_id: "other" } });
+    const res = await handle(await signedRequest(event("customer.subscription.updated", subscriptionObject("sub_m", "test_pro_monthly"))));
+    expect(res.status).toBe(200);
+    const [ev] = await ctx.db.select().from(billingWebhookEvent);
+    expect(ev?.lastError).toBe("subject_mismatch");
     expect(ev?.processedAt).toBeInstanceOf(Date);
   });
 });

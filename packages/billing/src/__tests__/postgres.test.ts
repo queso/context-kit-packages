@@ -5,6 +5,7 @@ import { sql } from "drizzle-orm";
 import * as schema from "../schema/postgres";
 import { enqueueUsage, reportPendingUsage } from "../usage";
 import { processEvent } from "../webhooks";
+import { syncSubscription } from "../subscriptions";
 import { FakeStripe } from "./helpers/fake-stripe";
 import { testConfig } from "./helpers/config";
 import eventFixture from "./fixtures/stripe/event.json";
@@ -111,5 +112,45 @@ describe.skipIf(!hasPostgres)("against a real Postgres server", () => {
     expect(outcomes.filter((o) => o === "processed").length).toBeGreaterThanOrEqual(1);
     expect(await db.select().from(schema.billingWebhookEvent)).toHaveLength(1);
     expect(await db.select().from(schema.billingSubscription)).toHaveLength(1);
+  });
+
+  test("two concurrent syncs of one subscription leave Stripe's newer state, not the older one", async () => {
+    const db = await setup();
+    const fake = new FakeStripe();
+    fake.addPrice({ id: "price_pro", lookupKey: "test_pro_monthly" });
+    fake.addPrice({ id: "price_team", lookupKey: "test_team_monthly" });
+    fake.putSubscription({ id: "sub_1", customer: "cus_1", status: "active", priceIds: ["price_pro"], metadata: { subject_id: "1" } });
+
+    // The first retrieve sees Pro, and Stripe's state moves to Team right after
+    // it is read; its response is slow. The second retrieve sees Team and
+    // answers at once. Unserialized, the slow Pro write lands last.
+    let retrieves = 0;
+    const realFetch = fake.fetch;
+    const slowFirst = async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (!url.includes("/v1/subscriptions/sub_1")) return realFetch(input, init);
+      const n = ++retrieves;
+      const res = await realFetch(input, init);
+      if (n === 1) {
+        fake.putSubscription({ id: "sub_1", customer: "cus_1", status: "active", priceIds: ["price_team"], metadata: { subject_id: "1" } });
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      return res;
+    };
+    const Stripe = (await import("stripe")).default;
+    const stripe = (await import("../stripe-client")).createStripeClient("sk_test_fake", {
+      httpClient: Stripe.createFetchHttpClient(slowFirst as typeof fetch),
+      maxNetworkRetries: 0,
+    });
+    const ctx: BillingContext = { db, stripe, config: testConfig };
+
+    const first = syncSubscription(ctx, "sub_1");
+    await new Promise((r) => setTimeout(r, 50));
+    const second = syncSubscription(ctx, "sub_1");
+    await Promise.all([first, second]);
+
+    const [row] = await db.select().from(schema.billingSubscription);
+    expect(row?.planKey).toBe("team");
+    expect(retrieves).toBe(2);
   });
 });

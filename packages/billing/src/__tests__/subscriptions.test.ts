@@ -149,6 +149,46 @@ describe("syncSubscription", () => {
     expect((await rows())[0]?.pastDueSince).toEqual(NOW);
   });
 
+  test("a payment after the stored date ends that unpaid stretch, even if the recovery sync was missed", async () => {
+    const jan2 = Date.parse("2026-01-02T00:00:00Z") / 1000;
+    fake.putSubscription({ id: "sub_r", customer: "cus_r", status: "past_due", priceIds: ["price_pro"], metadata: { subject_id: "r" }, latestInvoiceFinalizedAt: jan2 });
+    await syncSubscription(ctx, "sub_r");
+    // The customer paid on Feb 3 (that active sync never arrived) and went past
+    // due again with the Mar 2 invoice.
+    const feb3 = Date.parse("2026-02-03T00:00:00Z") / 1000;
+    const mar2 = Date.parse("2026-03-02T00:00:00Z") / 1000;
+    fake.putSubscription({
+      id: "sub_r",
+      customer: "cus_r",
+      status: "past_due",
+      priceIds: ["price_pro"],
+      metadata: { subject_id: "r" },
+      paidInvoicesPaidAt: [feb3],
+      latestInvoiceFinalizedAt: mar2,
+    });
+    await syncSubscription(ctx, "sub_r");
+    expect((await rows())[0]?.pastDueSince).toEqual(new Date("2026-03-02T00:00:00Z"));
+  });
+
+  test("unpaid gets no grace start: it is on free limits by design", async () => {
+    fake.putSubscription({ id: "sub_u", customer: "cus_u", status: "unpaid", priceIds: ["price_pro"], metadata: { subject_id: "u" }, latestInvoiceFinalizedAt: Date.parse("2026-01-02T00:00:00Z") / 1000 });
+    await syncSubscription(ctx, "sub_u");
+    expect((await rows())[0]?.pastDueSince).toBeNull();
+  });
+
+  test("the stored customer mapping wins over subscription metadata", async () => {
+    await ctx.db.insert(billingCustomer).values({ subjectId: "real", stripeCustomerId: "cus_m", livemode: false });
+    fake.putSubscription({ id: "sub_m", customer: "cus_m", status: "active", priceIds: ["price_pro"], metadata: { subject_id: "real" } });
+    expect(await syncSubscription(ctx, "sub_m")).toMatchObject({ outcome: "synced", subjectId: "real" });
+  });
+
+  test("metadata naming a different subject than the customer mapping is refused, not stored", async () => {
+    await ctx.db.insert(billingCustomer).values({ subjectId: "real", stripeCustomerId: "cus_m", livemode: false });
+    fake.putSubscription({ id: "sub_m", customer: "cus_m", status: "active", priceIds: ["price_pro"], metadata: { subject_id: "someone_else" } });
+    expect(await syncSubscription(ctx, "sub_m")).toEqual({ outcome: "subject_mismatch", subscriptionId: "sub_m" });
+    expect(await rows()).toHaveLength(0);
+  });
+
   test("clears past_due_since once the subscription is active again", async () => {
     fake.putSubscription({
       id: "sub_7",

@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type Stripe from "stripe";
 import { planForLookupKey } from "./config.js";
 import { billingCustomer, billingSubscription } from "./schema/postgres.js";
@@ -6,7 +6,10 @@ import type { BillingContext } from "./types.js";
 
 export type SyncResult =
   | { outcome: "synced"; subjectId: string; subscriptionId: string }
-  | { outcome: "unknown_subject"; subscriptionId: string };
+  /** No billing_customer row for the customer and no subject_id metadata. */
+  | { outcome: "unknown_subject"; subscriptionId: string }
+  /** metadata.subject_id names a different subject than the customer mapping. Not stored. */
+  | { outcome: "subject_mismatch"; subscriptionId: string };
 
 const fromUnix = (s: number | null | undefined): Date | null =>
   typeof s === "number" ? new Date(s * 1000) : null;
@@ -24,16 +27,28 @@ function planKeyForPrice(ctx: BillingContext, price: Stripe.Price): string | nul
   return tagged && tagged in ctx.config.plans ? tagged : null;
 }
 
-async function resolveSubject(ctx: BillingContext, sub: Stripe.Subscription): Promise<string | null> {
-  const fromMetadata = sub.metadata?.subject_id;
-  if (fromMetadata) return fromMetadata;
+/**
+ * The subject a subscription belongs to. The stored customer mapping is the
+ * checked path and wins; `metadata.subject_id` (set by this package's
+ * Checkout) is only a fallback for a customer not mapped yet. When both exist
+ * and disagree, something outside this package edited one of them, so the
+ * subscription is not attributed to either.
+ */
+async function resolveSubject(
+  ctx: BillingContext,
+  sub: Stripe.Subscription
+): Promise<{ subjectId: string } | { problem: "unknown_subject" | "subject_mismatch" }> {
   const customerId = idOf(sub.customer);
-  if (!customerId) return null;
-  const [row] = await ctx.db
-    .select({ subjectId: billingCustomer.subjectId })
-    .from(billingCustomer)
-    .where(eq(billingCustomer.stripeCustomerId, customerId));
-  return row?.subjectId ?? null;
+  const [row] = customerId
+    ? await ctx.db
+        .select({ subjectId: billingCustomer.subjectId })
+        .from(billingCustomer)
+        .where(eq(billingCustomer.stripeCustomerId, customerId))
+    : [];
+  const fromMetadata = sub.metadata?.subject_id || undefined;
+  if (row && fromMetadata && row.subjectId !== fromMetadata) return { problem: "subject_mismatch" };
+  const subjectId = row?.subjectId ?? fromMetadata;
+  return subjectId ? { subjectId } : { problem: "unknown_subject" };
 }
 
 /**
@@ -41,8 +56,9 @@ async function resolveSubject(ctx: BillingContext, sub: Stripe.Subscription): Pr
  * counts from. It is the finalization time of the oldest open invoice, not the
  * latest one: a renewal while past_due adds a newer invoice, and counting from
  * that would restart the grace period every month. A previously stored value is
- * kept if it is earlier (for example, the old invoice was marked uncollectible),
- * and the current time is the fallback, so a past_due row is never without one.
+ * kept if it is earlier (for example, the old invoice was marked uncollectible)
+ * and no invoice has been paid since it; the current time is the fallback, so a
+ * past_due row is never without one.
  */
 async function firstUnpaidAt(ctx: BillingContext, sub: Stripe.Subscription, now: Date): Promise<Date> {
   const candidates: Date[] = [];
@@ -54,7 +70,14 @@ async function firstUnpaidAt(ctx: BillingContext, sub: Stripe.Subscription, now:
     .select({ since: billingSubscription.pastDueSince })
     .from(billingSubscription)
     .where(eq(billingSubscription.stripeSubscriptionId, sub.id));
-  if (stored?.since) candidates.push(stored.since);
+  if (stored?.since) {
+    // A payment after the stored date means that unpaid stretch ended, even if
+    // the sync that saw the subscription active again was missed. Stripe lists
+    // invoices newest first.
+    const paid = await ctx.stripe.invoices.list({ subscription: sub.id, status: "paid", limit: 1 });
+    const paidAt = fromUnix(paid.data[0]?.status_transitions?.paid_at);
+    if (!paidAt || paidAt <= stored.since) candidates.push(stored.since);
+  }
   if (candidates.length === 0) return now;
   return new Date(Math.min(...candidates.map((d) => d.getTime())));
 }
@@ -68,8 +91,9 @@ export async function storeSubscription(
   ctx: BillingContext,
   sub: Stripe.Subscription
 ): Promise<SyncResult> {
-  const subjectId = await resolveSubject(ctx, sub);
-  if (!subjectId) return { outcome: "unknown_subject", subscriptionId: sub.id };
+  const resolved = await resolveSubject(ctx, sub);
+  if ("problem" in resolved) return { outcome: resolved.problem, subscriptionId: sub.id };
+  const { subjectId } = resolved;
 
   const items = sub.items.data;
   const overageItem = items.find((i) => i.price.lookup_key === ctx.config.overage.priceLookupKey)
@@ -78,8 +102,8 @@ export async function storeSubscription(
     ?? items.find((i) => i !== overageItem);
 
   const now = ctx.now?.() ?? new Date();
-  const pastDueSince =
-    sub.status === "past_due" || sub.status === "unpaid" ? await firstUnpaidAt(ctx, sub, now) : null;
+  // Only past_due has a grace period; unpaid is on free limits by design (#7).
+  const pastDueSince = sub.status === "past_due" ? await firstUnpaidAt(ctx, sub, now) : null;
 
   const values = {
     stripeSubscriptionId: sub.id,
@@ -109,34 +133,47 @@ export async function storeSubscription(
   return { outcome: "synced", subjectId, subscriptionId: sub.id };
 }
 
-/** Fetches one subscription from Stripe and stores its current state. */
+/** First key of the two-key advisory lock, so billing locks cannot collide with an app's own ("bill"). */
+const LOCK_NAMESPACE = 0x62696c6c;
+
+/**
+ * Fetches one subscription from Stripe and stores its current state.
+ *
+ * Fetch and store run under a transaction-scoped advisory lock keyed on the
+ * subscription id. Two concurrent deliveries for one subscription therefore
+ * run one after the other, and the second fetches after the first has stored,
+ * so an older response can never overwrite a newer one. The lock is held for
+ * one Stripe GET (normally well under a second; at most about 95 seconds with
+ * the client's 30-second timeout and 2 retries) and only blocks syncs of the
+ * same subscription.
+ */
 export async function syncSubscription(
   ctx: BillingContext,
   subscriptionId: string
 ): Promise<SyncResult> {
-  const sub = await ctx.stripe.subscriptions.retrieve(subscriptionId, {
-    expand: ["latest_invoice"],
+  return ctx.db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(${LOCK_NAMESPACE}, hashtext(${subscriptionId}))`);
+    const sub = await ctx.stripe.subscriptions.retrieve(subscriptionId, {
+      expand: ["latest_invoice"],
+    });
+    return storeSubscription({ ...ctx, db: tx }, sub);
   });
-  return storeSubscription(ctx, sub);
 }
 
 /**
- * Fetches every subscription of a customer, canceled ones included, and stores
- * each. Uses the list API, which is read-after-write consistent, rather than
- * search, which can lag.
+ * Re-syncs every subscription of a customer, canceled ones included. The list
+ * API (read-after-write consistent, unlike search) supplies the ids; each one
+ * is then fetched and stored through syncSubscription, under its lock.
  */
 export async function syncCustomerSubscriptions(
   ctx: BillingContext,
   customerId: string
 ): Promise<SyncResult[]> {
-  const results: SyncResult[] = [];
-  for await (const sub of ctx.stripe.subscriptions.list({
-    customer: customerId,
-    status: "all",
-    expand: ["data.latest_invoice"],
-    limit: 100,
-  })) {
-    results.push(await storeSubscription(ctx, sub));
+  const ids: string[] = [];
+  for await (const sub of ctx.stripe.subscriptions.list({ customer: customerId, status: "all", limit: 100 })) {
+    ids.push(sub.id);
   }
+  const results: SyncResult[] = [];
+  for (const id of ids) results.push(await syncSubscription(ctx, id));
   return results;
 }

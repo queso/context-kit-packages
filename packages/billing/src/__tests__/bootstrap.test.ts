@@ -80,4 +80,34 @@ describe("bootstrapCatalog", () => {
       bootstrapCatalog(fake.client(), testConfig, { ...catalog, plans: { ...catalog.plans, pro: { productName: "x", unitAmount: bad } } })
     ).rejects.toThrow(/unitAmount/);
   });
+
+  test("create calls carry idempotency keys, so two runs racing get the same objects", async () => {
+    await bootstrapCatalog(fake.client(), testConfig, catalog);
+    const keys = fake.requests.filter((r) => r.method === "POST").map((r) => `${r.path} ${r.idempotencyKey}`);
+    expect(keys).toContain("/v1/billing/meters context-kit-billing:meter:test_credits");
+    expect(keys).toContain("/v1/products context-kit-billing:product:test_pro_monthly");
+    expect(keys).toContain("/v1/prices context-kit-billing:price:test_pro_monthly");
+    expect(keys).toContain("/v1/prices context-kit-billing:price:test_credit_overage");
+
+    const racing = new FakeStripe();
+    const client = racing.client();
+    const [a, b] = await Promise.all([
+      bootstrapCatalog(client, testConfig, catalog),
+      bootstrapCatalog(client, testConfig, catalog),
+    ]);
+    expect(a.prices).toEqual(b.prices);
+    expect(racing.meters.size).toBe(1);
+  });
+
+  test("an inactive meter with the event name fails with a clear error instead of a duplicate create", async () => {
+    fake.meters.set("mtr_old", { id: "mtr_old", object: "billing.meter", event_name: "test_credits", status: "inactive" });
+    await expect(bootstrapCatalog(fake.client(), testConfig, catalog)).rejects.toThrow(/mtr_old.*inactive/);
+    expect(fake.requests.filter((r) => r.method === "POST")).toHaveLength(0);
+  });
+
+  test("a lookup key matching two active prices fails loudly instead of picking one", async () => {
+    fake.addPrice({ id: "price_a", lookupKey: "test_pro_monthly" });
+    fake.addPrice({ id: "price_b", lookupKey: "test_pro_monthly" });
+    await expect(bootstrapCatalog(fake.client(), testConfig, catalog)).rejects.toThrow(/test_pro_monthly.*price_a.*price_b|test_pro_monthly.*price_b.*price_a/);
+  });
 });

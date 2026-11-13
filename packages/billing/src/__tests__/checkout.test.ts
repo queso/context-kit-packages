@@ -115,6 +115,12 @@ describe("createCheckoutSession", () => {
     });
   });
 
+  test("fails loudly when a lookup key matches two active prices", async () => {
+    fake.addPrice({ id: "price_pro_2", lookupKey: "test_pro_monthly" });
+    await expect(createCheckoutSession(ctx, input)).rejects.toThrow(/test_pro_monthly/);
+    expect(checkoutCreates()).toHaveLength(0);
+  });
+
   test("refuses the free plan", async () => {
     await expect(createCheckoutSession(ctx, { ...input, plan: "free" })).rejects.toThrow(/free plan/);
     expect(checkoutCreates()).toHaveLength(0);

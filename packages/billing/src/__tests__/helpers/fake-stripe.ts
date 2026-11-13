@@ -70,6 +70,8 @@ export interface SubscriptionSpec {
   latestInvoiceFinalizedAt?: number | null;
   /** Finalization times of every open (unpaid) invoice of the subscription, oldest first or not. */
   openInvoicesFinalizedAt?: number[];
+  /** paid_at of invoices the subscription has paid. */
+  paidInvoicesPaidAt?: number[];
   /** Status of the latest invoice. Default "open". */
   latestInvoiceStatus?: "draft" | "open" | "paid";
   livemode?: boolean;
@@ -209,8 +211,15 @@ export class FakeStripe {
     for (const [id, inv] of this.invoices) {
       if (((inv.parent as Json)?.subscription_details as Json)?.subscription === spec.id) this.invoices.delete(id);
     }
+    (spec.paidInvoicesPaidAt ?? []).forEach((t, i) => {
+      const inv = invoice(`in_${spec.id}_paid${i}`, "paid", t - 3600);
+      Object.assign(inv, { created: t - 3600 });
+      (inv.status_transitions as Json).paid_at = t;
+      this.invoices.set(String(inv.id), inv);
+    });
     (spec.openInvoicesFinalizedAt ?? []).forEach((t, i) => {
       const inv = invoice(`in_${spec.id}_open${i}`, "open", t);
+      Object.assign(inv, { created: t });
       this.invoices.set(String(inv.id), inv);
     });
     let latestInvoice: Json | null = null;
@@ -264,8 +273,10 @@ export class FakeStripe {
     this.requests.push(req);
 
     const failure = this.failures.find((f) => f.times > 0 && f.match(req));
+    // Consumed as soon as it matches, so an idempotent replay below cannot leave
+    // it armed for a later, unrelated request.
+    if (failure) failure.times--;
     if (failure && !failure.afterHandling) {
-      failure.times--;
       return json(failure.status, failure.body);
     }
 
@@ -273,12 +284,11 @@ export class FakeStripe {
     const idemKey = req.idempotencyKey ? `${method} ${url.pathname} ${req.idempotencyKey}` : null;
     if (idemKey && method === "POST") {
       const saved = this.idempotent.get(idemKey);
-      if (saved) return json(saved.status, saved.body);
+      if (saved) return failure?.afterHandling ? json(failure.status, failure.body) : json(saved.status, saved.body);
     }
     const [status, body] = this.route(req);
     if (idemKey && method === "POST") this.idempotent.set(idemKey, { status, body });
     if (failure?.afterHandling) {
-      failure.times--;
       return json(failure.status, failure.body);
     }
     return json(status, body);
@@ -323,7 +333,13 @@ export class FakeStripe {
     if (method === "GET" && path === "/v1/subscriptions") {
       const data = [...this.subscriptions.values()]
         .filter((s) => !params.customer || s.customer === params.customer)
-        .filter((s) => params.status === "all" || !["canceled", "incomplete_expired"].includes(String(s.status)))
+        .filter((s) =>
+          params.status === "all"
+            ? true
+            : params.status
+              ? s.status === params.status
+              : !["canceled", "incomplete_expired"].includes(String(s.status))
+        )
         .map((s) => {
           const out = clone(s);
           const expand = (params.expand as string[] | undefined) ?? [];
@@ -335,11 +351,15 @@ export class FakeStripe {
       return [200, { object: "list", data, has_more: false, url: path }];
     }
     if (method === "GET" && path === "/v1/invoices") {
-      const data = [...this.invoices.values()].filter(
-        (inv) =>
-          (!params.subscription || ((inv.parent as Json)?.subscription_details as Json)?.subscription === params.subscription) &&
-          (!params.status || inv.status === params.status)
-      );
+      // Stripe lists newest first.
+      const data = [...this.invoices.values()]
+        .filter(
+          (inv) =>
+            (!params.subscription || ((inv.parent as Json)?.subscription_details as Json)?.subscription === params.subscription) &&
+            (!params.status || inv.status === params.status)
+        )
+        .sort((a, b) => Number(b.created) - Number(a.created))
+        .slice(0, params.limit ? Number(params.limit) : undefined);
       return [200, { object: "list", data, has_more: false, url: path }];
     }
     if (method === "GET" && path === "/v1/prices") {

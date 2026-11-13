@@ -21,7 +21,11 @@ async function open(): Promise<BillingDb> {
 }
 
 export async function createTestDb(): Promise<{ db: BillingDb; close: () => Promise<void> }> {
-  shared ??= open();
+  // A failed open is not cached, so a one-off failure does not poison every later test.
+  shared ??= open().catch((err) => {
+    shared = undefined;
+    throw err;
+  });
   const db = await shared;
   await db.execute(
     sql`truncate billing_customer, billing_subscription, billing_webhook_event, billing_usage_report`

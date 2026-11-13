@@ -9,7 +9,8 @@ The design, with the Stripe documentation it relies on, is in [issue #7](https:/
 - **Subject.** The package bills a *subject*: an opaque string id the app chooses for whatever pays (a team, an org, a GitHub account). It has no notion of users. Deciding whether the signed-in person may act for a subject is the app's job, inside every Server Action.
 - **Plans.** Stripe holds products and amounts. The app's config maps each plan to a price `lookup_key` and the units it includes per period.
 - **Overage.** One metered per-unit price, shared by every plan, fed by a Billing Meter. The app decides how much of each usage record is above the allowance (`computeOverage`) and enqueues it; a reporter sends it to Stripe.
-- **State.** Webhooks never apply their payload. Each event names an object; the package fetches it from Stripe and replaces the stored row, so repeated and out-of-order deliveries converge on Stripe's current state.
+- **State.** Webhooks never apply their payload. Each event names an object; the package fetches it from Stripe and replaces the stored row, so repeated and out-of-order deliveries converge on Stripe's current state. Fetch and store for one subscription run under a Postgres advisory lock keyed on its id, so two concurrent deliveries cannot leave the older state stored.
+- **Subject of a subscription.** The `billing_customer` mapping decides it; the subscription's `metadata.subject_id` is only a fallback for a customer not mapped yet. If the two disagree, the subscription is not stored and the event is flagged `subject_mismatch`. An event whose subject is not known yet is answered with 500 and left unprocessed, so Stripe retries it once the customer is mapped.
 
 Stripe API version: `2026-10-28.endive`, pinned to match stripe-node 23.1.0.
 
@@ -174,7 +175,7 @@ It reads only the local tables, never Stripe. Rules:
 | Subscription status | Limits |
 |---------------------|--------|
 | `active`, `trialing` | the paid plan |
-| `past_due` | the paid plan until `graceEndsAt` (oldest unpaid invoice finalized + `gracePeriodDays`; a renewal while past due does not restart it), then free |
+| `past_due` | the paid plan until `graceEndsAt` (oldest unpaid invoice finalized + `gracePeriodDays`; a renewal while past due does not restart it, and a payment since the stored date starts a new stretch), then free |
 | `unpaid`, `canceled`, `incomplete`, `incomplete_expired`, `paused`, none | free |
 
 The answer is about new work only. The package never stops work already running; gate new runs on `getEntitlement` and let running ones finish.

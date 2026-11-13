@@ -398,23 +398,40 @@ export async function reportPendingUsage(
   claimed.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.sourceId.localeCompare(b.sourceId));
 
   let firstBlock: Extract<Outcome, { kind: "blocked" }> | undefined;
-  for (const row of claimed) {
-    const outcome = await reportOne(ctx, row, leaseId, now);
-    if (outcome.kind !== "blocked") {
-      summary[outcome.kind]++;
-      continue;
+  try {
+    for (const row of claimed) {
+      let outcome: Outcome;
+      try {
+        outcome = await reportOne(ctx, row, leaseId, now);
+      } catch (err) {
+        // A database error on one row must not stop the rows after it. The row
+        // stays pending; if Stripe already took it, the resend is refused as a
+        // duplicate and it ends as sent.
+        const message = redact(err instanceof Error ? err.message : String(err));
+        await ctx.db
+          .update(billingUsageReport)
+          .set({ lastError: message, leaseId: null, leaseExpiresAt: null })
+          .where(and(eq(billingUsageReport.sourceId, row.sourceId), eq(billingUsageReport.leaseId, leaseId)))
+          .catch(() => {});
+        summary.retry++;
+        continue;
+      }
+      if (outcome.kind !== "blocked") {
+        summary[outcome.kind]++;
+        continue;
+      }
+      summary.blocked++;
+      firstBlock ??= outcome;
+      if (outcome.stopAll) break;
     }
-    summary.blocked++;
-    firstBlock ??= outcome;
-    if (outcome.stopAll) break;
+  } finally {
+    // Release whatever this run claimed but did not finish, so the next run can
+    // take it without waiting for the lease to expire.
+    await ctx.db
+      .update(billingUsageReport)
+      .set({ leaseId: null, leaseExpiresAt: null })
+      .where(eq(billingUsageReport.leaseId, leaseId));
   }
-
-  // Release whatever this run claimed but did not finish, so the next run can
-  // take it without waiting for the lease to expire.
-  await ctx.db
-    .update(billingUsageReport)
-    .set({ leaseId: null, leaseExpiresAt: null })
-    .where(eq(billingUsageReport.leaseId, leaseId));
 
   if (firstBlock) {
     throw new UsageReportingBlockedError(
