@@ -68,9 +68,18 @@ describe("resolveEntitlement", () => {
     expect(e.subscription?.status).toBe("past_due");
   });
 
-  test("past_due with no recorded start counts as inside the grace period", () => {
-    const e = resolveEntitlement(testConfig, "1", [row({ status: "past_due", pastDueSince: null })], NOW);
+  test("past_due with no recorded start uses syncedAt as the grace start", () => {
+    const syncedAt = new Date(NOW.getTime() - 2 * DAY);
+    const e = resolveEntitlement(testConfig, "1", [row({ status: "past_due", pastDueSince: null, syncedAt })], NOW);
     expect(e).toMatchObject({ plan: "pro", reason: "grace" });
+    expect(e.subscription?.graceEndsAt).toEqual(new Date(syncedAt.getTime() + 7 * DAY));
+  });
+
+  test("past_due with no recorded start expires when syncedAt is older than the grace period", () => {
+    const syncedAt = new Date(NOW.getTime() - 8 * DAY);
+    const e = resolveEntitlement(testConfig, "1", [row({ status: "past_due", pastDueSince: null, syncedAt })], NOW);
+    expect(e).toMatchObject({ plan: "free", paid: false, reason: "grace_expired" });
+    expect(e.subscription?.graceEndsAt).not.toBeNull();
   });
 
   test.each(["unpaid", "canceled", "incomplete", "incomplete_expired", "paused"])(

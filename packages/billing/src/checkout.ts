@@ -1,12 +1,12 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type Stripe from "stripe";
 import { ensureCustomer, getCustomerId, assertSubjectId, type CustomerDetails } from "./customers.js";
 import { billingCustomer, billingSubscription } from "./schema/postgres.js";
 import { syncSubscription, type SyncResult } from "./subscriptions.js";
-import type { BillingContext } from "./types.js";
+import type { BillingContext, BillingDb } from "./types.js";
 
-const DAY_MS = 86_400_000;
-const MIN_SESSION_MS = 30 * 60_000;
+/** First key of the two-key advisory lock, shared with subscriptions.ts ("bill"). */
+const LOCK_NAMESPACE = 0x62696c6c;
 
 /** Statuses that still hold a live subscription; a second Checkout would double-bill. */
 const LIVE_STATUSES = ["active", "trialing", "past_due", "unpaid", "incomplete", "paused"];
@@ -65,7 +65,7 @@ export function buildCheckoutParams(
     overagePriceId: string;
     successUrl: string;
     cancelUrl: string;
-    billingCycleAnchor: Date | null;
+    anchorToMonthStart: boolean;
   }
 ): Stripe.Checkout.SessionCreateParams {
   const params: Stripe.Checkout.SessionCreateParams = {
@@ -79,8 +79,10 @@ export function buildCheckoutParams(
     ],
     subscription_data: {
       metadata: { subject_id: input.subjectId },
-      ...(input.billingCycleAnchor
-        ? { billing_cycle_anchor: Math.floor(input.billingCycleAnchor.getTime() / 1000) }
+      // Stripe computes the anchor when the subscription is created and
+      // accounts for short months, so a session needs no expiry handling.
+      ...(input.anchorToMonthStart
+        ? { billing_cycle_anchor_config: { day_of_month: 1, hour: 0, minute: 0, second: 0 } }
         : {}),
     },
     success_url: input.successUrl,
@@ -136,41 +138,59 @@ export async function createCheckoutSession(
     throw new Error("The free plan has no Checkout; it needs no payment");
   }
 
-  const [live] = await ctx.db
-    .select({ id: billingSubscription.stripeSubscriptionId })
-    .from(billingSubscription)
-    .where(and(eq(billingSubscription.subjectId, input.subjectId), inArray(billingSubscription.status, LIVE_STATUSES)));
-  if (live) throw new AlreadySubscribedError(input.subjectId, live.id);
-
   const prices = await resolvePricesByLookupKey(ctx.stripe, [plan.priceLookupKey, ctx.config.overage.priceLookupKey]);
-  const customer = await ensureCustomer(ctx, input.subjectId, input.customer);
-  const now = ctx.now?.() ?? new Date();
-  let anchor: Date | null = null;
-  if (input.anchorToMonthStart !== false) {
-    anchor = nextMonthStartUtc(now);
-    // Stripe's shortest session lifetime is 30 minutes. Inside the last 30
-    // minutes of a month, anchor on the following month start instead.
-    if (anchor.getTime() - now.getTime() < MIN_SESSION_MS) anchor = nextMonthStartUtc(anchor);
-  }
 
-  const params = buildCheckoutParams(ctx.config, {
-    subjectId: input.subjectId,
-    customer,
-    basePriceId: prices.get(plan.priceLookupKey)!.id,
-    overagePriceId: prices.get(ctx.config.overage.priceLookupKey)!.id,
-    successUrl: input.successUrl,
-    cancelUrl: input.cancelUrl,
-    billingCycleAnchor: input.anchorToMonthStart === false ? null : anchor,
+  // The live-subscription check, the expiry of older open sessions and the
+  // create run under one lock per subject, so two concurrent calls cannot each
+  // pass the check and leave two open sessions. The lock is held across a few
+  // Stripe calls and only blocks Checkouts for the same subject.
+  return ctx.db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(${LOCK_NAMESPACE}, hashtext(${"checkout:" + input.subjectId}))`);
+    const txCtx = { ...ctx, db: tx };
+
+    const [live] = await tx
+      .select({ id: billingSubscription.stripeSubscriptionId })
+      .from(billingSubscription)
+      .where(and(eq(billingSubscription.subjectId, input.subjectId), inArray(billingSubscription.status, LIVE_STATUSES)));
+    if (live) throw new AlreadySubscribedError(input.subjectId, live.id);
+
+    const customer = await ensureCustomer(txCtx, input.subjectId, input.customer);
+
+    // An older open session could be completed after this one, or after a
+    // subscription starts, and would bill a second subscription.
+    const open = await ctx.stripe.checkout.sessions.list({ customer, status: "open", limit: 100 });
+    for (const old of open.data) await ctx.stripe.checkout.sessions.expire(old.id);
+
+    const params = buildCheckoutParams(ctx.config, {
+      subjectId: input.subjectId,
+      customer,
+      basePriceId: prices.get(plan.priceLookupKey!)!.id,
+      overagePriceId: prices.get(ctx.config.overage.priceLookupKey)!.id,
+      successUrl: input.successUrl,
+      cancelUrl: input.cancelUrl,
+      anchorToMonthStart: input.anchorToMonthStart !== false,
+    });
+    const session = await ctx.stripe.checkout.sessions.create(params);
+    if (!session.url) throw new Error("Stripe returned a Checkout Session without a URL");
+    return { id: session.id, url: session.url };
   });
-  if (anchor && anchor.getTime() - now.getTime() < DAY_MS) {
-    // A session lives 24 hours by default. Expire it at the anchor so a
-    // customer cannot complete it after the anchor has passed.
-    params.expires_at = Math.floor(anchor.getTime() / 1000);
-  }
+}
 
-  const session = await ctx.stripe.checkout.sessions.create(params);
-  if (!session.url) throw new Error("Stripe returned a Checkout Session without a URL");
-  return { id: session.id, url: session.url };
+/**
+ * Maps a subject to the Stripe customer a Checkout Session used. Does nothing
+ * when the session has no customer or the mapping already exists.
+ */
+export async function recordSessionCustomer(
+  db: BillingDb,
+  session: Pick<Stripe.Checkout.Session, "customer" | "livemode">,
+  subjectId: string
+): Promise<void> {
+  const customerId = typeof session.customer === "string" ? session.customer : session.customer?.id;
+  if (!customerId) return;
+  await db
+    .insert(billingCustomer)
+    .values({ subjectId, stripeCustomerId: customerId, livemode: session.livemode })
+    .onConflictDoNothing();
 }
 
 /**
@@ -190,13 +210,7 @@ export async function completeCheckout(
   }
   if (session.status !== "complete" || session.mode !== "subscription" || !session.subscription) return null;
 
-  const customerId = typeof session.customer === "string" ? session.customer : session.customer?.id;
-  if (customerId) {
-    await ctx.db
-      .insert(billingCustomer)
-      .values({ subjectId: expected.subjectId, stripeCustomerId: customerId, livemode: session.livemode })
-      .onConflictDoNothing();
-  }
+  await recordSessionCustomer(ctx.db, session, expected.subjectId);
   const subscriptionId = typeof session.subscription === "string" ? session.subscription : session.subscription.id;
   return syncSubscription(ctx, subscriptionId);
 }

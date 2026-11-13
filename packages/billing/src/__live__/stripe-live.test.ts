@@ -319,33 +319,52 @@ describe.skipIf(!enabled)("live Stripe sandbox", () => {
     );
     cleanups.push(async () => listener.kill());
 
-    // `stripe listen` prints "Ready!" on stderr once it is forwarding.
-    let output = "";
-    const reader = listener.stderr.getReader();
-    await poll("stripe listen to print Ready", async () => {
-      const { value, done } = await Promise.race([
-        reader.read(),
-        new Promise<{ value: undefined; done: false }>((r) => setTimeout(() => r({ value: undefined, done: false }), 1_000)),
-      ]);
-      if (value) output += new TextDecoder().decode(value);
-      if (done) throw new Error("stripe listen exited before it was ready");
-      return output.includes("Ready");
-    }, 60_000);
-    reader.releaseLock();
+    try {
+      // `stripe listen` prints "Ready!" on stderr once it is forwarding. The
+      // reader is always released, and stderr keeps draining after Ready so the
+      // CLI never blocks on a full pipe.
+      let output = "";
+      const reader = listener.stderr.getReader();
+      try {
+        await poll("stripe listen to print Ready", async () => {
+          const { value, done } = await Promise.race([
+            reader.read(),
+            new Promise<{ value: undefined; done: false }>((r) => setTimeout(() => r({ value: undefined, done: false }), 1_000)),
+          ]);
+          if (value) output += new TextDecoder().decode(value);
+          if (done) throw new Error("stripe listen exited before it was ready");
+          return output.includes("Ready");
+        }, 60_000);
+      } catch (err) {
+        reader.releaseLock();
+        throw err;
+      }
+      void (async () => {
+        try {
+          while (!(await reader.read()).done) {}
+        } catch {
+          // The listener was killed.
+        } finally {
+          reader.releaseLock();
+        }
+      })();
 
-    const { subjectId, customerId } = await customerWithCard(ctx);
-    const sub = await subscribe(customerId, subjectId, p);
-    cleanups.push(() => stripe().subscriptions.cancel(sub.id));
+      const { subjectId, customerId } = await customerWithCard(ctx);
+      const sub = await subscribe(customerId, subjectId, p);
+      cleanups.push(() => stripe().subscriptions.cancel(sub.id));
 
-    await poll("the webhook to be delivered and processed", async () => {
-      const [ev] = await ctx.db
-        .select()
-        .from(billingWebhookEvent)
-        .where(and(eq(billingWebhookEvent.objectId, sub.id), isNotNull(billingWebhookEvent.processedAt)));
-      return ev;
-    }, 120_000);
-    // The subscription row was written by the webhook path, not by a direct sync.
-    const [row] = await ctx.db.select().from(billingSubscription).where(eq(billingSubscription.stripeSubscriptionId, sub.id));
-    expect(row).toMatchObject({ subjectId, planKey: "pro" });
+      await poll("the webhook to be delivered and processed", async () => {
+        const [ev] = await ctx.db
+          .select()
+          .from(billingWebhookEvent)
+          .where(and(eq(billingWebhookEvent.objectId, sub.id), isNotNull(billingWebhookEvent.processedAt)));
+        return ev;
+      }, 120_000);
+      // The subscription row was written by the webhook path, not by a direct sync.
+      const [row] = await ctx.db.select().from(billingSubscription).where(eq(billingSubscription.stripeSubscriptionId, sub.id));
+      expect(row).toMatchObject({ subjectId, planKey: "pro" });
+    } finally {
+      listener.kill();
+    }
   }, LONG);
 });

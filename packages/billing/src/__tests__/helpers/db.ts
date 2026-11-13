@@ -30,5 +30,8 @@ export async function createTestDb(): Promise<{ db: BillingDb; close: () => Prom
   await db.execute(
     sql`truncate billing_customer, billing_subscription, billing_webhook_event, billing_usage_report`
   );
+  // close is a no-op on purpose: the PGlite instance is shared by every test in
+  // the process, so closing it per test would break the next one. Process exit
+  // releases it.
   return { db, close: async () => {} };
 }

@@ -302,9 +302,31 @@ export class FakeStripe {
       const id = nextId("cus");
       return [200, this.putCustomer(id, (params.metadata as Record<string, string>) ?? {})];
     }
-    if (method === "GET" && (m = path.match(/^\/v1\/customers\/([^/]+)$/))) {
+    if (method === "GET" && path !== "/v1/customers/search" && (m = path.match(/^\/v1\/customers\/([^/]+)$/))) {
       const c = this.customers.get(m[1]!);
       return c ? [200, c] : notFound("customer", m[1]!);
+    }
+    if (method === "POST" && (m = path.match(/^\/v1\/customers\/([^/]+)$/))) {
+      const c = this.customers.get(m[1]!);
+      if (!c) return notFound("customer", m[1]!);
+      if (params.metadata) c.metadata = { ...(c.metadata as Json), ...(params.metadata as Json) };
+      for (const k of ["name", "email"]) if (params[k] !== undefined) c[k] = params[k];
+      return [200, c];
+    }
+    if (method === "GET" && path === "/v1/checkout/sessions") {
+      const data = [...this.checkoutSessions.values()].filter(
+        (cs) => (!params.customer || cs.customer === params.customer) && (!params.status || cs.status === params.status)
+      );
+      return [200, { object: "list", data, has_more: false, url: path }];
+    }
+    if (method === "POST" && (m = path.match(/^\/v1\/checkout\/sessions\/([^/]+)\/expire$/))) {
+      const cs = this.checkoutSessions.get(m[1]!);
+      if (!cs) return notFound("checkout.session", m[1]!);
+      if (cs.status !== "open") {
+        return [400, { error: { type: "invalid_request_error", message: `Only Checkout Sessions with a status of open can be expired.` } }];
+      }
+      cs.status = "expired";
+      return [200, cs];
     }
     if (method === "GET" && path === "/v1/customers") {
       return [200, { object: "list", data: [...this.customers.values()], has_more: false, url: path }];
@@ -395,7 +417,16 @@ export class FakeStripe {
     }
     if (method === "POST" && path === "/v1/billing/meters") {
       const meter = clone(meterFixture) as Json;
-      Object.assign(meter, { id: nextId("mtr"), event_name: params.event_name, display_name: params.display_name, status: "active" });
+      Object.assign(meter, {
+        id: nextId("mtr"),
+        event_name: params.event_name,
+        display_name: params.display_name,
+        status: "active",
+        default_aggregation: params.default_aggregation ?? { formula: "sum" },
+        customer_mapping: params.customer_mapping ?? { type: "by_id", event_payload_key: "stripe_customer_id" },
+        value_settings: params.value_settings ?? { event_payload_key: "value" },
+        event_time_window: params.event_time_window ?? null,
+      });
       this.meters.set(String(meter.id), meter);
       return [200, meter];
     }
@@ -427,6 +458,7 @@ export class FakeStripe {
         metadata: params.metadata ?? {},
         subscription: null,
         status: "open",
+        created: Math.floor(Date.now() / 1000) + this.checkoutSessions.size,
       });
       this.checkoutSessions.set(id, session);
       return [200, session];

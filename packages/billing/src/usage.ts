@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull, lt, or } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import type Stripe from "stripe";
 import { billingCustomer, billingSubscription, billingUsageReport } from "./schema/postgres.js";
 import type { BillingContext } from "./types.js";
@@ -212,17 +212,41 @@ function redact(message: string): string {
   return message.replace(/\b(sk|rk|pk)_(test|live)_[A-Za-z0-9*]+/g, "$1_$2_[redacted]").slice(0, 1000);
 }
 
+/**
+ * One calendar month before `d`, with the day clamped to the length of that
+ * month (March 31 gives February 28, not March 3) and the time of day kept.
+ * For anchors on the 29th to 31st this is approximate by up to 3 days, because
+ * Stripe's own period boundaries may differ; it errs toward sending.
+ */
 function previousMonthStart(d: Date): Date {
+  const year = d.getUTCFullYear();
+  const month = d.getUTCMonth() - 1;
+  const daysInTarget = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
   return new Date(
-    Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, d.getUTCDate(), d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds())
+    Date.UTC(year, month, Math.min(d.getUTCDate(), daysInTarget), d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds())
   );
 }
+
+/** Per-run lookup caches, so a batch of rows for one subject reads each table once. */
+interface RunCache {
+  customers: Map<string, { id: string } | undefined>;
+  subscriptions: Map<string, SubscriptionRow[]>;
+}
+
+type SubscriptionRow = {
+  start: Date | null;
+  end: Date | null;
+  status: string;
+  overagePriceId: string | null;
+  interval: string | null;
+  intervalCount: number | null;
+};
 
 type Outcome =
   | { kind: "sent" | "retry" | "failed" | "late" | "needsReview" }
   | { kind: "blocked"; reason: BlockedReason; message: string; stopAll: boolean; statusCode?: number; stripeCode?: string };
 
-async function reportOne(ctx: BillingContext, row: Row, leaseId: string, now: Date): Promise<Outcome> {
+async function reportOne(ctx: BillingContext, row: Row, leaseId: string, now: Date, cache: RunCache): Promise<Outcome> {
   const db = ctx.db;
   // Every write is fenced by the lease: if another reporter took the row over,
   // this one's late result is discarded.
@@ -232,10 +256,16 @@ async function reportOne(ctx: BillingContext, row: Row, leaseId: string, now: Da
       .set({ ...set, leaseId: null, leaseExpiresAt: null })
       .where(and(eq(billingUsageReport.sourceId, row.sourceId), eq(billingUsageReport.leaseId, leaseId)));
 
-  const [customer] = await db
-    .select({ id: billingCustomer.stripeCustomerId })
-    .from(billingCustomer)
-    .where(eq(billingCustomer.subjectId, row.subjectId));
+  let customer: { id: string } | undefined;
+  if (cache.customers.has(row.subjectId)) {
+    customer = cache.customers.get(row.subjectId);
+  } else {
+    [customer] = await db
+      .select({ id: billingCustomer.stripeCustomerId })
+      .from(billingCustomer)
+      .where(eq(billingCustomer.subjectId, row.subjectId));
+    cache.customers.set(row.subjectId, customer);
+  }
   if (!customer) {
     await finish({ status: "failed", lastError: "no_customer" });
     return { kind: "failed" };
@@ -246,7 +276,9 @@ async function reportOne(ctx: BillingContext, row: Row, leaseId: string, now: Da
     return { kind: "needsReview" };
   }
 
-  const subs = await db
+  let subs = cache.subscriptions.get(row.subjectId);
+  if (!subs) {
+    subs = await db
     .select({
       start: billingSubscription.currentPeriodStart,
       end: billingSubscription.currentPeriodEnd,
@@ -258,12 +290,15 @@ async function reportOne(ctx: BillingContext, row: Row, leaseId: string, now: Da
     .from(billingSubscription)
     .where(eq(billingSubscription.subjectId, row.subjectId))
     .orderBy(desc(billingSubscription.currentPeriodStart));
+    cache.subscriptions.set(row.subjectId, subs);
+  }
   const live = subs.find((s) => !ENDED_STATUSES.has(s.status));
   const sub = live ?? subs[0];
   if (!sub?.start) {
     // Usage written right after Checkout can arrive before the subscription is
     // synced. Wait; a row stuck this way reaches needs_review after the resend window.
-    await finish({ lastError: "no_subscription", firstAttemptAt: row.firstAttemptAt ?? now });
+    // Counts as an attempt so rows stuck here yield to newer rows in the claim order.
+    await finish({ lastError: "no_subscription", attempts: row.attempts + 1, firstAttemptAt: row.firstAttemptAt ?? now });
     return { kind: "retry" };
   }
   if (!sub.overagePriceId) {
@@ -387,7 +422,7 @@ export async function reportPendingUsage(
         or(isNull(billingUsageReport.leaseExpiresAt), lt(billingUsageReport.leaseExpiresAt, now))
       )
     )
-    .orderBy(asc(billingUsageReport.createdAt), asc(billingUsageReport.sourceId))
+    .orderBy(asc(billingUsageReport.attempts), asc(billingUsageReport.createdAt), asc(billingUsageReport.sourceId))
     .limit(limit)
     .for("update", { skipLocked: true });
   const claimed = await ctx.db
@@ -395,14 +430,18 @@ export async function reportPendingUsage(
     .set({ leaseId, leaseExpiresAt: new Date(now.getTime() + LEASE_MS) })
     .where(inArray(billingUsageReport.sourceId, claimable))
     .returning();
-  claimed.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.sourceId.localeCompare(b.sourceId));
+  claimed.sort(
+    (a, b) => a.attempts - b.attempts || a.createdAt.getTime() - b.createdAt.getTime() || a.sourceId.localeCompare(b.sourceId)
+  );
+  const cache: RunCache = { customers: new Map(), subscriptions: new Map() };
 
   let firstBlock: Extract<Outcome, { kind: "blocked" }> | undefined;
   try {
     for (const row of claimed) {
       let outcome: Outcome;
       try {
-        outcome = await reportOne(ctx, row, leaseId, now);
+        // The clock is read per row: a long batch can cross the grace window.
+        outcome = await reportOne(ctx, row, leaseId, ctx.now?.() ?? new Date(), cache);
       } catch (err) {
         // A database error on one row must not stop the rows after it. The row
         // stays pending; if Stripe already took it, the resend is refused as a
@@ -410,7 +449,7 @@ export async function reportPendingUsage(
         const message = redact(err instanceof Error ? err.message : String(err));
         await ctx.db
           .update(billingUsageReport)
-          .set({ lastError: message, leaseId: null, leaseExpiresAt: null })
+          .set({ lastError: message, attempts: sql`${billingUsageReport.attempts} + 1`, leaseId: null, leaseExpiresAt: null })
           .where(and(eq(billingUsageReport.sourceId, row.sourceId), eq(billingUsageReport.leaseId, leaseId)))
           .catch(() => {});
         summary.retry++;

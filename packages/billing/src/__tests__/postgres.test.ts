@@ -14,16 +14,30 @@ import type { BillingContext, BillingDb } from "../types";
 /**
  * Concurrency checks that need a real Postgres server: PGlite runs one
  * transaction at a time, so FOR UPDATE SKIP LOCKED is only exercised here.
- * Locally the suite skips without DATABASE_URL; CI sets REQUIRE_POSTGRES so a
- * missing server fails the job.
+ * setup() drops the billing tables, so the suite also needs
+ * BILLING_PG_TEST_ALLOW_DROP=1: a developer's application DATABASE_URL alone
+ * must not lose billing data. Without both, the suite skips; CI sets
+ * REQUIRE_POSTGRES so a missing server or opt-in fails the job.
  */
 
 const url = process.env.DATABASE_URL ?? "";
-const hasPostgres = /^postgres(ql)?:/.test(url);
+const isPostgresUrl = /^postgres(ql)?:/.test(url);
+const allowDrop = process.env.BILLING_PG_TEST_ALLOW_DROP === "1";
+const hasPostgres = isPostgresUrl && allowDrop;
 
 if (process.env.REQUIRE_POSTGRES && !hasPostgres) {
   // The URL is not printed: it may carry credentials and this ends up in CI logs.
-  throw new Error("REQUIRE_POSTGRES is set but DATABASE_URL is missing or is not a postgres:// or postgresql:// URL");
+  throw new Error(
+    "REQUIRE_POSTGRES is set but DATABASE_URL is missing or is not a postgres:// or postgresql:// URL, or BILLING_PG_TEST_ALLOW_DROP=1 is not set"
+  );
+}
+
+if (!hasPostgres) {
+  console.warn(
+    isPostgresUrl
+      ? "Skipping billing Postgres tests: they drop the billing tables, set BILLING_PG_TEST_ALLOW_DROP=1 to allow that on DATABASE_URL"
+      : "Skipping billing Postgres tests: DATABASE_URL is not a postgres:// or postgresql:// URL"
+  );
 }
 
 const clients: ReturnType<typeof postgres>[] = [];
@@ -152,5 +166,56 @@ describe.skipIf(!hasPostgres)("against a real Postgres server", () => {
     const [row] = await db.select().from(schema.billingSubscription);
     expect(row?.planKey).toBe("team");
     expect(retrieves).toBe(2);
+  });
+  // INSERT ... ON CONFLICT DO NOTHING waits for a conflicting uncommitted
+  // insert, so the follow-up SELECT sees a committed row and never reports a
+  // false "conflict".
+  describe("enqueueUsage against an uncommitted insert of the same sourceId", () => {
+    async function race(finish: "commit" | "rollback") {
+      const db = await setup();
+      const ctx: BillingContext = { db, stripe: {} as never, config: testConfig };
+      const record = { sourceId: "race_1", subjectId: "1", value: 3, occurredAt: new Date() };
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let inserted!: () => void;
+      const firstInserted = new Promise<void>((r) => (inserted = r));
+      let committedAt = 0;
+
+      const first = (db as unknown as { transaction: (fn: (tx: BillingDb) => Promise<void>) => Promise<void> })
+        .transaction(async (tx) => {
+          expect(await enqueueUsage({ ...ctx, db: tx }, record)).toBe("enqueued");
+          inserted();
+          await gate;
+          committedAt = Date.now();
+          if (finish === "rollback") throw new Error("rollback");
+        })
+        .catch((err) => {
+          if (finish !== "rollback") throw err;
+        });
+      await firstInserted;
+
+      let resolvedAt = 0;
+      const second = enqueueUsage(ctx, record).then((r) => {
+        resolvedAt = Date.now();
+        return r;
+      });
+      await new Promise((r) => setTimeout(r, 200));
+      release();
+      await first;
+      const result = await second;
+      return { result, resolvedAt, committedAt };
+    }
+
+    test("resolves to duplicate, and only after the first transaction commits", async () => {
+      const { result, resolvedAt, committedAt } = await race("commit");
+      expect(result).toBe("duplicate");
+      expect(resolvedAt).toBeGreaterThanOrEqual(committedAt);
+    });
+
+    test("resolves to enqueued when the first transaction rolls back", async () => {
+      const { result, resolvedAt, committedAt } = await race("rollback");
+      expect(result).toBe("enqueued");
+      expect(resolvedAt).toBeGreaterThanOrEqual(committedAt);
+    });
   });
 });

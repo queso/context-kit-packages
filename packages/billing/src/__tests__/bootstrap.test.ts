@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach } from "bun:test";
 import { bootstrapCatalog, type Catalog } from "../bootstrap";
 import { FakeStripe } from "./helpers/fake-stripe";
 import { testConfig } from "./helpers/config";
+import type { BillingConfig } from "../types";
 
 const catalog: Catalog = {
   currency: "usd",
@@ -109,5 +110,72 @@ describe("bootstrapCatalog", () => {
     fake.addPrice({ id: "price_a", lookupKey: "test_pro_monthly" });
     fake.addPrice({ id: "price_b", lookupKey: "test_pro_monthly" });
     await expect(bootstrapCatalog(fake.client(), testConfig, catalog)).rejects.toThrow(/test_pro_monthly.*price_a.*price_b|test_pro_monthly.*price_b.*price_a/);
+  });
+
+  const goodMeter = {
+    id: "mtr_old",
+    object: "billing.meter",
+    event_name: "test_credits",
+    status: "active",
+    default_aggregation: { formula: "sum" },
+    customer_mapping: { type: "by_id", event_payload_key: "stripe_customer_id" },
+    value_settings: { event_payload_key: "value" },
+    event_time_window: null,
+  };
+
+  test("reuses an existing meter whose settings are correct", async () => {
+    fake.meters.set("mtr_old", { ...goodMeter });
+    const result = await bootstrapCatalog(fake.client(), testConfig, catalog);
+    expect(result.meterId).toBe("mtr_old");
+    expect(posts("/v1/billing/meters")).toHaveLength(0);
+  });
+
+  test.each([
+    ["aggregates with count", { default_aggregation: { formula: "count" } }, /mtr_old.*default_aggregation/],
+    ["aggregates with last", { default_aggregation: { formula: "last" } }, /mtr_old.*default_aggregation/],
+    ["maps customers by another type", { customer_mapping: { type: "by_name", event_payload_key: "stripe_customer_id" } }, /mtr_old.*customer_mapping/],
+    ["reads the customer from another key", { customer_mapping: { type: "by_id", event_payload_key: "customer" } }, /mtr_old.*customer_mapping/],
+    ["reads the value from another key", { value_settings: { event_payload_key: "amount" } }, /mtr_old.*value_settings/],
+    ["is pre-aggregated", { event_time_window: "day" }, /mtr_old.*event_time_window/],
+  ])("an existing meter that %s is refused before anything is created", async (_name, override, message) => {
+    fake.meters.set("mtr_old", { ...goodMeter, ...override });
+    await expect(bootstrapCatalog(fake.client(), testConfig, catalog)).rejects.toThrow(message);
+    expect(fake.requests.filter((r) => r.method === "POST")).toHaveLength(0);
+  });
+
+  test("more than 10 paid plans bootstrap, and each price lookup sends at most 10 lookup keys", async () => {
+    const plans: BillingConfig["plans"] = { free: { includedUnits: 1 } };
+    const catalogPlans: Catalog["plans"] = {};
+    for (let i = 0; i < 11; i++) {
+      plans[`p${i}`] = { includedUnits: 10, priceLookupKey: `many_p${i}` };
+      catalogPlans[`p${i}`] = { productName: `P${i}`, unitAmount: 100 + i };
+    }
+    const config: BillingConfig = { ...testConfig, plans };
+    const client = fake.client();
+
+    const first = await bootstrapCatalog(client, config, { ...catalog, plans: catalogPlans });
+    expect(Object.keys(first.prices)).toHaveLength(12);
+    // A second run must find all 12 through the chunked lookups and create nothing.
+    const before = fake.requests.filter((r) => r.method === "POST").length;
+    const second = await bootstrapCatalog(client, config, { ...catalog, plans: catalogPlans });
+    expect(second.created).toEqual([]);
+    expect(second.prices).toEqual(first.prices);
+    expect(fake.requests.filter((r) => r.method === "POST").length).toBe(before);
+
+    const lists = fake.requests.filter((r) => r.method === "GET" && r.path === "/v1/prices");
+    expect(lists.length).toBeGreaterThan(2);
+    for (const l of lists) expect((l.params.lookup_keys as string[]).length).toBeLessThanOrEqual(10);
+  });
+
+  test("an existing overage price on a different meter fails naming both meters", async () => {
+    fake.meters.set("mtr_old", { ...goodMeter });
+    fake.addPrice({ id: "price_over", lookupKey: "test_credit_overage", usageType: "metered" });
+    (fake.prices.get("price_over")!.recurring as Record<string, unknown>).meter = "mtr_other";
+    const err = await bootstrapCatalog(fake.client(), testConfig, catalog).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/price_over/);
+    expect((err as Error).message).toMatch(/mtr_other/);
+    expect((err as Error).message).toMatch(/mtr_old/);
+    expect(fake.requests.filter((r) => r.method === "POST")).toHaveLength(0);
   });
 });

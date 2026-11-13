@@ -64,6 +64,8 @@ export const billing = createBilling({
 
 `createBilling` validates the config and throws on a bad plan table, so a typo fails at startup.
 
+One database pairs with one Stripe mode. `billing_customer` keys on the subject alone, so test-mode and live-mode data must not share a database.
+
 ## 3. Set up Stripe
 
 **Catalog.** Create the meter, products and prices once per sandbox and once in live mode. `bootstrapCatalog` finds existing objects by lookup key and event name, so it is safe to re-run:
@@ -155,7 +157,11 @@ export async function openPortal(formData: FormData) {
 </form>
 ```
 
-Checkout renews subscriptions on the 1st of each month at 00:00 UTC (`anchorToMonthStart`, default true), so Stripe's billing period matches a calendar-month usage ledger. The first invoice is prorated. Within 24 hours of a month start the session expires at the anchor, and in the last 30 minutes of a month the anchor moves to the following month start, since Stripe sessions live at least 30 minutes.
+Checkout renews subscriptions on the 1st of each month at 00:00 UTC (`anchorToMonthStart`, default true), so Stripe's billing period matches a calendar-month usage ledger. The package sets `subscription_data.billing_cycle_anchor_config` (day 1, 00:00 UTC) and Stripe computes the anchor when the subscription is created, including around short months. The first invoice is prorated.
+
+`createCheckoutSession` expires the subject's other open Checkout Sessions, so a subject has one open session at a time. As a second guard, enable Stripe's "Limit customers to one subscription" setting ([docs](https://docs.stripe.com/payments/checkout/limit-subscriptions)).
+
+`ensureCustomer` creates the Stripe customer with only its subject metadata, then applies `name` and `email` with an update.
 
 **Success page.** Stripe advises fulfilling from the landing page as well as the webhook, since the webhook can be late. Both run the same idempotent sync:
 
@@ -184,12 +190,15 @@ With Cache Components on, do not wrap `getEntitlement` in `"use cache"` without 
 
 ## 6. Report overage
 
-Enqueue in the same transaction that writes your own usage record, so both commit or neither does:
+Enqueue in the same transaction that writes your own usage record, so both commit or neither does. The transaction takes a per-subject advisory lock first: without it, two concurrent runs for one subject can both read the same `usedBefore` and under-report overage.
 
 ```ts
+import { sql } from "drizzle-orm";
 import { computeOverage } from "@context-kit/billing";
 
 await db.transaction(async (tx) => {
+  // One run at a time per subject, so two concurrent runs cannot read the same total.
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${"usage:" + accountId}))`);
   const usedBefore = await creditsThisPeriod(tx, accountId);    // your ledger, rows before this one
   await tx.insert(usageRecords).values(run);
   const ent = await billing.getEntitlement(String(accountId));
@@ -225,7 +234,7 @@ A 200 from Stripe does not mean the event was billed; Stripe validates meter eve
 
 ## 7. Repair
 
-`billing.reconcile()` re-fetches every stored customer's subscriptions with the list API and replaces the rows. `reconcile({ repairCustomers: true })` also restores missing `billing_customer` rows from the customers' `metadata.subject_id`. Run it on a schedule or whenever the tables look wrong.
+`billing.reconcile()` re-fetches every stored customer's subscriptions with the list API and replaces the rows. `reconcile({ repairCustomers: true })` also restores missing `billing_customer` rows from the customers' `metadata.subject_id`. It counts subjects that have several tagged customers (`duplicateSubjects`) and picks the one with a live subscription, else the oldest. Run it on a schedule or whenever the tables look wrong.
 
 ## Testing
 

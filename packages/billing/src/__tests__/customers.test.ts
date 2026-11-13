@@ -29,12 +29,77 @@ describe("ensureCustomer", () => {
     expect(id).toMatch(/^cus_/);
     const [req] = customerCreates();
     expect(req?.params.metadata).toEqual({ subject_id: "12345" });
-    expect(req?.params.name).toBe("octo-org");
+    expect(req?.params.name).toBeUndefined();
     expect(req?.idempotencyKey).toBe("context-kit-billing:customer:12345");
 
     const rows = await ctx.db.select().from(billingCustomer);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ subjectId: "12345", stripeCustomerId: id, livemode: false });
+  });
+
+  test("creates with stable parameters only and applies name and email in an update", async () => {
+    const id = await ensureCustomer(ctx, "12", { name: "octo-org", email: "a@example.com" });
+    const [create] = customerCreates();
+    expect(create?.params).toEqual({ metadata: { subject_id: "12" } });
+    const update = fake.requests.find((r) => r.method === "POST" && r.path === `/v1/customers/${id}`);
+    expect(update?.params).toEqual({ name: "octo-org", email: "a@example.com" });
+    expect(fake.customers.get(id)).toMatchObject({ name: "octo-org", email: "a@example.com" });
+  });
+
+  test("makes no update call when no details are given", async () => {
+    await ensureCustomer(ctx, "13");
+    expect(fake.requests.filter((r) => r.path.startsWith("/v1/customers/") && r.method === "POST")).toHaveLength(0);
+  });
+
+  test("a failing update propagates after the mapping is stored", async () => {
+    fake.failNext((r) => r.method === "POST" && /^\/v1\/customers\/cus_/.test(r.path), 400);
+    await expect(ensureCustomer(ctx, "14", { name: "x" })).rejects.toThrow();
+    expect(await ctx.db.select().from(billingCustomer)).toHaveLength(1);
+  });
+
+  test("a retry with different details after a lost create response ends with one customer", async () => {
+    fake.loseNextResponse((r) => r.method === "POST" && r.path === "/v1/customers", 400);
+    await expect(ensureCustomer(ctx, "15", { name: "first" })).rejects.toThrow();
+    const id = await ensureCustomer(ctx, "15", { name: "second" });
+    expect(fake.customers.size).toBe(1);
+    expect(await getCustomerId(ctx.db, "15")).toBe(id);
+    expect(fake.customers.get(id)?.name).toBe("second");
+  });
+
+  test("recovers from a create 500 by finding the customer that Stripe did create", async () => {
+    fake.loseNextResponse((r) => r.method === "POST" && r.path === "/v1/customers", 500);
+    const id = await ensureCustomer(ctx, "16");
+    expect([...fake.customers.keys()]).toEqual([id]);
+    expect(await getCustomerId(ctx.db, "16")).toBe(id);
+    expect(fake.requests.some((r) => r.path === "/v1/customers/search")).toBe(true);
+  });
+
+  test("rethrows a create 500 when no customer exists", async () => {
+    fake.failNext((r) => r.method === "POST" && r.path === "/v1/customers", 500);
+    await expect(ensureCustomer(ctx, "17")).rejects.toThrow(/fake failure/);
+    expect(await ctx.db.select().from(billingCustomer)).toHaveLength(0);
+  });
+
+  test("throws naming the customers when the search finds several", async () => {
+    fake.putCustomer("cus_a", { subject_id: "18" });
+    fake.putCustomer("cus_b", { subject_id: "18" });
+    fake.failNext((r) => r.method === "POST" && r.path === "/v1/customers", 500);
+    await expect(ensureCustomer(ctx, "18")).rejects.toThrow(/cus_a.*cus_b|cus_b.*cus_a/);
+    expect(await ctx.db.select().from(billingCustomer)).toHaveLength(0);
+  });
+
+  test("does not look for a customer after a 4xx create error", async () => {
+    fake.putCustomer("cus_a", { subject_id: "19" });
+    fake.failNext((r) => r.method === "POST" && r.path === "/v1/customers", 400);
+    await expect(ensureCustomer(ctx, "19")).rejects.toThrow();
+    expect(fake.requests.some((r) => r.path === "/v1/customers/search")).toBe(false);
+  });
+
+  test("escapes quotes in the subject id for the search query", async () => {
+    fake.failNext((r) => r.method === "POST" && r.path === "/v1/customers", 500);
+    await expect(ensureCustomer(ctx, "o'brien")).rejects.toThrow();
+    const search = fake.requests.find((r) => r.path === "/v1/customers/search");
+    expect(search?.params.query).toBe("metadata['subject_id']:'o\\'brien'");
   });
 
   test("returns the stored customer without calling Stripe again", async () => {

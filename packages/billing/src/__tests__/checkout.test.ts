@@ -64,7 +64,7 @@ describe("createCheckoutSession", () => {
       line_items: [{ price: "price_pro", quantity: "1" }, { price: "price_over" }],
       subscription_data: {
         metadata: { subject_id: "100" },
-        billing_cycle_anchor: String(Date.parse("2026-02-01T00:00:00Z") / 1000),
+        billing_cycle_anchor_config: { day_of_month: "1", hour: "0", minute: "0", second: "0" },
       },
     });
     // Stripe: "Quantity should not be defined when recurring.usage_type=metered."
@@ -73,35 +73,50 @@ describe("createCheckoutSession", () => {
     expect(req?.params).not.toHaveProperty("automatic_tax");
   });
 
-  test("near the end of a month the session expires before its anchor passes", async () => {
-    ctx = { ...ctx, now: () => new Date("2026-01-31T12:00:00Z") };
-    await createCheckoutSession(ctx, input);
-    const anchor = String(Date.parse("2026-02-01T00:00:00Z") / 1000);
-    expect(checkoutCreates()[0]?.params).toMatchObject({
-      expires_at: anchor,
-      subscription_data: { billing_cycle_anchor: anchor },
-    });
-  });
-
-  test("in the last 30 minutes of a month the anchor moves to the next month start", async () => {
-    // Stripe's minimum session lifetime is 30 minutes, so the session could
-    // otherwise outlive its anchor.
-    ctx = { ...ctx, now: () => new Date("2026-01-31T23:45:00Z") };
-    await createCheckoutSession(ctx, input);
-    const params = checkoutCreates()[0]?.params as Record<string, Record<string, string>>;
-    expect(params.subscription_data?.billing_cycle_anchor).toBe(String(Date.parse("2026-03-01T00:00:00Z") / 1000));
-    expect(params).not.toHaveProperty("expires_at");
-  });
-
-  test("mid-month sessions keep Stripe's default expiry", async () => {
-    await createCheckoutSession(ctx, input);
-    expect(checkoutCreates()[0]?.params).not.toHaveProperty("expires_at");
-  });
+  test.each(["2026-01-20T15:30:00Z", "2026-01-31T12:00:00Z", "2026-01-31T23:45:00Z"])(
+    "at %s Stripe computes the anchor: a config is sent, never a timestamp or expires_at",
+    async (now) => {
+      ctx = { ...ctx, now: () => new Date(now) };
+      await createCheckoutSession(ctx, input);
+      const params = checkoutCreates()[0]?.params as Record<string, Record<string, unknown>>;
+      expect(params.subscription_data?.billing_cycle_anchor_config).toEqual({
+        day_of_month: "1",
+        hour: "0",
+        minute: "0",
+        second: "0",
+      });
+      expect(params.subscription_data).not.toHaveProperty("billing_cycle_anchor");
+      expect(params).not.toHaveProperty("expires_at");
+    }
+  );
 
   test("can leave the billing anchor to Stripe", async () => {
     await createCheckoutSession(ctx, { ...input, anchorToMonthStart: false });
-    const sd = checkoutCreates()[0]?.params.subscription_data as Record<string, unknown>;
-    expect(sd).not.toHaveProperty("billing_cycle_anchor");
+    const params = checkoutCreates()[0]?.params as Record<string, Record<string, unknown>>;
+    expect(params.subscription_data).not.toHaveProperty("billing_cycle_anchor");
+    expect(params.subscription_data).not.toHaveProperty("billing_cycle_anchor_config");
+    expect(params).not.toHaveProperty("expires_at");
+  });
+
+  test("expires the subject's earlier open session when a new one is created", async () => {
+    const first = await createCheckoutSession(ctx, input);
+    const second = await createCheckoutSession(ctx, input);
+    expect(fake.checkoutSessions.get(first.id)?.status).toBe("expired");
+    expect(fake.checkoutSessions.get(second.id)?.status).toBe("open");
+  });
+
+  test("does not touch another customer's open session", async () => {
+    const other = await createCheckoutSession(ctx, { ...input, subjectId: "200" });
+    const mine = await createCheckoutSession(ctx, input);
+    expect(fake.checkoutSessions.get(other.id)?.status).toBe("open");
+    expect(fake.checkoutSessions.get(mine.id)?.status).toBe("open");
+  });
+
+  test("two concurrent calls for one subject leave exactly one open session", async () => {
+    await Promise.all([createCheckoutSession(ctx, input), createCheckoutSession(ctx, input)]);
+    const open = [...fake.checkoutSessions.values()].filter((cs) => cs.status === "open");
+    expect(fake.checkoutSessions.size).toBe(2);
+    expect(open).toHaveLength(1);
   });
 
   test("turns on Stripe Tax collection only when the config asks for it", async () => {

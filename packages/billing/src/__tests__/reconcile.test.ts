@@ -41,7 +41,7 @@ describe("reconcile", () => {
 
     const summary = await reconcile(ctx);
 
-    expect(summary).toEqual({ customers: 2, subscriptions: 2, unknownSubject: 0, repairedCustomers: 0 });
+    expect(summary).toEqual({ customers: 2, subscriptions: 2, unknownSubject: 0, repairedCustomers: 0, duplicateSubjects: 0 });
     const rows = await ctx.db.select().from(billingSubscription);
     expect(rows.find((r) => r.stripeSubscriptionId === "sub_1")).toMatchObject({ status: "active", planKey: "pro" });
     expect(rows.find((r) => r.stripeSubscriptionId === "sub_2")?.status).toBe("canceled");
@@ -59,6 +59,37 @@ describe("reconcile", () => {
       expect.objectContaining({ subjectId: "77", stripeCustomerId: "cus_lost" }),
     ]);
     expect((await ctx.db.select().from(billingSubscription))[0]).toMatchObject({ subjectId: "77", planKey: "pro" });
+  });
+
+  test("with duplicate customers for a subject, picks the one with a live subscription", async () => {
+    // The list is newest first in Stripe; here the empty customer is listed first.
+    fake.putCustomer("cus_paying", { subject_id: "88" });
+    fake.putCustomer("cus_empty", { subject_id: "88" });
+    fake.putSubscription({ id: "sub_dead", customer: "cus_empty", status: "canceled", priceIds: ["price_pro"] });
+    fake.putSubscription({ id: "sub_live", customer: "cus_paying", status: "active", priceIds: ["price_pro"] });
+    // The empty customer is older, so age alone would pick it.
+    fake.customers.get("cus_empty")!.created = 100;
+    fake.customers.get("cus_paying")!.created = 300;
+
+    const summary = await reconcile(ctx, { repairCustomers: true });
+
+    expect(summary.duplicateSubjects).toBe(1);
+    expect(summary.repairedCustomers).toBe(1);
+    expect(await ctx.db.select().from(billingCustomer)).toEqual([
+      expect.objectContaining({ subjectId: "88", stripeCustomerId: "cus_paying" }),
+    ]);
+  });
+
+  test("with duplicates and no live subscription, picks the oldest customer", async () => {
+    fake.putCustomer("cus_new", { subject_id: "89" });
+    fake.putCustomer("cus_old", { subject_id: "89" });
+    fake.customers.get("cus_new")!.created = 500;
+    fake.customers.get("cus_old")!.created = 100;
+
+    const summary = await reconcile(ctx, { repairCustomers: true });
+
+    expect(summary.duplicateSubjects).toBe(1);
+    expect((await ctx.db.select().from(billingCustomer))[0]?.stripeCustomerId).toBe("cus_old");
   });
 
   test("never uses the search API, which is not read-after-write", async () => {

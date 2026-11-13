@@ -22,6 +22,24 @@ function assertAmount(name: string, n: number) {
   if (!Number.isInteger(n) || n <= 0) throw new Error(`${name}.unitAmount must be a positive integer`);
 }
 
+/** Stripe bills the wrong amount if a reused meter does not sum a per-customer `value`, so check it. */
+function assertMeterSettings(meter: Stripe.Billing.Meter) {
+  const bad = (setting: string, want: string, got: unknown) => {
+    throw new Error(
+      `Meter ${meter.id} has ${setting} ${JSON.stringify(got)} but billing needs ${want}; fix or replace the meter in Stripe`
+    );
+  };
+  if (meter.default_aggregation?.formula !== "sum") bad("default_aggregation.formula", `"sum"`, meter.default_aggregation?.formula);
+  if (meter.customer_mapping?.type !== "by_id") bad("customer_mapping.type", `"by_id"`, meter.customer_mapping?.type);
+  if (meter.customer_mapping.event_payload_key !== "stripe_customer_id") {
+    bad("customer_mapping.event_payload_key", `"stripe_customer_id"`, meter.customer_mapping.event_payload_key);
+  }
+  if (meter.value_settings?.event_payload_key !== "value") {
+    bad("value_settings.event_payload_key", `"value"`, meter.value_settings?.event_payload_key);
+  }
+  if (meter.event_time_window != null) bad("event_time_window", "none (not pre-aggregated)", meter.event_time_window);
+}
+
 /**
  * Creates the Billing Meter, products and prices the config refers to, in a
  * sandbox or live mode, if they do not exist yet. Everything is found by
@@ -29,8 +47,10 @@ function assertAmount(name: string, n: number) {
  *
  * Prices are created without `tax_behavior`, so they follow the account's
  * default tax behavior and Stripe Tax can be turned on later without replacing
- * them. Every plan price carries `metadata.plan_key`, which keeps it
- * recognisable after a newer price takes over its lookup key.
+ * them. Every plan price carries `metadata.plan_key`. Subscription sync reads
+ * it (planKeyForPrice) to recognise a grandfathered price after a newer price
+ * takes over its lookup key. Bootstrap does not use it: it resolves prices only
+ * by lookup key and throws if a key matches more than one active price.
  */
 export async function bootstrapCatalog(
   stripe: Stripe,
@@ -61,6 +81,7 @@ export async function bootstrapCatalog(
       `Meter ${meter.id} for event name "${config.overage.meterEventName}" exists but is ${meter.status}; reactivate it in Stripe`
     );
   }
+  if (meter) assertMeterSettings(meter);
   // Creates carry idempotency keys derived from the event name and lookup keys,
   // so two runs racing within Stripe's 24-hour key window get the same objects.
   const key = (kind: string, name: string) => ({ idempotencyKey: `context-kit-billing:${kind}:${name}` });
@@ -79,9 +100,26 @@ export async function bootstrapCatalog(
   }
 
   const lookupKeys = [...paid.map(([, p]) => p.priceLookupKey!), config.overage.priceLookupKey];
-  const existing = await stripe.prices.list({ lookup_keys: lookupKeys, active: true, limit: 10 });
-  const byKey = new Map([...indexByLookupKey(existing.data)].map(([k, p]) => [k, p.id]));
+  // Stripe accepts at most 10 lookup keys per list call.
+  const existing: Stripe.Price[] = [];
+  for (let i = 0; i < lookupKeys.length; i += 10) {
+    const page = await stripe.prices.list({ lookup_keys: lookupKeys.slice(i, i + 10), active: true, limit: 100 });
+    existing.push(...page.data);
+  }
+  const byPrice = indexByLookupKey(existing);
+  const byKey = new Map([...byPrice].map(([k, p]) => [k, p.id]));
   const prices: Record<string, string> = {};
+
+  // Checked before creating anything, so a mismatch leaves no partial catalog.
+  const overageFound = byKey.get(config.overage.priceLookupKey);
+  if (overageFound) {
+    const priceMeterId = byPrice.get(config.overage.priceLookupKey)!.recurring?.meter;
+    if (priceMeterId !== meter.id) {
+      throw new Error(
+        `Price ${overageFound} (${config.overage.priceLookupKey}) bills meter ${priceMeterId ?? "none"}, but the meter for event name "${config.overage.meterEventName}" is ${meter.id}; archive the price or point the config at the right meter`
+      );
+    }
+  }
 
   for (const [planKey, plan] of paid) {
     const lookupKey = plan.priceLookupKey!;
@@ -109,7 +147,6 @@ export async function bootstrapCatalog(
     prices[planKey] = price.id;
   }
 
-  const overageFound = byKey.get(config.overage.priceLookupKey);
   if (overageFound) {
     prices.overage = overageFound;
   } else {

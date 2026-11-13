@@ -96,8 +96,11 @@ export async function storeSubscription(
   const { subjectId } = resolved;
 
   const items = sub.items.data;
+  // Prefer the configured lookup key. A single metered item with another key is
+  // taken as a grandfathered overage price; with several, none is guessed.
+  const metered = items.filter((i) => i.price.recurring?.usage_type === "metered");
   const overageItem = items.find((i) => i.price.lookup_key === ctx.config.overage.priceLookupKey)
-    ?? items.find((i) => i.price.recurring?.usage_type === "metered");
+    ?? (metered.length === 1 ? metered[0] : undefined);
   const baseItem = items.find((i) => i !== overageItem && i.price.recurring?.usage_type !== "metered")
     ?? items.find((i) => i !== overageItem);
 

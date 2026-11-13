@@ -50,16 +50,17 @@ interface Candidate {
 }
 
 function evaluate(config: BillingConfig, row: SubscriptionRow, now: Date): Candidate {
+  // Without a recorded start, the last sync time bounds the grace period so a
+  // past_due row never gets unlimited grace.
+  const graceStart = row.pastDueSince ?? row.syncedAt;
   const graceEndsAt =
-    row.status === "past_due" && row.pastDueSince
-      ? new Date(row.pastDueSince.getTime() + config.gracePeriodDays * DAY_MS)
-      : null;
+    row.status === "past_due" ? new Date(graceStart.getTime() + config.gracePeriodDays * DAY_MS) : null;
   const known = row.planKey !== null && row.planKey in config.plans;
 
   let reason: EntitlementReason;
   if (GOOD_STANDING.has(row.status)) reason = "subscription";
   else if (row.status === "past_due") {
-    reason = graceEndsAt === null || now < graceEndsAt ? "grace" : "grace_expired";
+    reason = graceEndsAt !== null && now < graceEndsAt ? "grace" : "grace_expired";
   } else reason = "inactive";
 
   if ((reason === "subscription" || reason === "grace") && !known) reason = "unknown_plan";

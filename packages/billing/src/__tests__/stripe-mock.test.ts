@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import Stripe from "stripe";
 import { createStripeClient } from "../stripe-client";
-import { buildCheckoutParams, nextMonthStartUtc } from "../checkout";
+import { buildCheckoutParams } from "../checkout";
 import { buildMeterEventParams } from "../usage";
 import { bootstrapCatalog } from "../bootstrap";
 import { testConfig } from "./helpers/config";
@@ -43,7 +43,7 @@ function client(): Stripe {
 }
 
 describe.skipIf(!enabled)("request shapes accepted by stripe-mock (Stripe's OpenAPI spec)", () => {
-  test("Checkout Session with the month-start anchor", async () => {
+  test("Checkout Session with the month-start billing_cycle_anchor_config", async () => {
     const params = buildCheckoutParams(testConfig, {
       subjectId: "100",
       customer: "cus_123",
@@ -51,8 +51,9 @@ describe.skipIf(!enabled)("request shapes accepted by stripe-mock (Stripe's Open
       overagePriceId: "price_over",
       successUrl: "https://app.test/ok?session_id={CHECKOUT_SESSION_ID}",
       cancelUrl: "https://app.test/no",
-      billingCycleAnchor: nextMonthStartUtc(new Date()),
+      anchorToMonthStart: true,
     });
+    expect(params.subscription_data?.billing_cycle_anchor_config).toBeDefined();
     const session = await client().checkout.sessions.create(params);
     expect(session.object).toBe("checkout.session");
   });
@@ -67,7 +68,7 @@ describe.skipIf(!enabled)("request shapes accepted by stripe-mock (Stripe's Open
         overagePriceId: "price_over",
         successUrl: "https://app.test/ok",
         cancelUrl: "https://app.test/no",
-        billingCycleAnchor: null,
+        anchorToMonthStart: false,
       }
     );
     expect((await client().checkout.sessions.create(params)).object).toBe("checkout.session");
@@ -105,21 +106,6 @@ describe.skipIf(!enabled)("request shapes accepted by stripe-mock (Stripe's Open
   test("open and latest paid invoices of a subscription (grace period start)", async () => {
     expect((await client().invoices.list({ subscription: "sub_123", status: "open", limit: 100 })).object).toBe("list");
     expect((await client().invoices.list({ subscription: "sub_123", status: "paid", limit: 1 })).object).toBe("list");
-  });
-
-  test("Checkout Session that expires at its anchor", async () => {
-    const anchor = nextMonthStartUtc(new Date());
-    const params = buildCheckoutParams(testConfig, {
-      subjectId: "100",
-      customer: "cus_123",
-      basePriceId: "price_base",
-      overagePriceId: "price_over",
-      successUrl: "https://app.test/ok",
-      cancelUrl: "https://app.test/no",
-      billingCycleAnchor: anchor,
-    });
-    params.expires_at = Math.floor(anchor.getTime() / 1000);
-    expect((await client().checkout.sessions.create(params)).object).toBe("checkout.session");
   });
 
   test("price lookup by lookup key", async () => {

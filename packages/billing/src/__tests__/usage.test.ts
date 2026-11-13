@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { eq } from "drizzle-orm";
+import { eq, getTableName } from "drizzle-orm";
 import { computeOverage, enqueueUsage, reportPendingUsage, UsageReportingBlockedError } from "../usage";
 import { billingCustomer, billingSubscription, billingUsageReport } from "../schema/postgres";
 import { createTestDb } from "./helpers/db";
@@ -484,6 +484,107 @@ describe("usage outbox", () => {
       expect(summary).toMatchObject({ retry: 1, sent: 1 });
       expect(await rowFor("run_a")).toMatchObject({ status: "pending", leaseId: null, lastError: "connection reset" });
       expect((await rowFor("run_b"))?.status).toBe("sent");
+    });
+
+    describe("previous-period window", () => {
+      // A period starting on the 31st steps back to a month with 28 days.
+      const startOn31 = async () => {
+        clock = new Date("2026-03-31T00:30:00Z");
+        await ctx.db.update(billingSubscription).set({
+          currentPeriodStart: new Date("2026-03-31T00:00:00Z"),
+          currentPeriodEnd: new Date("2026-04-30T00:00:00Z"),
+        });
+      };
+
+      test("a period starting on the 31st still takes usage from the whole previous period", async () => {
+        await startOn31();
+        await enqueueUsage(ctx, { sourceId: "run_feb", subjectId: "100", value: 3, occurredAt: new Date("2026-02-28T12:00:00Z") });
+        expect(await reportPendingUsage(ctx)).toMatchObject({ sent: 1, late: 0 });
+      });
+
+      test("usage from before the clamped previous start is late", async () => {
+        await startOn31();
+        await enqueueUsage(ctx, { sourceId: "run_old", subjectId: "100", value: 3, occurredAt: new Date("2026-02-27T23:00:00Z") });
+        expect(await reportPendingUsage(ctx)).toMatchObject({ sent: 0, late: 1 });
+        expect((await rowFor("run_old"))?.status).toBe("late");
+      });
+    });
+
+    describe("retry ordering and lookups", () => {
+      const addSubjectWithoutSubscription = async () => {
+        await ctx.db.insert(billingCustomer).values({ subjectId: "300", stripeCustomerId: "cus_300", livemode: false });
+      };
+
+      test("rows waiting on a subscription sync count as attempts, so they do not starve newer rows", async () => {
+        await addSubjectWithoutSubscription();
+        await enqueueUsage(ctx, { sourceId: "old_1", subjectId: "300", value: 1, occurredAt: NOW });
+        await enqueueUsage(ctx, { sourceId: "old_2", subjectId: "300", value: 1, occurredAt: NOW });
+        await enqueueUsage(ctx, { sourceId: "fresh", subjectId: "100", value: 1, occurredAt: NOW });
+        // Distinct creation times, so the order does not depend on clock resolution.
+        for (const [id, at] of [["old_1", "2026-01-20T10:00:00Z"], ["old_2", "2026-01-20T10:01:00Z"], ["fresh", "2026-01-20T11:00:00Z"]] as const) {
+          await ctx.db.update(billingUsageReport).set({ createdAt: new Date(at) }).where(eq(billingUsageReport.sourceId, id));
+        }
+
+        expect(await reportPendingUsage(ctx, { limit: 2 })).toMatchObject({ retry: 2, sent: 0 });
+        expect(await rowFor("old_1")).toMatchObject({ status: "pending", attempts: 1, lastError: "no_subscription" });
+
+        expect(await reportPendingUsage(ctx, { limit: 2 })).toMatchObject({ sent: 1, retry: 1 });
+        expect((await rowFor("fresh"))?.status).toBe("sent");
+      });
+
+      test("a blocked configuration error does not count as an attempt", async () => {
+        await enqueueUsage(ctx, { sourceId: "run_1", subjectId: "100", value: 1, occurredAt: NOW });
+        fake.failNext((r) => r.path === "/v1/billing/meter_events", 401);
+        await reportPendingUsage(ctx).catch(() => {});
+        expect((await rowFor("run_1"))?.attempts).toBe(0);
+      });
+
+      test("customer and subscription are looked up once per subject in a run", async () => {
+        for (let i = 0; i < 5; i++) {
+          await enqueueUsage(ctx, { sourceId: `run_${i}`, subjectId: "100", value: 1, occurredAt: NOW });
+        }
+        const tables: string[] = [];
+        ctx = {
+          ...ctx,
+          db: new Proxy(ctx.db, {
+            get(target, prop, receiver) {
+              if (prop !== "select") return Reflect.get(target, prop, receiver);
+              return (...args: unknown[]) => {
+                const q = (target.select as (...a: unknown[]) => any).apply(target, args);
+                return new Proxy(q, {
+                  get(qt, qp) {
+                    if (qp === "from") {
+                      return (table: never) => {
+                        tables.push(getTableName(table));
+                        return qt.from(table);
+                      };
+                    }
+                    return Reflect.get(qt, qp, qt);
+                  },
+                });
+              };
+            },
+          }),
+        };
+
+        expect((await reportPendingUsage(ctx)).sent).toBe(5);
+        expect(tables.filter((t) => t === "billing_customer")).toHaveLength(1);
+        expect(tables.filter((t) => t === "billing_subscription")).toHaveLength(1);
+      });
+    });
+
+    test("the clock is read per row, so a slow batch moves past the invoice grace window", async () => {
+      // Run start and the first row are inside the grace hour; the second row is not.
+      const times = ["2026-01-01T00:30:00Z", "2026-01-01T00:30:00Z", "2026-01-01T01:30:00Z"].map((t) => new Date(t));
+      let i = 0;
+      ctx = { ...ctx, now: () => times[Math.min(i++, times.length - 1)]! };
+      const occurredAt = new Date("2025-12-31T23:50:00Z");
+      await enqueueUsage(ctx, { sourceId: "run_a", subjectId: "100", value: 1, occurredAt });
+      await enqueueUsage(ctx, { sourceId: "run_b", subjectId: "100", value: 1, occurredAt });
+
+      expect(await reportPendingUsage(ctx)).toMatchObject({ sent: 1, late: 1 });
+      expect(await rowFor("run_a")).toMatchObject({ status: "sent", sentAt: times[1] });
+      expect((await rowFor("run_b"))?.status).toBe("late");
     });
 
     describe("leases", () => {

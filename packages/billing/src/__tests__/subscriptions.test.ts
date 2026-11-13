@@ -61,6 +61,33 @@ describe("syncSubscription", () => {
     });
   });
 
+  test("does not bind an unrelated metered add-on as the overage price", async () => {
+    fake.addPrice({ id: "price_addon_a", lookupKey: "addon_a", usageType: "metered" });
+    fake.addPrice({ id: "price_addon_b", lookupKey: "addon_b", usageType: "metered" });
+    fake.putSubscription({
+      id: "sub_two",
+      customer: "cus_1",
+      status: "active",
+      priceIds: ["price_pro", "price_addon_a", "price_addon_b"],
+      metadata: { subject_id: "100" },
+    });
+    await syncSubscription(ctx, "sub_two");
+    expect((await rows())[0]).toMatchObject({ basePriceId: "price_pro", overagePriceId: null });
+  });
+
+  test("uses the only metered item as overage when it has another lookup key", async () => {
+    fake.addPrice({ id: "price_grandfathered", lookupKey: "old_overage", usageType: "metered" });
+    fake.putSubscription({
+      id: "sub_old",
+      customer: "cus_1",
+      status: "active",
+      priceIds: ["price_pro", "price_grandfathered"],
+      metadata: { subject_id: "100" },
+    });
+    await syncSubscription(ctx, "sub_old");
+    expect((await rows())[0]).toMatchObject({ basePriceId: "price_pro", overagePriceId: "price_grandfathered" });
+  });
+
   test("finds the subject through billing_customer when metadata is missing", async () => {
     await ctx.db.insert(billingCustomer).values({ subjectId: "200", stripeCustomerId: "cus_2", livemode: false });
     fake.putSubscription({ id: "sub_2", customer: "cus_2", status: "active", priceIds: ["price_team"] });

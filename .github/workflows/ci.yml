@@ -107,6 +107,8 @@ jobs:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
           # Same reason as above: the concurrency checks need a real server.
           REQUIRE_POSTGRES: "1"
+          # The suite drops the billing tables, so it only runs with this opt-in.
+          BILLING_PG_TEST_ALLOW_DROP: "1"
 
   billing-live:
     name: Billing against Stripe sandbox

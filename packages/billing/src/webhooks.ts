@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import type Stripe from "stripe";
-import { billingCustomer, billingWebhookEvent } from "./schema/postgres.js";
+import { recordSessionCustomer } from "./checkout.js";
+import { billingWebhookEvent } from "./schema/postgres.js";
 import { syncSubscription, type SyncResult } from "./subscriptions.js";
 import type { BillingContext } from "./types.js";
 
@@ -60,19 +61,11 @@ async function handleEvent(ctx: BillingContext, event: Stripe.Event): Promise<Sy
     const session = event.data.object as Stripe.Checkout.Session;
     if (session.mode !== "subscription") return null;
     const subscriptionId = idOf(session.subscription);
-    const customerId = idOf(session.customer);
-    if (session.client_reference_id && customerId) {
+    if (session.client_reference_id) {
       // The app passed its subject as client_reference_id. Normally the
       // customer row already exists (ensureCustomer runs before checkout);
       // this covers a customer Checkout created itself.
-      await ctx.db
-        .insert(billingCustomer)
-        .values({
-          subjectId: session.client_reference_id,
-          stripeCustomerId: customerId,
-          livemode: session.livemode,
-        })
-        .onConflictDoNothing();
+      await recordSessionCustomer(ctx.db, session, session.client_reference_id);
     }
     return subscriptionId ? syncSubscription(ctx, subscriptionId) : null;
   }
@@ -96,6 +89,10 @@ export async function processEvent(ctx: BillingContext, event: Stripe.Event): Pr
     .values({ stripeEventId: event.id, type: event.type, objectId: objectId(event) })
     .onConflictDoNothing({ target: billingWebhookEvent.stripeEventId });
 
+  // Two concurrent deliveries of one event can both read processedAt as null
+  // and both run handleEvent. That is accepted: a failed event must stay
+  // retryable (processedAt stays null), and idempotency lives in
+  // syncSubscription, which runs under an advisory lock and rewrites the same rows.
   const [stored] = await ctx.db
     .select({ processedAt: billingWebhookEvent.processedAt })
     .from(billingWebhookEvent)
