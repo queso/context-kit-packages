@@ -17,6 +17,8 @@ bun --filter @context-kit/auth-ui build       # build the auth-ui package
 bun --filter @context-kit/auth-ui test        # run auth-ui tests
 bun --filter @context-kit/error-tracker build # build the error-tracker package
 bun --filter @context-kit/error-tracker test  # run error-tracker tests
+bun --filter @context-kit/billing build       # build the billing package
+bun --filter @context-kit/billing test        # run billing tests (offline; see its README for stripe-mock, Postgres and live Stripe)
 ```
 
 ## Architecture
@@ -33,7 +35,7 @@ bun --filter @context-kit/error-tracker test  # run error-tracker tests
 | `@context-kit/auth` | `packages/auth` | 0.2.0 — Better Auth + Drizzle |
 | `@context-kit/auth-ui` | `packages/auth-ui` | 0.1.0 — Auth UI components for Next.js App Router |
 | `@context-kit/error-tracker` | `packages/error-tracker` | 0.1.0 — Client-side error tracking with a self-hosted ingestion and query API, source map resolution and a CLI, stored in the app's own database via Drizzle |
-| `@context-kit/billing` | `packages/billing` | Planned — Stripe subscriptions |
+| `@context-kit/billing` | `packages/billing` | 0.1.0 (unreleased) — Stripe subscriptions, metered overage, webhooks and plan gating on Postgres via Drizzle |
 
 ## A(i)-Team Integration
 
