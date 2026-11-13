@@ -43,6 +43,7 @@ jobs:
   pack-check:
     name: Pack & install check
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4

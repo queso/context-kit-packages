@@ -47,6 +47,7 @@ jobs:
   build:
     name: Build tarball
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
       file: ${{ steps.pack.outputs.file }}
@@ -197,6 +198,7 @@ jobs:
   publish:
     name: Create release
     needs: build
+    timeout-minutes: 10
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
     runs-on: ubuntu-latest
     permissions:

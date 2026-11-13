@@ -81,6 +81,12 @@ for (const dir of allDirs) {
 }
 
 const targets = [...packed.values()].filter((p) => requested.length === 0 || requested.includes(p.dir));
+for (const name of requested) {
+  if (!targets.some((t) => t.dir === name)) {
+    console.error(`Package directory ${name} is private and is never packed`);
+    process.exit(2);
+  }
+}
 
 for (const { dir, pkg, tarball, files } of targets) {
   console.log(`\n== ${pkg.name}@${pkg.version} (${tarball})`);
@@ -246,13 +252,15 @@ for (const { dir, pkg, tarball, files } of targets) {
   const tsc = await $`./node_modules/.bin/tsc -p tsconfig.json --pretty false`.cwd(consumer).nothrow().quiet();
   const ours: string[] = [];
   const theirs: string[] = [];
+  let current: string[] | undefined;
   for (const line of `${tsc.stdout}${tsc.stderr}`.split("\n")) {
     if (!/^\S.*: error TS\d+:/.test(line)) {
-      if (line.trim() && ours.length > 0 && !/^\S/.test(line)) ours[ours.length - 1] += `\n${line}`;
+      // An indented line continues the error above it, whichever list that went to.
+      if (line.trim() && current && current.length > 0 && !/^\S/.test(line)) current[current.length - 1] += `\n${line}`;
       continue;
     }
-    if (line.startsWith("types-check.ts") || line.startsWith(`node_modules/${pkg.name}/`)) ours.push(line);
-    else theirs.push(line);
+    current = line.startsWith("types-check.ts") || line.startsWith(`node_modules/${pkg.name}/`) ? ours : theirs;
+    current.push(line);
   }
   if (tsc.exitCode !== 0 && ours.length === 0 && theirs.length === 0) {
     fail(pkg.name, `tsc exited ${tsc.exitCode} under ${tscVersion} without reporting an error:\n${tsc.stdout}${tsc.stderr}`);
