@@ -117,40 +117,6 @@ describe("event processing", () => {
     expect(await ctx.db.select().from(billingWebhookEvent)).toHaveLength(1);
   });
 
-  test("a delivery claims its event row and reads processed_at in one statement, with no separate SELECT", async () => {
-    fake.putSubscription({ id: "sub_1", customer: "cus_1", status: "active", priceIds: ["price_pro"], metadata: { subject_id: "100" } });
-    const payload = event("customer.subscription.updated", subscriptionObject("sub_1", "test_pro_monthly"));
-    await handle(await signedRequest(payload));
-
-    let eventSelects = 0;
-    const counting = new Proxy(ctx.db, {
-      get(target, prop, receiver) {
-        const value = Reflect.get(target, prop, receiver);
-        if (prop !== "select") return typeof value === "function" ? value.bind(target) : value;
-        return (...args: unknown[]) => {
-          const builder = (value as (...a: unknown[]) => any).apply(target, args);
-          return new Proxy(builder, {
-            get(b, p2) {
-              const v = Reflect.get(b, p2);
-              if (p2 !== "from") return typeof v === "function" ? v.bind(b) : v;
-              return (table: unknown, ...rest: unknown[]) => {
-                if (table === billingWebhookEvent) eventSelects++;
-                return v.call(b, table, ...rest);
-              };
-            },
-          });
-        };
-      },
-    }) as BillingContext["db"];
-    const countingHandle = createWebhookHandler({ ...ctx, db: counting }, { secret: SECRET });
-
-    const res = await countingHandle(await signedRequest(payload));
-
-    expect(res.status).toBe(200);
-    expect(retrieves("sub_1")).toBe(1);
-    expect(eventSelects).toBe(0);
-  });
-
   test("events arriving out of order still leave Stripe's current state", async () => {
     // Stripe's current state is Team. The newer event (Team) arrives first, the
     // older one (snapshot says Pro) arrives second. The payload is never

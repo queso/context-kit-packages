@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { eq, getTableName } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { computeOverage, enqueueUsage, reportPendingUsage, UsageReportingBlockedError } from "../usage";
 import { billingCustomer, billingSubscription, billingUsageReport } from "../schema/postgres";
 import { createTestDb } from "./helpers/db";
@@ -364,6 +365,22 @@ describe("usage outbox", () => {
         expect((await reportPendingUsage(ctx)).sent).toBe(2);
       });
 
+      test("an allowlisted row error whose message mentions a meter fails the row instead of blocking", async () => {
+        await enqueueUsage(ctx, { sourceId: "run_1", subjectId: "100", value: 3, occurredAt: NOW });
+        fake.failNext((r) => r.path === "/v1/billing/meter_events", 400, 1, {
+          error: {
+            type: "invalid_request_error",
+            code: "meter_event_customer_not_found",
+            message: "No active customer found for meter test_credits",
+          },
+        });
+
+        const summary = await reportPendingUsage(ctx);
+
+        expect(summary).toMatchObject({ failed: 1, blocked: 0 });
+        expect(await rowFor("run_1")).toMatchObject({ status: "failed" });
+      });
+
       test("the error message never carries the key", async () => {
         await enqueueUsage(ctx, { sourceId: "run_1", subjectId: "100", value: 3, occurredAt: NOW });
         fake.failNext((r) => r.path === "/v1/billing/meter_events", 401, 1, {
@@ -672,6 +689,95 @@ describe("usage outbox", () => {
         await enqueueUsage(ctx, { sourceId: "run_1", subjectId: "100", value: 3, occurredAt: NOW });
         await reportPendingUsage(ctx);
         expect(inTransaction).toBe(false);
+      });
+
+      test("releases only the rows this run claimed, by primary key", async () => {
+        await enqueueUsage(ctx, { sourceId: "run_1", subjectId: "100", value: 3, occurredAt: NOW });
+        const releases: string[] = [];
+        const realDb = ctx.db;
+        ctx = {
+          ...ctx,
+          db: new Proxy(realDb, {
+            get(target, prop, receiver) {
+              if (prop !== "update") return Reflect.get(target, prop, receiver);
+              return (table: any) => {
+                const b = target.update(table);
+                return {
+                  set: (values: Record<string, unknown>) => {
+                    const q = b.set(values);
+                    const keys = Object.keys(values).sort().join(",");
+                    if (keys !== "leaseExpiresAt,leaseId" || values.leaseId !== null) return q;
+                    return {
+                      where: (cond: any) => {
+                        releases.push(new PgDialect().sqlToQuery(cond).sql);
+                        return (q as any).where(cond);
+                      },
+                    };
+                  },
+                };
+              };
+            },
+          }),
+        };
+
+        await reportPendingUsage(ctx);
+
+        expect(releases).toHaveLength(1);
+        expect(releases[0]).toContain('"source_id" in');
+      });
+
+      test("a run that claims nothing issues no release statement", async () => {
+        const releases: unknown[] = [];
+        const realDb = ctx.db;
+        ctx = {
+          ...ctx,
+          db: new Proxy(realDb, {
+            get(target, prop, receiver) {
+              if (prop !== "update") return Reflect.get(target, prop, receiver);
+              return (table: any) => {
+                const b = target.update(table);
+                return {
+                  set: (values: Record<string, unknown>) => {
+                    if (Object.keys(values).sort().join(",") === "leaseExpiresAt,leaseId" && values.leaseId === null) {
+                      releases.push(values);
+                    }
+                    return b.set(values);
+                  },
+                };
+              };
+            },
+          }),
+        };
+        await reportPendingUsage(ctx);
+        expect(releases).toHaveLength(0);
+      });
+
+      test("a row leased by another reporter is untouched by this run's release", async () => {
+        await enqueueUsage(ctx, { sourceId: "run_1", subjectId: "100", value: 3, occurredAt: NOW });
+        await enqueueUsage(ctx, { sourceId: "run_other", subjectId: "100", value: 3, occurredAt: NOW });
+        const until = new Date(NOW.getTime() + 60_000);
+        await ctx.db
+          .update(billingUsageReport)
+          .set({ leaseId: "other-reporter", leaseExpiresAt: until })
+          .where(eq(billingUsageReport.sourceId, "run_other"));
+        await reportPendingUsage(ctx);
+        expect(await rowFor("run_other")).toMatchObject({ leaseId: "other-reporter", leaseExpiresAt: until });
+      });
+
+      test("a customer mapping that disagrees with the subscription's customer is not sent to", async () => {
+        await enqueueUsage(ctx, { sourceId: "run_1", subjectId: "100", value: 3, occurredAt: NOW });
+        await ctx.db.update(billingCustomer).set({ stripeCustomerId: "cus_moved" }).where(eq(billingCustomer.subjectId, "100"));
+
+        const summary = await reportPendingUsage(ctx);
+
+        expect(meterCalls()).toHaveLength(0);
+        expect(summary).toMatchObject({ sent: 0, retry: 1 });
+        expect(await rowFor("run_1")).toMatchObject({
+          status: "pending",
+          lastError: "customer_mismatch",
+          attempts: 1,
+          leaseId: null,
+        });
       });
 
       test("a row under another reporter's live lease is not picked up", async () => {

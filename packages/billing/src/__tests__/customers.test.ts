@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { eq } from "drizzle-orm";
-import { ensureCustomer, getCustomerId } from "../customers";
+import { assertSubjectId, ensureCustomer, getCustomerId } from "../customers";
 import { billingCustomer } from "../schema/postgres";
 import { createTestDb } from "./helpers/db";
 import { FakeStripe } from "./helpers/fake-stripe";
@@ -272,5 +272,14 @@ describe("FakeStripe idempotency", () => {
     await expect(ctx.stripe.customers.create({ metadata: {} }, { idempotencyKey: "k5" })).rejects.toThrow();
     const ok = await ctx.stripe.customers.create({ metadata: {} }, { idempotencyKey: "k5" });
     expect(ok.id).toMatch(/^cus_/);
+  });
+});
+
+describe("assertSubjectId", () => {
+  test.each(["\n", "\t", "\u0000", "a\nb", "ab\u007f", "a\u0085b"])("rejects control characters: %j", (id) => {
+    expect(() => assertSubjectId(id)).toThrow(/subjectId/);
+  });
+  test.each(["12345", "org:acme", "o'brien"])("accepts %s", (id) => {
+    expect(() => assertSubjectId(id)).not.toThrow();
   });
 });

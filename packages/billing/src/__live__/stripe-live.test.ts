@@ -166,9 +166,11 @@ describe.skipIf(!enabled)("live Stripe sandbox", () => {
       successUrl: "https://example.com/success?session_id={CHECKOUT_SESSION_ID}",
       cancelUrl: "https://example.com/cancel",
     });
-    cleanups.push(() => stripe().checkout.sessions.expire(session.id));
     const [row] = await ctx.db.select().from(billingCustomer);
+    // Cleanups run last-in first-out: push the customer delete first so the
+    // session is expired before its customer is deleted.
     cleanups.push(() => stripe().customers.del(row!.stripeCustomerId));
+    cleanups.push(() => stripe().checkout.sessions.expire(session.id));
 
     expect(session.url).toMatch(/^https:\/\/checkout\.stripe\.com\//);
     const retrieved = await stripe().checkout.sessions.retrieve(session.id);
@@ -330,8 +332,12 @@ describe.skipIf(!enabled)("live Stripe sandbox", () => {
       const reader = listener.stderr.getReader();
       try {
         await poll("stripe listen to print Ready", async () => {
+          // A read still pending when the wait fails is rejected by
+          // releaseLock(); the no-op catch keeps that rejection handled.
+          const pending = reader.read();
+          pending.catch(() => {});
           const { value, done } = await Promise.race([
-            reader.read(),
+            pending,
             new Promise<{ value: undefined; done: false }>((r) => setTimeout(() => r({ value: undefined, done: false }), 1_000)),
           ]);
           if (value) output += new TextDecoder().decode(value);

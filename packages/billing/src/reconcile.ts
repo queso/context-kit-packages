@@ -1,5 +1,6 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type Stripe from "stripe";
+import { billingLock } from "./locks.js";
 import { billingCustomer } from "./schema/postgres.js";
 import { syncCustomerSubscriptions } from "./subscriptions.js";
 import type { BillingContext } from "./types.js";
@@ -87,10 +88,15 @@ export async function reconcile(
       if (live.length === 1) {
         // The old customer keeps being synced so its canceled subscriptions are not left stale.
         extraCustomerIds.add(mappedId);
-        await ctx.db
-          .update(billingCustomer)
-          .set({ stripeCustomerId: live[0]!.id, livemode: live[0]!.livemode })
-          .where(eq(billingCustomer.subjectId, subjectId));
+        // Under the lock ensureCustomer takes, and only if the mapping still points
+        // at the customer this decision was based on.
+        await ctx.db.transaction(async (tx) => {
+          await billingLock(tx, "customer:" + subjectId);
+          await tx
+            .update(billingCustomer)
+            .set({ stripeCustomerId: live[0]!.id, livemode: live[0]!.livemode })
+            .where(and(eq(billingCustomer.subjectId, subjectId), eq(billingCustomer.stripeCustomerId, mappedId)));
+        });
       }
     }
   }

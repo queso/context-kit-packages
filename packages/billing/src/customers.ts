@@ -4,14 +4,17 @@ import { billingCustomer } from "./schema/postgres.js";
 import type { BillingContext, BillingDb } from "./types.js";
 
 const MAX_SUBJECT_ID_LENGTH = 200;
+// Unicode category Cc. These would reach error messages and the Stripe search query.
+const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/;
 
 export function assertSubjectId(subjectId: string): void {
   if (
     typeof subjectId !== "string" ||
     subjectId.trim() === "" ||
-    subjectId.length > MAX_SUBJECT_ID_LENGTH
+    subjectId.length > MAX_SUBJECT_ID_LENGTH ||
+    CONTROL_CHARS.test(subjectId)
   ) {
-    throw new Error(`subjectId must be a non-empty string of at most ${MAX_SUBJECT_ID_LENGTH} characters`);
+    throw new Error(`subjectId must be a non-empty string of at most ${MAX_SUBJECT_ID_LENGTH} characters, without control characters`);
   }
 }
 

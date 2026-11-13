@@ -206,10 +206,13 @@ function classify(err: unknown, identifier: string): Classified {
   if (status === 401) return { kind: "blocked", reason: "authentication" };
   if (status === 403) return { kind: "blocked", reason: "permission" };
   const message = e.message ?? "";
-  if (e.code === "no_meter" || e.code === "archived_meter" || /\bmeter\b/i.test(message) && /(no|not found|must exist|archived|inactive|active)/i.test(message)) {
+  if (e.code === "no_meter" || e.code === "archived_meter") return { kind: "blocked", reason: "meter" };
+  // Allowlisted row errors come before the message check: their messages can
+  // mention a meter without meaning the meter is missing.
+  if (e.code && ROW_ERROR_CODES.has(e.code)) return { kind: "row" };
+  if (/\bmeter\b/i.test(message) && /(no|not found|must exist|archived|inactive|active)/i.test(message)) {
     return { kind: "blocked", reason: "meter" };
   }
-  if (e.code && ROW_ERROR_CODES.has(e.code)) return { kind: "row" };
   return { kind: "blocked", reason: "unexpected" };
 }
 
@@ -245,6 +248,7 @@ interface RunCache {
 }
 
 type SubscriptionRow = {
+  customerId: string;
   start: Date | null;
   end: Date | null;
   status: string;
@@ -291,6 +295,7 @@ async function reportOne(ctx: BillingContext, row: Row, leaseId: string, now: Da
   if (!subs) {
     subs = await db
     .select({
+      customerId: billingSubscription.stripeCustomerId,
       start: billingSubscription.currentPeriodStart,
       end: billingSubscription.currentPeriodEnd,
       status: billingSubscription.status,
@@ -310,6 +315,14 @@ async function reportOne(ctx: BillingContext, row: Row, leaseId: string, now: Da
     // synced. Wait; a row stuck this way reaches needs_review after the resend window.
     // Counts as an attempt so rows stuck here yield to newer rows in the claim order.
     await finish({ lastError: "no_subscription", attempts: row.attempts + 1, firstAttemptAt: row.firstAttemptAt ?? now });
+    return { kind: "retry" };
+  }
+  // The customer and subscription are read separately. If the subject's
+  // mapping moved between the reads (or the cache is stale), the event would go
+  // to a customer other than the one whose subscription was checked. Hold the
+  // row; needs_review catches it if it persists.
+  if (sub.customerId !== customer.id) {
+    await finish({ lastError: "customer_mismatch", attempts: row.attempts + 1, firstAttemptAt: row.firstAttemptAt ?? now });
     return { kind: "retry" };
   }
   if (!sub.overagePriceId) {
@@ -488,10 +501,19 @@ export async function reportPendingUsage(
   } finally {
     // Release whatever this run claimed but did not finish, so the next run can
     // take it without waiting for the lease to expire.
-    await ctx.db
-      .update(billingUsageReport)
-      .set({ leaseId: null, leaseExpiresAt: null })
-      .where(eq(billingUsageReport.leaseId, leaseId));
+    // By primary key: lease_id has no index, so a lease_id-only filter would
+    // scan the whole outbox on every run.
+    if (claimed.length > 0) {
+      await ctx.db
+        .update(billingUsageReport)
+        .set({ leaseId: null, leaseExpiresAt: null })
+        .where(
+          and(
+            inArray(billingUsageReport.sourceId, claimed.map((r) => r.sourceId)),
+            eq(billingUsageReport.leaseId, leaseId)
+          )
+        );
+    }
   }
 
   if (firstBlock) {

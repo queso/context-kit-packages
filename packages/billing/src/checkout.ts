@@ -175,6 +175,9 @@ export async function createCheckoutSession(
     // An older open session could be completed after this one, or after a
     // subscription starts, and would bill a second subscription. Expire them
     // only once the new session exists, so a failed create leaves the old one.
+    // Each call creates its session and then expires every other open one, so
+    // a subject has at most one older open session when the next call runs and
+    // this loop normally makes one call. It stays sequential.
     for await (const old of ctx.stripe.checkout.sessions.list({ customer, status: "open", limit: 100 })) {
       if (old.id !== session.id) await ctx.stripe.checkout.sessions.expire(old.id);
     }

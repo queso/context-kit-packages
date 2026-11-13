@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { eq } from "drizzle-orm";
 import { reconcile } from "../reconcile";
 import { billingCustomer, billingSubscription } from "../schema/postgres";
 import { createTestDb } from "./helpers/db";
@@ -194,5 +195,85 @@ describe("reconcile", () => {
     await reconcile(ctx);
     await reconcile(ctx);
     expect(await ctx.db.select().from(billingSubscription)).toHaveLength(1);
+  });
+
+  describe("moving a mapping", () => {
+    async function seedMove() {
+      await ctx.db.insert(billingCustomer).values({ subjectId: "95", stripeCustomerId: "cus_empty", livemode: false });
+      fake.putCustomer("cus_empty", { subject_id: "95" });
+      fake.putCustomer("cus_paying", { subject_id: "95" });
+      fake.putSubscription({ id: "sub_paid", customer: "cus_paying", status: "active", priceIds: ["price_pro"] });
+    }
+
+    // Runs a hook once, just before the first update or transaction (the move), and records every tx.execute.
+    function spyDb(beforeMove?: () => Promise<void>) {
+      let hooked = false;
+      const hook = async () => {
+        if (hooked) return;
+        hooked = true;
+        await beforeMove?.();
+      };
+      const executed: string[] = [];
+      const db = new Proxy(ctx.db, {
+        get(target, prop, receiver) {
+          if (prop === "update") {
+            return (...a: unknown[]) => {
+              const builder = (target as any).update(...a);
+              return new Proxy(builder, {
+                get(t, p, r) {
+                  if (p !== "set") return Reflect.get(t, p, r);
+                  return (...sa: unknown[]) => {
+                    const q = t.set(...sa);
+                    return new Proxy(q, {
+                      get(t2, p2, r2) {
+                        if (p2 !== "where") return Reflect.get(t2, p2, r2);
+                        return async (...wa: unknown[]) => {
+                          await hook();
+                          return t2.where(...wa);
+                        };
+                      },
+                    });
+                  };
+                },
+              });
+            };
+          }
+          if (prop !== "transaction") return Reflect.get(target, prop, receiver);
+          return async (fn: (tx: any) => Promise<unknown>, ...rest: unknown[]) => {
+            await hook();
+            return (target as any).transaction(async (tx: any) => {
+              const spied = new Proxy(tx, {
+                get(t, p, r) {
+                  if (p !== "execute") return Reflect.get(t, p, r);
+                  return (q: any, ...a: unknown[]) => {
+                    executed.push(JSON.stringify(q?.queryChunks ?? q));
+                    return t.execute(q, ...a);
+                  };
+                },
+              });
+              return fn(spied);
+            }, ...rest);
+          };
+        },
+      }) as typeof ctx.db;
+      return { db, executed };
+    }
+
+    test("takes the customer advisory lock while moving the mapping", async () => {
+      await seedMove();
+      const { db, executed } = spyDb();
+      await reconcile({ ...ctx, db }, { repairCustomers: true });
+      expect((await ctx.db.select().from(billingCustomer))[0]?.stripeCustomerId).toBe("cus_paying");
+      expect(executed.some((q) => q.includes("pg_advisory_xact_lock") && q.includes("customer:95"))).toBe(true);
+    });
+
+    test("does not overwrite a mapping that changed after the decision", async () => {
+      await seedMove();
+      const { db } = spyDb(async () => {
+        await ctx.db.update(billingCustomer).set({ stripeCustomerId: "cus_other" }).where(eq(billingCustomer.subjectId, "95"));
+      });
+      await reconcile({ ...ctx, db }, { repairCustomers: true });
+      expect((await ctx.db.select().from(billingCustomer))[0]?.stripeCustomerId).toBe("cus_other");
+    });
   });
 });
