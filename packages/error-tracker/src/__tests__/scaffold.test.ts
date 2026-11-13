@@ -28,8 +28,8 @@ describe("@context-kit/error-tracker package identity", () => {
     expect(pkg.type).toBe("module");
   });
 
-  test("ships only the built output and the readme", () => {
-    expect(pkg.files).toEqual(["dist", "README.md"]);
+  test("ships only the built output, the readme, the changelog and the license", () => {
+    expect(pkg.files).toEqual(["dist", "README.md", "CHANGELOG.md", "LICENSE"]);
   });
 
   test("exposes build, dev, typecheck and test scripts", () => {

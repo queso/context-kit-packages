@@ -17,7 +17,10 @@ bun --filter @context-kit/auth-ui build       # build the auth-ui package
 bun --filter @context-kit/auth-ui test        # run auth-ui tests
 bun --filter @context-kit/error-tracker build # build the error-tracker package
 bun --filter @context-kit/error-tracker test  # run error-tracker tests
+bun run pack-check                            # after build: pack each package, install it into an empty project, import every export, typecheck with TypeScript 7
 ```
+
+Releases are tarballs attached to GitHub releases, cut by pushing a `<package>-v<version>` tag. Steps are in `docs/releasing.md`.
 
 ## Architecture
 

@@ -19,8 +19,10 @@ Client-side error tracking for Next.js App Router apps. Captures React render cr
 ## Installation
 
 ```bash
-bun add @context-kit/error-tracker
+bun add https://github.com/queso/context-kit-packages/releases/download/error-tracker-v0.1.0/context-kit-error-tracker-0.1.0.tgz
 ```
+
+Each release attaches a tarball to a [GitHub release](https://github.com/queso/context-kit-packages/releases). The package is not on npm yet, so `bun add @context-kit/error-tracker` does not work. To install a different version, change both version numbers in the URL.
 
 ### Peer Dependencies
 

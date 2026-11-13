@@ -22,8 +22,10 @@ Pre-configured for Next.js App Router. Install it, add your env vars, wire up a 
 ## Installation
 
 ```bash
-bun add @context-kit/auth
+bun add https://github.com/queso/context-kit-packages/releases/download/auth-v0.2.0/context-kit-auth-0.2.0.tgz
 ```
+
+Each release attaches a tarball to a [GitHub release](https://github.com/queso/context-kit-packages/releases). The package is not on npm yet, so `bun add @context-kit/auth` does not work. To install a different version, change both version numbers in the URL.
 
 ### Peer Dependencies
 
