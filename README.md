@@ -13,6 +13,8 @@ These packages are designed to be installed into a context-kit project (or any N
 | [`@context-kit/error-tracker`](./packages/error-tracker) | Client-side error tracking with a self-hosted ingestion and query API, source map resolution and a CLI, stored in the app's own database via Drizzle | 0.1.0 |
 | `@context-kit/billing` | Stripe subscription management, webhook handling, and plan gating | Planned |
 
+Nothing is published to npm yet. Each package is released as a tarball attached to a [GitHub release](https://github.com/queso/context-kit-packages/releases), and each package's README has its install line. [docs/releasing.md](./docs/releasing.md) describes how to cut a release.
+
 ## Philosophy
 
 - **Packages, not code drops.** Bug fixes and improvements propagate to every project via `bun update`.
@@ -35,6 +37,10 @@ This is a Bun workspace monorepo.
 
 ```bash
 bun install
+bun run build
+bun run typecheck
+bun run test
+bun run pack-check   # pack each package, install the tarball into an empty project, import every export
 ```
 
 ## License

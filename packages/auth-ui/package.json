@@ -21,7 +21,7 @@
   "bin": {
     "auth-ui": "./dist/cli.js"
   },
-  "files": ["dist", "README.md"],
+  "files": ["dist", "README.md", "CHANGELOG.md", "LICENSE"],
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
