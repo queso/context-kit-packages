@@ -16,6 +16,14 @@ jobs:
     name: Typecheck, Build & Test
     runs-on: ubuntu-latest
 
+    services:
+      stripe-mock:
+        # Stripe's official mock (v0.206.0), pinned by digest. The billing package's
+        # stripe-mock suite checks its request shapes against Stripe's OpenAPI spec.
+        image: stripe/stripe-mock@sha256:aeb96b83e87a893d2ac005e363ac01ffa6e59a5ad85b49c155dfc9129de02e78
+        ports:
+          - 12111:12111
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,6 +47,11 @@ jobs:
 
       - name: Test
         run: bun run test
+        env:
+          STRIPE_MOCK_URL: http://localhost:12111
+          # Fail (rather than skip) the billing stripe-mock suite if the service is
+          # ever missing, so the request-shape checks cannot pass vacuously.
+          REQUIRE_STRIPE_MOCK: "1"
 
   test-postgres:
     name: Package tests (Postgres)
@@ -87,3 +100,39 @@ jobs:
           # Same reason as above: a missing DATABASE_URL must fail the job, not
           # skip the Postgres round-trip.
           REQUIRE_POSTGRES: "1"
+
+      - name: Test billing against Postgres
+        run: bun --filter @context-kit/billing test
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+          # Same reason as above: the concurrency checks need a real server.
+          REQUIRE_POSTGRES: "1"
+
+  billing-live:
+    name: Billing against Stripe sandbox
+    runs-on: ubuntu-latest
+    # The suite reuses fixed lookup keys in one sandbox; two runs at once could
+    # both try to create the same price.
+    concurrency:
+      group: billing-live-stripe-sandbox
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.11"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Runs only when the STRIPE_TEST_SECRET_KEY secret (a sandbox restricted key)
+      # is configured; without it the suite prints a warning and skips. The
+      # webhook-delivery test also skips here because the Stripe CLI is not installed.
+      - name: Live Stripe suite
+        run: bun --filter @context-kit/billing test:live
+        env:
+          STRIPE_TEST_SECRET_KEY: ${{ secrets.STRIPE_TEST_SECRET_KEY }}
