@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, notInArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, or } from "drizzle-orm";
 import type Stripe from "stripe";
 import { billingCustomer, billingSubscription, billingUsageReport } from "./schema/postgres.js";
 import type { BillingContext } from "./types.js";
@@ -92,11 +92,37 @@ export async function enqueueUsage(ctx: BillingContext, record: UsageRecord): Pr
 
 export interface ReportSummary {
   sent: number;
-  /** Transient failures left pending for the next run. */
+  /** Transient failures (timeouts, 409, 429, 5xx, network) left pending for the next run. */
   retry: number;
+  /** Rows Stripe rejected for their own data, or that can never be billed. */
   failed: number;
   late: number;
   needsReview: number;
+  /** Rows left pending because the configuration needs fixing (see UsageReportingBlockedError). */
+  blocked: number;
+}
+
+export type BlockedReason = "authentication" | "permission" | "meter" | "unexpected" | "unsupported_period";
+
+/**
+ * Thrown when usage cannot be reported because of something no single row can
+ * fix: a rejected or under-permissioned key, a missing or archived meter, a
+ * Stripe error the package does not recognise, or a subscription that does
+ * not renew monthly. The affected rows stay pending and go out once the cause
+ * is fixed; nothing is marked failed. Run the reporter from a job whose errors
+ * page someone.
+ */
+export class UsageReportingBlockedError extends Error {
+  constructor(
+    readonly reason: BlockedReason,
+    message: string,
+    readonly summary: ReportSummary,
+    readonly statusCode?: number,
+    readonly stripeCode?: string
+  ) {
+    super(`usage reporting blocked (${reason}): ${message}`);
+    this.name = "UsageReportingBlockedError";
+  }
 }
 
 type Row = typeof billingUsageReport.$inferSelect;
@@ -113,37 +139,121 @@ export function buildMeterEventParams(
     payload: { stripe_customer_id: stripeCustomerId, value: String(row.value) },
   };
 }
-type Outcome = keyof ReportSummary;
 
-function isPermanentStripeError(err: unknown): boolean {
-  const status = (err as { statusCode?: number }).statusCode;
-  return typeof status === "number" && status >= 400 && status < 500 && status !== 409 && status !== 429;
+/**
+ * How long a reporter holds a claimed row. stripe-node's request timeout is 30
+ * seconds and createStripeClient allows 2 retries with backoff, so one send
+ * takes at most about 95 seconds; five minutes leaves room. If a lease expires
+ * mid-send anyway, the next reporter's resend carries the same identifier and
+ * Stripe refuses it as a duplicate, which ends the row as sent.
+ */
+const LEASE_MS = 5 * 60_000;
+
+/** Validation codes that mean Stripe rejected this row's own data; retrying can never succeed. */
+const ROW_ERROR_CODES = new Set([
+  "timestamp_too_far_in_past",
+  "timestamp_in_future",
+  "payload_invalid_value",
+  "meter_event_invalid_value",
+  "meter_event_value_not_found",
+  "meter_event_customer_not_found",
+  "payload_no_customer_defined",
+  "meter_event_no_customer_defined",
+]);
+
+type StripeErrorLike = { statusCode?: number; code?: string; type?: string; message?: string; rawType?: string };
+
+/**
+ * Stripe already holds an event with this identifier, so the usage was
+ * recorded by an earlier attempt whose response was lost.
+ *
+ * - v2 documents it: "400 duplicate_meter_event: A meter event with a duplicate
+ *   identifier has already been submitted."
+ *   (https://docs.stripe.com/api/v2/billing/meter-events/create)
+ * - v1 (the endpoint used here) documents no synchronous error for it. In test
+ *   mode it was observed to return an invalid_request_error with no code and
+ *   the message "An event already exists with identifier <id>."
+ *   (dlopez2392/bis-platform#146). The live suite asserts this on every run.
+ *
+ * The message form only counts when it names the identifier that was sent.
+ */
+export function isDuplicateIdentifierError(err: unknown, identifier: string): boolean {
+  const e = err as StripeErrorLike;
+  if (e?.statusCode !== 400) return false;
+  if (e.code === "duplicate_meter_event") return true;
+  const match = /^an event already exists with identifier (.+?)\.?$/i.exec((e.message ?? "").trim());
+  return match?.[1] === identifier;
 }
 
-async function reportOne(ctx: BillingContext, tx: BillingContext["db"], row: Row, now: Date): Promise<Outcome> {
-  const finish = (set: Partial<Row>) =>
-    tx.update(billingUsageReport).set(set).where(eq(billingUsageReport.sourceId, row.sourceId));
+type Classified =
+  | { kind: "duplicate" }
+  | { kind: "transient" }
+  | { kind: "row" }
+  | { kind: "blocked"; reason: BlockedReason };
 
-  const [customer] = await tx
+function classify(err: unknown, identifier: string): Classified {
+  const e = err as StripeErrorLike;
+  const status = e?.statusCode;
+  if (typeof status !== "number") return { kind: "transient" }; // network error, no response
+  if (status === 408 || status === 409 || status === 429 || status >= 500) return { kind: "transient" };
+  if (isDuplicateIdentifierError(err, identifier)) return { kind: "duplicate" };
+  if (status === 401) return { kind: "blocked", reason: "authentication" };
+  if (status === 403) return { kind: "blocked", reason: "permission" };
+  const message = e.message ?? "";
+  if (e.code === "no_meter" || e.code === "archived_meter" || /\bmeter\b/i.test(message) && /(no|not found|must exist|archived|inactive|active)/i.test(message)) {
+    return { kind: "blocked", reason: "meter" };
+  }
+  if (e.code && ROW_ERROR_CODES.has(e.code)) return { kind: "row" };
+  return { kind: "blocked", reason: "unexpected" };
+}
+
+/** Removes anything key-shaped from a Stripe message before it is stored or thrown. */
+function redact(message: string): string {
+  return message.replace(/\b(sk|rk|pk)_(test|live)_[A-Za-z0-9*]+/g, "$1_$2_[redacted]").slice(0, 1000);
+}
+
+function previousMonthStart(d: Date): Date {
+  return new Date(
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, d.getUTCDate(), d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds())
+  );
+}
+
+type Outcome =
+  | { kind: "sent" | "retry" | "failed" | "late" | "needsReview" }
+  | { kind: "blocked"; reason: BlockedReason; message: string; stopAll: boolean; statusCode?: number; stripeCode?: string };
+
+async function reportOne(ctx: BillingContext, row: Row, leaseId: string, now: Date): Promise<Outcome> {
+  const db = ctx.db;
+  // Every write is fenced by the lease: if another reporter took the row over,
+  // this one's late result is discarded.
+  const finish = (set: Partial<Row>) =>
+    db
+      .update(billingUsageReport)
+      .set({ ...set, leaseId: null, leaseExpiresAt: null })
+      .where(and(eq(billingUsageReport.sourceId, row.sourceId), eq(billingUsageReport.leaseId, leaseId)));
+
+  const [customer] = await db
     .select({ id: billingCustomer.stripeCustomerId })
     .from(billingCustomer)
     .where(eq(billingCustomer.subjectId, row.subjectId));
   if (!customer) {
     await finish({ status: "failed", lastError: "no_customer" });
-    return "failed";
+    return { kind: "failed" };
   }
 
   if (row.firstAttemptAt && now.getTime() - row.firstAttemptAt.getTime() >= RESEND_WINDOW_MS) {
     await finish({ status: "needs_review", lastError: row.lastError ?? "unsent past the resend window" });
-    return "needsReview";
+    return { kind: "needsReview" };
   }
 
-  const subs = await tx
+  const subs = await db
     .select({
       start: billingSubscription.currentPeriodStart,
       end: billingSubscription.currentPeriodEnd,
       status: billingSubscription.status,
       overagePriceId: billingSubscription.overagePriceId,
+      interval: billingSubscription.billingInterval,
+      intervalCount: billingSubscription.billingIntervalCount,
     })
     .from(billingSubscription)
     .where(eq(billingSubscription.subjectId, row.subjectId))
@@ -154,23 +264,30 @@ async function reportOne(ctx: BillingContext, tx: BillingContext["db"], row: Row
     // Usage written right after Checkout can arrive before the subscription is
     // synced. Wait; a row stuck this way reaches needs_review after the resend window.
     await finish({ lastError: "no_subscription", firstAttemptAt: row.firstAttemptAt ?? now });
-    return "retry";
+    return { kind: "retry" };
   }
   if (!sub.overagePriceId) {
     await finish({ status: "failed", lastError: "no_overage_price" });
-    return "failed";
+    return { kind: "failed" };
+  }
+  // The late-usage window below steps back one calendar month, which is only
+  // right for monthly subscriptions. Anything else is refused loudly rather
+  // than reported against a wrong window.
+  if (sub.interval !== "month" || sub.intervalCount !== 1) {
+    const message = `unsupported_period: subscription renews every ${sub.intervalCount ?? "?"} ${sub.interval ?? "unknown"}; the reporter supports monthly only`;
+    await finish({ lastError: message });
+    return { kind: "blocked", reason: "unsupported_period", message, stopAll: false };
   }
 
   // `periodStart` is where the current period begins; the invoice for the period
   // before it keeps taking usage for invoiceGraceHours after it.
   let periodStart: Date;
   if (!live) {
-    // An ended subscription bills its last period on a final invoice and
-    // nothing after it.
+    // An ended subscription bills its last period on a final invoice and nothing after it.
     const endedAt = sub.end ?? sub.start;
     if (row.occurredAt >= endedAt) {
       await finish({ status: "failed", lastError: "no_active_subscription" });
-      return "failed";
+      return { kind: "failed" };
     }
     periodStart = endedAt;
   } else {
@@ -178,89 +295,135 @@ async function reportOne(ctx: BillingContext, tx: BillingContext["db"], row: Row
     // next period began at `end`.
     periodStart = sub.end && now >= sub.end ? sub.end : sub.start;
   }
-  const previousPeriodStart = new Date(
-    Date.UTC(
-      periodStart.getUTCFullYear(),
-      periodStart.getUTCMonth() - 1,
-      periodStart.getUTCDate(),
-      periodStart.getUTCHours(),
-      periodStart.getUTCMinutes(),
-      periodStart.getUTCSeconds()
-    )
-  );
   const graceMs = (ctx.config.invoiceGraceHours ?? 1) * HOUR_MS;
   const previousInvoiceOpen = now.getTime() < periodStart.getTime() + graceMs;
   const fromPreviousPeriod = row.occurredAt < periodStart;
-  const olderThanPreviousPeriod = row.occurredAt < previousPeriodStart;
+  const olderThanPreviousPeriod = row.occurredAt < previousMonthStart(periodStart);
   const tooOldForStripe = now.getTime() - row.occurredAt.getTime() > STRIPE_MAX_EVENT_AGE_MS;
   if ((fromPreviousPeriod && !previousInvoiceOpen) || olderThanPreviousPeriod || tooOldForStripe) {
     // Stripe would accept it into meter summaries but never bill it, so it is
     // written off here where it is visible.
     await finish({ status: "late" });
-    return "late";
+    return { kind: "late" };
   }
 
-  const attempt = {
-    attempts: row.attempts + 1,
-    firstAttemptAt: row.firstAttemptAt ?? now,
-  };
+  // Record the attempt before calling Stripe, so a crash mid-call still starts
+  // the resend clock.
+  const attempts = row.attempts + 1;
+  const firstAttemptAt = row.firstAttemptAt ?? now;
+  await db
+    .update(billingUsageReport)
+    .set({ attempts, firstAttemptAt })
+    .where(and(eq(billingUsageReport.sourceId, row.sourceId), eq(billingUsageReport.leaseId, leaseId)));
+
   try {
     // A fresh idempotency key per attempt: Stripe replays a key's saved result,
     // including a 500, so one key would turn a single server error into a
-    // permanent one. Duplicates across attempts are dropped by `identifier`.
+    // permanent one. Duplicates across attempts are refused by `identifier`.
     await ctx.stripe.billing.meterEvents.create(buildMeterEventParams(row, customer.id), {
-      idempotencyKey: `context-kit-billing:meter:${row.sourceId}:${attempt.attempts}`,
+      idempotencyKey: `context-kit-billing:meter:${row.sourceId}:${attempts}`,
     });
   } catch (err) {
-    const message = (err instanceof Error ? err.message : String(err)).slice(0, 1000);
-    if (isPermanentStripeError(err)) {
-      await finish({ ...attempt, status: "failed", lastError: message });
-      return "failed";
+    const c = classify(err, row.sourceId);
+    const e = err as StripeErrorLike;
+    const message = redact(e?.message ?? String(err));
+    if (c.kind === "duplicate") {
+      await finish({ status: "sent", sentAt: now, lastError: null });
+      return { kind: "sent" };
     }
-    await finish({ ...attempt, lastError: message });
-    return "retry";
+    if (c.kind === "transient") {
+      await finish({ lastError: message });
+      return { kind: "retry" };
+    }
+    if (c.kind === "row") {
+      await finish({ status: "failed", lastError: message });
+      return { kind: "failed" };
+    }
+    // Stripe refused the request before doing anything, so this attempt does
+    // not count toward the resend window.
+    await finish({ attempts: row.attempts, firstAttemptAt: row.firstAttemptAt, lastError: `${c.reason}: ${message}` });
+    return {
+      kind: "blocked",
+      reason: c.reason,
+      message,
+      stopAll: true,
+      ...(e?.statusCode ? { statusCode: e.statusCode } : {}),
+      ...(e?.code ? { stripeCode: e.code } : {}),
+    };
   }
-  await finish({ ...attempt, status: "sent", sentAt: now, lastError: null });
-  return "sent";
+  await finish({ status: "sent", sentAt: now, lastError: null });
+  return { kind: "sent" };
 }
 
 /**
  * Sends pending outbox rows to Stripe as meter events. Run it on a schedule
  * (every minute) or from `after()` once a usage record is written.
  *
- * Each row is locked with `FOR UPDATE SKIP LOCKED` while it is sent, so
- * concurrent reporters never send the same row. The meter event carries the
- * row's source id as its `identifier`, so a retry after a lost response is
- * dropped by Stripe instead of billed twice.
+ * Rows are claimed with a five-minute lease in one short statement
+ * (`FOR UPDATE SKIP LOCKED` inside an UPDATE), and Stripe is called outside any
+ * transaction, so no connection or row lock is held while Stripe answers.
+ * Concurrent reporters claim disjoint rows. The meter event carries the row's
+ * source id as its `identifier`, so a resend after a lost response is refused
+ * by Stripe as a duplicate and the row ends as sent, not billed twice.
+ *
+ * Throws UsageReportingBlockedError when a configuration problem stops
+ * reporting; the summary of what was done is on the error.
  */
 export async function reportPendingUsage(
   ctx: BillingContext,
   options: { limit?: number } = {}
 ): Promise<ReportSummary> {
   const limit = options.limit ?? 100;
-  const summary: ReportSummary = { sent: 0, retry: 0, failed: 0, late: 0, needsReview: 0 };
-  const seen: string[] = [];
+  const now = ctx.now?.() ?? new Date();
+  const summary: ReportSummary = { sent: 0, retry: 0, failed: 0, late: 0, needsReview: 0, blocked: 0 };
+  const leaseId = crypto.randomUUID();
 
-  for (let i = 0; i < limit; i++) {
-    const outcome = await ctx.db.transaction(async (tx) => {
-      const [row] = await tx
-        .select()
-        .from(billingUsageReport)
-        .where(
-          and(
-            eq(billingUsageReport.status, "pending"),
-            seen.length > 0 ? notInArray(billingUsageReport.sourceId, seen) : sql`true`
-          )
-        )
-        .orderBy(asc(billingUsageReport.createdAt), asc(billingUsageReport.sourceId))
-        .limit(1)
-        .for("update", { skipLocked: true });
-      if (!row) return null;
-      seen.push(row.sourceId);
-      return reportOne(ctx, tx, row, ctx.now?.() ?? new Date());
-    });
-    if (outcome === null) break;
-    summary[outcome]++;
+  const claimable = ctx.db
+    .select({ id: billingUsageReport.sourceId })
+    .from(billingUsageReport)
+    .where(
+      and(
+        eq(billingUsageReport.status, "pending"),
+        or(isNull(billingUsageReport.leaseExpiresAt), lt(billingUsageReport.leaseExpiresAt, now))
+      )
+    )
+    .orderBy(asc(billingUsageReport.createdAt), asc(billingUsageReport.sourceId))
+    .limit(limit)
+    .for("update", { skipLocked: true });
+  const claimed = await ctx.db
+    .update(billingUsageReport)
+    .set({ leaseId, leaseExpiresAt: new Date(now.getTime() + LEASE_MS) })
+    .where(inArray(billingUsageReport.sourceId, claimable))
+    .returning();
+  claimed.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.sourceId.localeCompare(b.sourceId));
+
+  let firstBlock: Extract<Outcome, { kind: "blocked" }> | undefined;
+  for (const row of claimed) {
+    const outcome = await reportOne(ctx, row, leaseId, now);
+    if (outcome.kind !== "blocked") {
+      summary[outcome.kind]++;
+      continue;
+    }
+    summary.blocked++;
+    firstBlock ??= outcome;
+    if (outcome.stopAll) break;
+  }
+
+  // Release whatever this run claimed but did not finish, so the next run can
+  // take it without waiting for the lease to expire.
+  await ctx.db
+    .update(billingUsageReport)
+    .set({ leaseId: null, leaseExpiresAt: null })
+    .where(eq(billingUsageReport.leaseId, leaseId));
+
+  if (firstBlock) {
+    throw new UsageReportingBlockedError(
+      firstBlock.reason,
+      firstBlock.message,
+      summary,
+      firstBlock.statusCode,
+      firstBlock.stripeCode
+    );
   }
   return summary;
 }

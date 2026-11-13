@@ -40,11 +40,15 @@ describe("createStripeClient", () => {
   });
 
   test("never puts the key in an error message", () => {
-    try {
-      createStripeClient("pk_live_supersecretvalue");
-      throw new Error("expected a throw");
-    } catch (err) {
-      expect(String(err)).not.toContain("supersecretvalue");
-    }
+    let message = "";
+    expect(() => {
+      try {
+        createStripeClient("pk_live_supersecretvalue");
+      } catch (err) {
+        message = String(err);
+        throw err;
+      }
+    }).toThrow(/secret or restricted key/);
+    expect(message).not.toContain("supersecretvalue");
   });
 });

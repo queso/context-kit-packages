@@ -97,6 +97,21 @@ export class FakeStripe {
     afterHandling: boolean;
   }[] = [];
 
+  /**
+   * How a repeated meter event identifier is refused.
+   * - "v1-message": what Stripe test mode was observed to return on v1, an
+   *   invalid_request_error with no code and the message "An event already
+   *   exists with identifier <id>." (reported in dlopez2392/bis-platform#146).
+   * - "v2-code": the documented v2 error, code duplicate_meter_event.
+   */
+  duplicateStyle: "v1-message" | "v2-code" = "v1-message";
+
+  private duplicateMeterEventError(identifier: string): Json {
+    return this.duplicateStyle === "v2-code"
+      ? { error: { type: "invalid_request_error", code: "duplicate_meter_event", message: "A meter event with a duplicate identifier has already been submitted." } }
+      : { error: { type: "invalid_request_error", message: `An event already exists with identifier ${identifier}.` } };
+  }
+
   /** The stripe-node client wired to this fake. */
   client(): Stripe {
     return createStripeClient("sk_test_fake", {
@@ -372,10 +387,12 @@ export class FakeStripe {
         payload: params.payload,
         timestamp: Number(params.timestamp),
       });
-      // Stripe drops a repeated identifier inside its dedup window and still answers 200.
-      if (!this.meterEvents.some((e) => e.identifier === params.identifier)) {
-        this.meterEvents.push(event);
+      // A repeated identifier under the same idempotency key never gets here: the
+      // saved response is replayed above. Under a new key, Stripe refuses it.
+      if (this.meterEvents.some((e) => e.identifier === params.identifier)) {
+        return [400, this.duplicateMeterEventError(String(params.identifier))];
       }
+      this.meterEvents.push(event);
       return [200, event];
     }
     if (method === "POST" && path === "/v1/checkout/sessions") {

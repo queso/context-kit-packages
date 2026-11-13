@@ -6,7 +6,7 @@ import { bootstrapCatalog, type Catalog } from "../bootstrap";
 import { createCheckoutSession } from "../checkout";
 import { syncSubscription } from "../subscriptions";
 import { getEntitlement } from "../entitlement";
-import { enqueueUsage, reportPendingUsage } from "../usage";
+import { enqueueUsage, isDuplicateIdentifierError, reportPendingUsage } from "../usage";
 import { createWebhookHandler } from "../webhooks";
 import { billingCustomer, billingSubscription, billingWebhookEvent } from "../schema/postgres";
 import { createTestDb } from "../__tests__/helpers/db";
@@ -196,7 +196,7 @@ describe.skipIf(!enabled)("live Stripe sandbox", () => {
     expect(await getEntitlement(ctx, subjectId)).toMatchObject({ plan: "free", paid: false, reason: "inactive" });
   }, LONG);
 
-  test("a reported overage event shows up on the subscription's upcoming invoice", async () => {
+  test("a reported overage event shows up once on the upcoming invoice, even when Stripe already held its identifier", async () => {
     const p = await prices();
     const ctx = await context();
     const { subjectId, customerId } = await customerWithCard(ctx);
@@ -204,17 +204,33 @@ describe.skipIf(!enabled)("live Stripe sandbox", () => {
     cleanups.push(() => stripe().subscriptions.cancel(sub.id));
     await syncSubscription(ctx, sub.id);
 
-    expect(await enqueueUsage(ctx, { sourceId: `run_${runId}_1`, subjectId, value: 7, occurredAt: new Date() })).toBe("enqueued");
+    // Stripe gets the event directly first, as if an earlier reporter attempt
+    // reached Stripe and its response was lost. The reporter then sends the same
+    // identifier under a new idempotency key.
+    const identifier = `run_${runId}_1`;
+    await stripe().billing.meterEvents.create(
+      { event_name: config.overage.meterEventName, identifier, payload: { stripe_customer_id: customerId, value: "7" } },
+      { idempotencyKey: `ckb-live-first-${identifier}` }
+    );
+
+    // What Stripe answers to the repeat, checked against the classifier the
+    // reporter uses. A reworded refusal fails here instead of wedging rows.
+    const repeat = await stripe()
+      .billing.meterEvents.create(
+        { event_name: config.overage.meterEventName, identifier, payload: { stripe_customer_id: customerId, value: "7" } },
+        { idempotencyKey: `ckb-live-repeat-${identifier}` }
+      )
+      .then(() => null, (err: unknown) => err);
+    if (repeat) {
+      const e = repeat as { statusCode?: number; code?: string; message?: string };
+      console.warn(`[billing] Stripe refused a repeated identifier: ${e.statusCode} ${e.code ?? "(no code)"} "${e.message}"`);
+      expect(isDuplicateIdentifierError(repeat, identifier)).toBe(true);
+    } else {
+      console.warn("[billing] Stripe accepted a repeated identifier with 200 (dropped as a duplicate)");
+    }
+
+    expect(await enqueueUsage(ctx, { sourceId: identifier, subjectId, value: 7, occurredAt: new Date() })).toBe("enqueued");
     expect((await reportPendingUsage(ctx)).sent).toBe(1);
-    // A resend with the same identifier must not add to the total. Stripe may
-    // drop it silently or reject it; either way the quantity below stays 7.
-    await stripe()
-      .billing.meterEvents.create({
-        event_name: config.overage.meterEventName,
-        identifier: `run_${runId}_1`,
-        payload: { stripe_customer_id: customerId, value: "7" },
-      })
-      .catch(() => {});
 
     const quantity = await poll(
       "the metered usage to appear on the upcoming invoice",

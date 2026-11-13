@@ -203,13 +203,19 @@ await db.transaction(async (tx) => {
 Then send pending rows on a schedule (every minute) or from `after()`:
 
 ```ts
-await billing.reportPendingUsage(); // { sent, retry, failed, late, needsReview }
+await billing.reportPendingUsage(); // { sent, retry, failed, late, needsReview, blocked }
 ```
+
+Run it from a job whose errors reach a person. It throws `UsageReportingBlockedError` when something no single row can fix stops reporting: a rejected key (401), a key without the meter-event permission (403), a missing or archived meter, a Stripe error the package does not recognise, or a subscription that does not renew monthly. Those rows stay pending, with the reason in `last_error`, and go out on the first run after the cause is fixed. `err.reason` and `err.summary` say what happened.
+
+**Monthly subscriptions only.** The reporter decides whether usage can still reach an invoice by stepping back one calendar month from the current period start. It refuses (loudly, as above) subscriptions whose price does not renew every 1 month. The billing interval is stored on `billing_subscription` at sync.
 
 How each row is reported once:
 - `source_id` is the primary key, so a repeated usage record is a no-op (`duplicate`), and a changed one is refused (`conflict`).
 - The meter event carries the source id as its `identifier`. A retry after a lost response is dropped by Stripe, which deduplicates identifiers for at least 24 hours. Each attempt uses a fresh idempotency key, because Stripe replays a key's saved result, including a 500.
-- Rows are locked with `FOR UPDATE SKIP LOCKED`, so concurrent reporters never send the same row.
+- Rows are claimed with a five-minute lease in one short statement (`FOR UPDATE SKIP LOCKED` inside an UPDATE), so concurrent reporters take disjoint rows. Stripe is called outside any transaction: no connection or row lock is held while Stripe answers. One send takes at most about 95 seconds (30-second timeout, 2 retries with backoff), well inside the lease. A reporter that loses its lease cannot overwrite the new holder's result.
+- If Stripe already holds the identifier (an earlier attempt reached Stripe and its response was lost), Stripe refuses the resend. The reporter recognises that refusal and marks the row `sent`. Stripe documents it for v2 as `400 duplicate_meter_event`; on v1 it was observed in test mode as an `invalid_request_error` with the message "An event already exists with identifier <id>.", which only counts when it names the identifier that was sent. The live suite asserts this against Stripe.
+- A row is marked `failed` by a Stripe error only when the error is a validation error about that row's own data (for example a timestamp out of range). Timeouts, 409, 429 and 5xx leave it pending for the next run.
 - A row still unsent 20 hours after its first attempt becomes `needs_review` instead of being resent, since Stripe's dedup window may have passed.
 - Usage from a period whose invoice is already finalized becomes `late` and is not sent: Stripe would accept it without ever billing it.
 - Usage that arrives before the subject's subscription is synced stays pending. Usage after a canceled subscription's last period, or for a subscription without the overage price, is marked `failed`.
@@ -256,7 +262,7 @@ To run it, create a **sandbox** in the Stripe Dashboard (Stripe recommends separ
 | Events | Read |
 | Webhook Endpoints | Write |
 
-Store it as `STRIPE_TEST_SECRET_KEY` in your secrets manager, and as a GitHub Actions secret of the same name to run the suite in CI. The webhook test also needs the Stripe CLI on `PATH`; it receives the key through `STRIPE_API_KEY` in its environment.
+Store it as `STRIPE_TEST_SECRET_KEY` in your secrets manager. To run the suite in CI, add it as a GitHub Actions secret of the same name and set the repository variable `STRIPE_LIVE_ENABLED` to `true`. Until the variable is set, the "Billing against Stripe sandbox" check is skipped, never shown as passing; once it is set, a missing or invalid key fails the check. The webhook test also needs the Stripe CLI on `PATH`; it receives the key through `STRIPE_API_KEY` in its environment.
 
 ## Not built yet
 

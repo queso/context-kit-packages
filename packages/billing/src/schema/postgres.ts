@@ -44,6 +44,9 @@ export const billingSubscription = pgTable(
     planKey: text("plan_key"),
     basePriceId: text("base_price_id"),
     overagePriceId: text("overage_price_id"),
+    /** The base price's recurring interval. The usage reporter supports only month x 1. */
+    billingInterval: text("billing_interval"),
+    billingIntervalCount: integer("billing_interval_count"),
     currentPeriodStart: timestamp("current_period_start", tz),
     currentPeriodEnd: timestamp("current_period_end", tz),
     cancelAt: timestamp("cancel_at", tz),
@@ -72,7 +75,7 @@ export const billingWebhookEvent = pgTable("billing_webhook_event", {
  *
  * status: pending, sent, skipped (value 0), late (its invoice was already
  * finalized), needs_review (still unsent after Stripe's dedup window may have
- * passed), failed (rejected by Stripe or no customer).
+ * passed), failed (Stripe rejected this row's own data, or it can never be billed).
  */
 export const billingUsageReport = pgTable(
   "billing_usage_report",
@@ -86,6 +89,9 @@ export const billingUsageReport = pgTable(
     attempts: integer("attempts").default(0).notNull(),
     firstAttemptAt: timestamp("first_attempt_at", tz),
     lastError: text("last_error"),
+    /** Set while a reporter is sending the row. Another reporter may take it over once it expires. */
+    leaseId: text("lease_id"),
+    leaseExpiresAt: timestamp("lease_expires_at", tz),
     sentAt: timestamp("sent_at", tz),
     createdAt: timestamp("created_at", tz).defaultNow().notNull(),
   },

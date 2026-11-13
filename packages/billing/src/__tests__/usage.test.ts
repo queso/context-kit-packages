@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { eq } from "drizzle-orm";
-import { computeOverage, enqueueUsage, reportPendingUsage } from "../usage";
+import { computeOverage, enqueueUsage, reportPendingUsage, UsageReportingBlockedError } from "../usage";
 import { billingCustomer, billingSubscription, billingUsageReport } from "../schema/postgres";
 import { createTestDb } from "./helpers/db";
 import { FakeStripe } from "./helpers/fake-stripe";
@@ -67,6 +67,8 @@ describe("usage outbox", () => {
       planKey: "pro",
       basePriceId: "price_pro",
       overagePriceId: "price_over",
+      billingInterval: "month",
+      billingIntervalCount: 1,
       currentPeriodStart: PERIOD_START,
       currentPeriodEnd: new Date("2026-02-01T00:00:00Z"),
       cancelAt: null,
@@ -139,7 +141,7 @@ describe("usage outbox", () => {
 
       const summary = await reportPendingUsage(ctx);
 
-      expect(summary).toEqual({ sent: 1, retry: 0, failed: 0, late: 0, needsReview: 0 });
+      expect(summary).toEqual({ sent: 1, retry: 0, failed: 0, late: 0, needsReview: 0, blocked: 0 });
       const [call] = meterCalls();
       expect(call?.params).toEqual({
         event_name: "test_credits",
@@ -190,16 +192,19 @@ describe("usage outbox", () => {
       expect((await rowFor("run_1"))?.status).toBe("sent");
     });
 
-    test("a request Stripe rejects is marked failed and not retried", async () => {
+    test("a row-level validation error marks only that row failed", async () => {
       await enqueueUsage(ctx, { sourceId: "run_1", subjectId: "100", value: 3, occurredAt: NOW });
-      fake.failNext((r) => r.path === "/v1/billing/meter_events", 400, 1, {
-        error: { type: "invalid_request_error", message: "No such meter event name" },
+      await enqueueUsage(ctx, { sourceId: "run_2", subjectId: "100", value: 4, occurredAt: NOW });
+      fake.failNext((r) => r.path === "/v1/billing/meter_events" && r.params.identifier === "run_1", 400, 1, {
+        error: { type: "invalid_request_error", code: "timestamp_too_far_in_past", message: "The timestamp is too far in the past." },
       });
 
-      expect((await reportPendingUsage(ctx)).failed).toBe(1);
-      expect(await rowFor("run_1")).toMatchObject({ status: "failed", lastError: "No such meter event name" });
+      const summary = await reportPendingUsage(ctx);
+
+      expect(summary).toMatchObject({ failed: 1, sent: 1 });
+      expect(await rowFor("run_1")).toMatchObject({ status: "failed", lastError: "The timestamp is too far in the past." });
       await reportPendingUsage(ctx);
-      expect(meterCalls()).toHaveLength(1);
+      expect(meterCalls().filter((c) => c.params.identifier === "run_1")).toHaveLength(1);
     });
 
     test("a subject with no Stripe customer is marked failed", async () => {
@@ -285,6 +290,8 @@ describe("usage outbox", () => {
         status: "active",
         planKey: "pro",
         overagePriceId: "price_over",
+        billingInterval: "month",
+        billingIntervalCount: 1,
         currentPeriodStart: PERIOD_START,
         currentPeriodEnd: new Date("2026-02-01T00:00:00Z"),
         livemode: false,
@@ -317,6 +324,208 @@ describe("usage outbox", () => {
       await enqueueUsage(ctx, { sourceId: "run_np", subjectId: "100", value: 3, occurredAt: NOW });
       expect((await reportPendingUsage(ctx)).failed).toBe(1);
       expect((await rowFor("run_np"))?.lastError).toBe("no_overage_price");
+    });
+
+    describe("errors that are not about the row", () => {
+      // A bad key, a missing permission or a missing meter would fail every row
+      // the same way. Burning rows would lose revenue to a configuration
+      // mistake, so they stay pending and the reporter throws.
+      const cases: [string, number, Record<string, unknown>, string][] = [
+        ["an expired or rotated key (401)", 401, { error: { type: "invalid_request_error", message: "Invalid API Key provided: rk_test_****abcd" } }, "authentication"],
+        ["a key without the meter event permission (403)", 403, { error: { type: "invalid_request_error", message: "The provided key 'rk_test_****abcd' does not have the required permissions for this endpoint." } }, "permission"],
+        ["a missing meter (documented code)", 400, { error: { type: "invalid_request_error", code: "no_meter", message: "A meter must exist to submit events." } }, "meter"],
+        ["an archived meter (documented code)", 400, { error: { type: "invalid_request_error", code: "archived_meter", message: "The meter must be Active to submit events." } }, "meter"],
+        ["a missing meter (message only)", 400, { error: { type: "invalid_request_error", message: "No active meter found with event_name test_credits." } }, "meter"],
+        ["a 4xx the package does not recognise", 400, { error: { type: "invalid_request_error", code: "brand_new_code", message: "Something new." } }, "unexpected"],
+      ];
+
+      test.each(cases)("%s leaves every row pending and throws", async (_name, status, body, reason) => {
+        await enqueueUsage(ctx, { sourceId: "run_1", subjectId: "100", value: 3, occurredAt: NOW });
+        await enqueueUsage(ctx, { sourceId: "run_2", subjectId: "100", value: 4, occurredAt: NOW });
+        fake.failNext((r) => r.path === "/v1/billing/meter_events", status, 1, body);
+
+        const err = await reportPendingUsage(ctx).catch((e) => e);
+
+        expect(err).toBeInstanceOf(UsageReportingBlockedError);
+        expect(err.reason).toBe(reason);
+        expect(err.statusCode).toBe(status);
+        // Stopped at the first row: the second was never sent.
+        expect(meterCalls()).toHaveLength(1);
+        for (const id of ["run_1", "run_2"]) {
+          const row = await rowFor(id);
+          expect(row?.status).toBe("pending");
+          // Nothing reached Stripe, so the resend clock does not start.
+          expect(row?.firstAttemptAt).toBeNull();
+          expect(row?.attempts).toBe(0);
+        }
+        expect((await rowFor("run_1"))?.lastError).toContain(reason);
+
+        // Once the configuration is fixed, the same rows go through.
+        expect((await reportPendingUsage(ctx)).sent).toBe(2);
+      });
+
+      test("the error message never carries the key", async () => {
+        await enqueueUsage(ctx, { sourceId: "run_1", subjectId: "100", value: 3, occurredAt: NOW });
+        fake.failNext((r) => r.path === "/v1/billing/meter_events", 401, 1, {
+          error: { type: "invalid_request_error", message: "Invalid API Key provided: sk_test_fake" },
+        });
+        const err = await reportPendingUsage(ctx).catch((e) => e);
+        expect(String(err.message)).not.toContain("sk_test_fake");
+        expect(String((await rowFor("run_1"))?.lastError)).not.toContain("sk_test_fake");
+      });
+
+      test.each([408, 409, 429, 500, 503])("HTTP %i is transient: the row stays pending without throwing", async (status) => {
+        await enqueueUsage(ctx, { sourceId: "run_1", subjectId: "100", value: 3, occurredAt: NOW });
+        fake.failNext((r) => r.path === "/v1/billing/meter_events", status);
+        expect((await reportPendingUsage(ctx)).retry).toBe(1);
+        expect((await rowFor("run_1"))?.status).toBe("pending");
+      });
+    });
+
+    describe("Stripe already holds the identifier", () => {
+      test("the observed v1 refusal of a repeated identifier ends the row as sent", async () => {
+        fake.duplicateStyle = "v1-message";
+        await enqueueUsage(ctx, { sourceId: "run_1", subjectId: "100", value: 3, occurredAt: NOW });
+        fake.loseNextResponse((r) => r.path === "/v1/billing/meter_events");
+        await reportPendingUsage(ctx);
+
+        const summary = await reportPendingUsage(ctx);
+
+        expect(summary).toMatchObject({ sent: 1, failed: 0 });
+        expect(await rowFor("run_1")).toMatchObject({ status: "sent", lastError: null });
+        expect(fake.meterEvents).toHaveLength(1);
+      });
+
+      test("the documented v2 code duplicate_meter_event ends the row as sent", async () => {
+        fake.duplicateStyle = "v2-code";
+        await enqueueUsage(ctx, { sourceId: "run_1", subjectId: "100", value: 3, occurredAt: NOW });
+        fake.loseNextResponse((r) => r.path === "/v1/billing/meter_events");
+        await reportPendingUsage(ctx);
+        expect((await reportPendingUsage(ctx)).sent).toBe(1);
+        expect((await rowFor("run_1"))?.status).toBe("sent");
+      });
+
+      test("a refusal naming a different identifier is not taken as ours", async () => {
+        await enqueueUsage(ctx, { sourceId: "run_1", subjectId: "100", value: 3, occurredAt: NOW });
+        fake.failNext((r) => r.path === "/v1/billing/meter_events", 400, 1, {
+          error: { type: "invalid_request_error", message: "An event already exists with identifier run_999." },
+        });
+        const err = await reportPendingUsage(ctx).catch((e) => e);
+        expect(err).toBeInstanceOf(UsageReportingBlockedError);
+        expect((await rowFor("run_1"))?.status).toBe("pending");
+      });
+    });
+
+    describe("billing period", () => {
+      test("a subscription that does not renew monthly blocks its rows loudly and leaves the rest going", async () => {
+        await ctx.db.insert(billingCustomer).values({ subjectId: "200", stripeCustomerId: "cus_200", livemode: false });
+        await ctx.db.insert(billingSubscription).values({
+          stripeSubscriptionId: "sub_200",
+          subjectId: "200",
+          stripeCustomerId: "cus_200",
+          status: "active",
+          planKey: "pro",
+          overagePriceId: "price_over",
+          billingInterval: "year",
+          billingIntervalCount: 1,
+          currentPeriodStart: PERIOD_START,
+          currentPeriodEnd: new Date("2027-01-01T00:00:00Z"),
+          livemode: false,
+          syncedAt: NOW,
+        });
+        await enqueueUsage(ctx, { sourceId: "run_yearly", subjectId: "200", value: 3, occurredAt: NOW });
+        await enqueueUsage(ctx, { sourceId: "run_monthly", subjectId: "100", value: 3, occurredAt: NOW });
+
+        const err = await reportPendingUsage(ctx).catch((e) => e);
+
+        expect(err).toBeInstanceOf(UsageReportingBlockedError);
+        expect(err.reason).toBe("unsupported_period");
+        expect(err.summary).toMatchObject({ sent: 1, blocked: 1 });
+        expect(await rowFor("run_yearly")).toMatchObject({ status: "pending", lastError: expect.stringContaining("unsupported_period") });
+        expect((await rowFor("run_monthly"))?.status).toBe("sent");
+        expect(meterCalls().map((c) => c.params.identifier)).toEqual(["run_monthly"]);
+      });
+
+      test.each([
+        ["month", 3],
+        [null, null],
+      ])("interval %p x %p is refused too", async (interval, count) => {
+        await ctx.db.update(billingSubscription).set({ billingInterval: interval, billingIntervalCount: count });
+        await enqueueUsage(ctx, { sourceId: "run_1", subjectId: "100", value: 3, occurredAt: NOW });
+        const err = await reportPendingUsage(ctx).catch((e) => e);
+        expect(err?.reason).toBe("unsupported_period");
+        expect(meterCalls()).toHaveLength(0);
+      });
+    });
+
+    describe("leases", () => {
+      test("Stripe is called outside any database transaction", async () => {
+        let inTransaction = null as boolean | null;
+        const realTransaction = ctx.db.transaction.bind(ctx.db);
+        let depth = 0;
+        ctx = {
+          ...ctx,
+          db: new Proxy(ctx.db, {
+            get(target, prop, receiver) {
+              if (prop === "transaction") {
+                return async (fn: (tx: unknown) => Promise<unknown>) => {
+                  depth++;
+                  try {
+                    return await realTransaction(fn as never);
+                  } finally {
+                    depth--;
+                  }
+                };
+              }
+              return Reflect.get(target, prop, receiver);
+            },
+          }),
+        };
+        const realFetch = fake.fetch;
+        (fake as { fetch: typeof fake.fetch }).fetch = async (input, init) => {
+          inTransaction = depth > 0;
+          return realFetch(input, init);
+        };
+        ctx = { ...ctx, stripe: fake.client() };
+        await enqueueUsage(ctx, { sourceId: "run_1", subjectId: "100", value: 3, occurredAt: NOW });
+        await reportPendingUsage(ctx);
+        expect(inTransaction).toBe(false);
+      });
+
+      test("a row under another reporter's live lease is not picked up", async () => {
+        await enqueueUsage(ctx, { sourceId: "run_1", subjectId: "100", value: 3, occurredAt: NOW });
+        await ctx.db
+          .update(billingUsageReport)
+          .set({ leaseId: "other-reporter", leaseExpiresAt: new Date(NOW.getTime() + 60_000) });
+        expect((await reportPendingUsage(ctx)).sent).toBe(0);
+        expect(meterCalls()).toHaveLength(0);
+      });
+
+      test("a row whose lease expired (its reporter crashed) is picked up again", async () => {
+        await enqueueUsage(ctx, { sourceId: "run_1", subjectId: "100", value: 3, occurredAt: NOW });
+        await ctx.db
+          .update(billingUsageReport)
+          .set({ leaseId: "crashed-reporter", leaseExpiresAt: new Date(NOW.getTime() - 1) });
+        expect((await reportPendingUsage(ctx)).sent).toBe(1);
+        expect(await rowFor("run_1")).toMatchObject({ status: "sent", leaseId: null, leaseExpiresAt: null });
+      });
+
+      test("a reporter whose lease was taken over cannot overwrite the new holder's result", async () => {
+        await enqueueUsage(ctx, { sourceId: "run_1", subjectId: "100", value: 3, occurredAt: NOW });
+        // While this reporter waits on Stripe, its lease expires and another
+        // reporter claims and finishes the row.
+        const realFetch = fake.fetch;
+        (fake as { fetch: typeof fake.fetch }).fetch = async (input, init) => {
+          await ctx.db
+            .update(billingUsageReport)
+            .set({ leaseId: "newer-reporter", status: "sent", lastError: null });
+          return new Response(JSON.stringify({ error: { type: "api_error", message: "slow" } }), { status: 500 });
+        };
+        ctx = { ...ctx, stripe: fake.client() };
+        await reportPendingUsage(ctx);
+        expect(await rowFor("run_1")).toMatchObject({ status: "sent", leaseId: "newer-reporter", lastError: null });
+        (fake as { fetch: typeof fake.fetch }).fetch = realFetch;
+      });
     });
 
     test("respects the batch limit", async () => {

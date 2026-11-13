@@ -16,6 +16,8 @@ describe("package entry point", () => {
       "bootstrapCatalog",
       "nextMonthStartUtc",
       "AlreadySubscribedError",
+      "UsageReportingBlockedError",
+      "isDuplicateIdentifierError",
     ]) {
       expect(pkg).toHaveProperty(name);
     }

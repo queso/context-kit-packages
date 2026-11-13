@@ -111,6 +111,11 @@ jobs:
   billing-live:
     name: Billing against Stripe sandbox
     runs-on: ubuntu-latest
+    # Skipped (grey, not green) until the repository variable STRIPE_LIVE_ENABLED
+    # is set to "true" alongside the STRIPE_TEST_SECRET_KEY secret. Job-level `if`
+    # cannot read secrets, hence the variable. Once enabled, REQUIRE_STRIPE_LIVE
+    # makes a missing or invalid key fail the job instead of skipping the suite.
+    if: vars.STRIPE_LIVE_ENABLED == 'true'
     # The suite reuses fixed lookup keys in one sandbox; two runs at once could
     # both try to create the same price.
     concurrency:
@@ -129,10 +134,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # Runs only when the STRIPE_TEST_SECRET_KEY secret (a sandbox restricted key)
-      # is configured; without it the suite prints a warning and skips. The
-      # webhook-delivery test also skips here because the Stripe CLI is not installed.
+      # The webhook-delivery test skips here because the Stripe CLI is not installed.
       - name: Live Stripe suite
         run: bun --filter @context-kit/billing test:live
         env:
           STRIPE_TEST_SECRET_KEY: ${{ secrets.STRIPE_TEST_SECRET_KEY }}
+          REQUIRE_STRIPE_LIVE: "1"

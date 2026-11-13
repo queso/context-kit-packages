@@ -89,6 +89,8 @@ export async function storeSubscription(
     planKey: baseItem ? planKeyForPrice(ctx, baseItem.price) : null,
     basePriceId: baseItem?.price.id ?? null,
     overagePriceId: overageItem?.price.id ?? null,
+    billingInterval: baseItem?.price.recurring?.interval ?? overageItem?.price.recurring?.interval ?? null,
+    billingIntervalCount: baseItem?.price.recurring?.interval_count ?? overageItem?.price.recurring?.interval_count ?? null,
     currentPeriodStart: fromUnix(baseItem?.current_period_start ?? overageItem?.current_period_start),
     currentPeriodEnd: fromUnix(baseItem?.current_period_end ?? overageItem?.current_period_end),
     cancelAt: fromUnix(sub.cancel_at),

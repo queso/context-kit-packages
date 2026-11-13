@@ -52,6 +52,8 @@ describe("syncSubscription", () => {
       planKey: "pro",
       basePriceId: "price_pro",
       overagePriceId: "price_over",
+      billingInterval: "month",
+      billingIntervalCount: 1,
       currentPeriodStart: new Date("2026-01-01T00:00:00Z"),
       currentPeriodEnd: new Date("2026-02-01T00:00:00Z"),
       pastDueSince: null,

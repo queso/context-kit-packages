@@ -25,13 +25,14 @@ if (process.env.REQUIRE_POSTGRES && !hasPostgres) {
   throw new Error("REQUIRE_POSTGRES is set but DATABASE_URL is missing or is not a postgres:// or postgresql:// URL");
 }
 
-let client: ReturnType<typeof postgres> | undefined;
+const clients: ReturnType<typeof postgres>[] = [];
 afterAll(async () => {
-  await client?.end({ timeout: 5 });
+  await Promise.all(clients.map((c) => c.end({ timeout: 5 })));
 });
 
 async function setup(): Promise<BillingDb> {
-  client = postgres(url, { max: 6, onnotice: () => {} });
+  const client = postgres(url, { max: 6, onnotice: () => {} });
+  clients.push(client);
   const db = drizzle(client, { schema });
   await db.execute(
     sql`drop table if exists billing_customer, billing_subscription, billing_webhook_event, billing_usage_report`
@@ -40,7 +41,11 @@ async function setup(): Promise<BillingDb> {
   // drizzle-kit's pushSchema reads `result.rows` off every execute(), but
   // postgres-js returns the rows array directly.
   const pushTarget = { execute: async (q: unknown) => ({ rows: await db.execute(q as never) }) };
-  const { apply } = await pushSchema(schema, pushTarget as never);
+  // Only billing tables. CI runs the other packages' Postgres tests against the
+  // same database first; without the filter drizzle-kit sees their tables, asks
+  // interactively whether one was renamed to a billing table, and fails with
+  // "Interactive prompts require a TTY terminal".
+  const { apply } = await pushSchema(schema, pushTarget as never, ["public"], ["billing_*"]);
   await apply();
   return db as unknown as BillingDb;
 }
@@ -69,6 +74,8 @@ describe.skipIf(!hasPostgres)("against a real Postgres server", () => {
       status: "active",
       planKey: "pro",
       overagePriceId: "price_over",
+      billingInterval: "month",
+      billingIntervalCount: 1,
       currentPeriodStart: new Date(Date.now() - 86_400_000),
       currentPeriodEnd: new Date(Date.now() + 20 * 86_400_000),
       livemode: false,
