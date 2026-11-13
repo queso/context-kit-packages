@@ -244,7 +244,7 @@ bun --filter @context-kit/billing test        # offline: fake Stripe + PGlite
 
 - **Offline.** A stateful fake of the Stripe API, reached through stripe-node's own HTTP client, serves objects built from Stripe's published fixtures (`src/__tests__/fixtures/stripe/SOURCE.md`). Webhooks are signed with stripe-node's test signer. Tables live in PGlite.
 - **stripe-mock.** `src/__tests__/stripe-mock.test.ts` sends the package's real request parameters to Stripe's official mock, which rejects anything that does not match Stripe's OpenAPI spec. Run `docker run --rm -p 12111:12111 stripe/stripe-mock` and set `STRIPE_MOCK_URL=http://localhost:12111`. CI runs it with `REQUIRE_STRIPE_MOCK=1`.
-- **Postgres.** `src/__tests__/postgres.test.ts` checks concurrent reporters and concurrent webhook deliveries on a real server. Set `DATABASE_URL`. CI runs it with `REQUIRE_POSTGRES=1`.
+- **Postgres.** `src/__tests__/postgres.test.ts` checks concurrent reporters and concurrent webhook deliveries on a real server. Set `BILLING_TEST_DATABASE_URL` to a throwaway database: the suite drops the billing tables, and it ignores `DATABASE_URL` so it cannot touch an application database. Without the variable it skips. CI sets it and `REQUIRE_POSTGRES=1`, which makes a missing variable fail the job.
 
 ### Live Stripe tests
 

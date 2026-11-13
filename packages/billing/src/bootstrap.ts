@@ -82,6 +82,31 @@ export async function bootstrapCatalog(
     );
   }
   if (meter) assertMeterSettings(meter);
+  const lookupKeys = [...paid.map(([, p]) => p.priceLookupKey!), config.overage.priceLookupKey];
+  // Stripe accepts at most 10 lookup keys per list call.
+  const existing: Stripe.Price[] = [];
+  for (let i = 0; i < lookupKeys.length; i += 10) {
+    const page = await stripe.prices.list({ lookup_keys: lookupKeys.slice(i, i + 10), active: true, limit: 100 });
+    existing.push(...page.data);
+  }
+  const byPrice = indexByLookupKey(existing);
+  const byKey = new Map([...byPrice].map(([k, p]) => [k, p.id]));
+
+  // Checked before creating anything, so a mismatch leaves no partial catalog.
+  const overageFound = byKey.get(config.overage.priceLookupKey);
+  if (overageFound) {
+    const priceMeterId = byPrice.get(config.overage.priceLookupKey)!.recurring?.meter;
+    if (priceMeterId !== meter?.id) {
+      throw new Error(
+        `Price ${overageFound} (${config.overage.priceLookupKey}) bills meter ${priceMeterId ?? "none"}, but ${
+          meter
+            ? `the meter for event name "${config.overage.meterEventName}" is ${meter.id}`
+            : `no meter exists for event name "${config.overage.meterEventName}"`
+        }; archive the price or point the config at the right meter`
+      );
+    }
+  }
+
   // Creates carry idempotency keys derived from the event name and lookup keys,
   // so two runs racing within Stripe's 24-hour key window get the same objects.
   const key = (kind: string, name: string) => ({ idempotencyKey: `context-kit-billing:${kind}:${name}` });
@@ -99,27 +124,7 @@ export async function bootstrapCatalog(
     created.push(`meter ${meter.id}`);
   }
 
-  const lookupKeys = [...paid.map(([, p]) => p.priceLookupKey!), config.overage.priceLookupKey];
-  // Stripe accepts at most 10 lookup keys per list call.
-  const existing: Stripe.Price[] = [];
-  for (let i = 0; i < lookupKeys.length; i += 10) {
-    const page = await stripe.prices.list({ lookup_keys: lookupKeys.slice(i, i + 10), active: true, limit: 100 });
-    existing.push(...page.data);
-  }
-  const byPrice = indexByLookupKey(existing);
-  const byKey = new Map([...byPrice].map(([k, p]) => [k, p.id]));
   const prices: Record<string, string> = {};
-
-  // Checked before creating anything, so a mismatch leaves no partial catalog.
-  const overageFound = byKey.get(config.overage.priceLookupKey);
-  if (overageFound) {
-    const priceMeterId = byPrice.get(config.overage.priceLookupKey)!.recurring?.meter;
-    if (priceMeterId !== meter.id) {
-      throw new Error(
-        `Price ${overageFound} (${config.overage.priceLookupKey}) bills meter ${priceMeterId ?? "none"}, but the meter for event name "${config.overage.meterEventName}" is ${meter.id}; archive the price or point the config at the right meter`
-      );
-    }
-  }
 
   for (const [planKey, plan] of paid) {
     const lookupKey = plan.priceLookupKey!;

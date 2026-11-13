@@ -181,8 +181,14 @@ export function isDuplicateIdentifierError(err: unknown, identifier: string): bo
   const e = err as StripeErrorLike;
   if (e?.statusCode !== 400) return false;
   if (e.code === "duplicate_meter_event") return true;
-  const match = /^an event already exists with identifier (.+?)\.?$/i.exec((e.message ?? "").trim());
-  return match?.[1] === identifier;
+  const message = (e.message ?? "").trim().toLowerCase();
+  const prefix = "an event already exists with identifier ";
+  if (!message.startsWith(prefix)) return false;
+  // Stripe may or may not end the message with a period, and the identifier
+  // may itself end with one, so accept either form.
+  const named = message.slice(prefix.length);
+  const id = identifier.toLowerCase();
+  return named === id || named === `${id}.`;
 }
 
 type Classified =
@@ -215,8 +221,13 @@ function redact(message: string): string {
 /**
  * One calendar month before `d`, with the day clamped to the length of that
  * month (March 31 gives February 28, not March 3) and the time of day kept.
- * For anchors on the 29th to 31st this is approximate by up to 3 days, because
- * Stripe's own period boundaries may differ; it errs toward sending.
+ * For anchors on the 29th to 31st this is approximate by up to 3 days: a Jan 31
+ * anchor renews Feb 28, and this gives Jan 28 as the previous boundary. The
+ * exact boundary needs the subscription's anchor day, which is not stored. The
+ * gap only matters for a row still unreported about a month after it was
+ * written, which the 20-hour needs_review rule and Stripe's 35-day limit
+ * already catch (rows are enqueued with the ledger write and sent within
+ * minutes). Package Checkout anchors on day 1, where the clamp is exact.
  */
 function previousMonthStart(d: Date): Date {
   const year = d.getUTCFullYear();
@@ -310,7 +321,11 @@ async function reportOne(ctx: BillingContext, row: Row, leaseId: string, now: Da
   // than reported against a wrong window.
   if (sub.interval !== "month" || sub.intervalCount !== 1) {
     const message = `unsupported_period: subscription renews every ${sub.intervalCount ?? "?"} ${sub.interval ?? "unknown"}; the reporter supports monthly only`;
-    await finish({ lastError: message });
+    // Specific to this subject's subscription, so it counts as an attempt:
+    // otherwise a full batch of these rows is re-claimed every run and starves
+    // newer billable rows. It does not start the resend clock (firstAttemptAt),
+    // since nothing was sent.
+    await finish({ lastError: message, attempts: row.attempts + 1 });
     return { kind: "blocked", reason: "unsupported_period", message, stopAll: false };
   }
 
@@ -346,10 +361,17 @@ async function reportOne(ctx: BillingContext, row: Row, leaseId: string, now: Da
   // the resend clock.
   const attempts = row.attempts + 1;
   const firstAttemptAt = row.firstAttemptAt ?? now;
-  await db
+  const recorded = await db
     .update(billingUsageReport)
     .set({ attempts, firstAttemptAt })
-    .where(and(eq(billingUsageReport.sourceId, row.sourceId), eq(billingUsageReport.leaseId, leaseId)));
+    .where(and(eq(billingUsageReport.sourceId, row.sourceId), eq(billingUsageReport.leaseId, leaseId)))
+    .returning({ sourceId: billingUsageReport.sourceId });
+  // No row updated means the lease was taken over: another reporter owns this
+  // row, so do not send. A window remains: if the lease expires after this
+  // check while Stripe is answering (a pause longer than the 5-minute lease),
+  // the replacement reporter's resend is refused by Stripe as a duplicate
+  // within its dedup window of at least 24 hours.
+  if (recorded.length === 0) return { kind: "retry" };
 
   try {
     // A fresh idempotency key per attempt: Stripe replays a key's saved result,

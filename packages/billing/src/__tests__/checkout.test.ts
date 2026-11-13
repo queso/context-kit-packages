@@ -105,6 +105,44 @@ describe("createCheckoutSession", () => {
     expect(fake.checkoutSessions.get(second.id)?.status).toBe("open");
   });
 
+  test("refuses a second Checkout when Stripe has a live subscription that is not synced locally", async () => {
+    const first = await createCheckoutSession(ctx, input);
+    const customer = (await ctx.db.select().from(billingCustomer))[0]!.stripeCustomerId;
+    fake.putSubscription({ id: "sub_paid", customer, status: "active", priceIds: ["price_pro", "price_over"], metadata: { subject_id: "100" } });
+    fake.completeCheckoutSession(first.id, "sub_paid");
+
+    await expect(createCheckoutSession(ctx, input)).rejects.toBeInstanceOf(AlreadySubscribedError);
+    expect(checkoutCreates()).toHaveLength(1);
+  });
+
+  test("ignores a canceled subscription at Stripe", async () => {
+    const first = await createCheckoutSession(ctx, input);
+    const customer = (await ctx.db.select().from(billingCustomer))[0]!.stripeCustomerId;
+    fake.putSubscription({ id: "sub_old", customer, status: "canceled", priceIds: ["price_pro", "price_over"] });
+    await expect(createCheckoutSession(ctx, input)).resolves.toHaveProperty("url");
+    expect(fake.checkoutSessions.get(first.id)?.status).toBe("expired");
+  });
+
+  test("keeps the earlier open session when creating the new one fails", async () => {
+    const first = await createCheckoutSession(ctx, input);
+    fake.failNext((r) => r.method === "POST" && r.path === "/v1/checkout/sessions");
+    await expect(createCheckoutSession(ctx, input)).rejects.toThrow();
+    expect(fake.checkoutSessions.get(first.id)?.status).toBe("open");
+  });
+
+  test("expires every open session, asking Stripe for open ones only", async () => {
+    const first = await createCheckoutSession(ctx, input);
+    const customer = (await ctx.db.select().from(billingCustomer))[0]!.stripeCustomerId;
+    const extra = ["cs_extra_1", "cs_extra_2"];
+    for (const id of extra) fake.checkoutSessions.set(id, { ...fake.checkoutSessions.get(first.id)!, id, status: "open" });
+    const next = await createCheckoutSession(ctx, input);
+
+    const lists = fake.requests.filter((r) => r.method === "GET" && r.path === "/v1/checkout/sessions");
+    expect(lists.at(-1)?.params).toMatchObject({ customer, status: "open" });
+    for (const id of [first.id, ...extra]) expect(fake.checkoutSessions.get(id)?.status).toBe("expired");
+    expect(fake.checkoutSessions.get(next.id)?.status).toBe("open");
+  });
+
   test("does not touch another customer's open session", async () => {
     const other = await createCheckoutSession(ctx, { ...input, subjectId: "200" });
     const mine = await createCheckoutSession(ctx, input);

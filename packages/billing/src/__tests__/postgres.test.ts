@@ -14,29 +14,26 @@ import type { BillingContext, BillingDb } from "../types";
 /**
  * Concurrency checks that need a real Postgres server: PGlite runs one
  * transaction at a time, so FOR UPDATE SKIP LOCKED is only exercised here.
- * setup() drops the billing tables, so the suite also needs
- * BILLING_PG_TEST_ALLOW_DROP=1: a developer's application DATABASE_URL alone
- * must not lose billing data. Without both, the suite skips; CI sets
- * REQUIRE_POSTGRES so a missing server or opt-in fails the job.
+ * setup() drops the billing tables, so the suite runs only when
+ * BILLING_TEST_DATABASE_URL is set to a postgres URL. That variable is a
+ * dedicated opt-in, deliberately separate from an application's DATABASE_URL.
+ * Without it the suite skips; CI sets REQUIRE_POSTGRES so a missing variable
+ * fails the job.
  */
 
-const url = process.env.DATABASE_URL ?? "";
-const isPostgresUrl = /^postgres(ql)?:/.test(url);
-const allowDrop = process.env.BILLING_PG_TEST_ALLOW_DROP === "1";
-const hasPostgres = isPostgresUrl && allowDrop;
+const url = process.env.BILLING_TEST_DATABASE_URL ?? "";
+const hasPostgres = /^postgres(ql)?:/.test(url);
 
 if (process.env.REQUIRE_POSTGRES && !hasPostgres) {
   // The URL is not printed: it may carry credentials and this ends up in CI logs.
   throw new Error(
-    "REQUIRE_POSTGRES is set but DATABASE_URL is missing or is not a postgres:// or postgresql:// URL, or BILLING_PG_TEST_ALLOW_DROP=1 is not set"
+    "REQUIRE_POSTGRES is set but BILLING_TEST_DATABASE_URL is missing or is not a postgres:// or postgresql:// URL"
   );
 }
 
 if (!hasPostgres) {
   console.warn(
-    isPostgresUrl
-      ? "Skipping billing Postgres tests: they drop the billing tables, set BILLING_PG_TEST_ALLOW_DROP=1 to allow that on DATABASE_URL"
-      : "Skipping billing Postgres tests: DATABASE_URL is not a postgres:// or postgresql:// URL"
+    "Skipping billing Postgres tests: BILLING_TEST_DATABASE_URL is not set to a postgres:// or postgresql:// URL (the suite drops the billing tables)"
   );
 }
 
@@ -44,6 +41,19 @@ const clients: ReturnType<typeof postgres>[] = [];
 afterAll(async () => {
   await Promise.all(clients.map((c) => c.end({ timeout: 5 })));
 });
+
+/** Polls until some backend is blocked on a lock, so a test knows a call is waiting instead of guessing with a sleep. */
+async function waitForLockWaiter(db: BillingDb, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const rows = (await (db as unknown as ReturnType<typeof drizzle>).execute(
+      sql`select 1 from pg_stat_activity where wait_event_type = 'Lock' and pid <> pg_backend_pid()`
+    )) as unknown as unknown[];
+    if (rows.length > 0) return;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  throw new Error(`no backend started waiting on a lock within ${timeoutMs} ms`);
+}
 
 async function setup(): Promise<BillingDb> {
   const client = postgres(url, { max: 6, onnotice: () => {} });
@@ -139,6 +149,10 @@ describe.skipIf(!hasPostgres)("against a real Postgres server", () => {
     // it is read; its response is slow. The second retrieve sees Team and
     // answers at once. Unserialized, the slow Pro write lands last.
     let retrieves = 0;
+    let firstInFlight!: () => void;
+    const firstRetrieveStarted = new Promise<void>((r) => (firstInFlight = r));
+    let releaseFirst!: () => void;
+    const firstHold = new Promise<void>((r) => (releaseFirst = r));
     const realFetch = fake.fetch;
     const slowFirst = async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input instanceof Request ? input.url : input);
@@ -147,7 +161,8 @@ describe.skipIf(!hasPostgres)("against a real Postgres server", () => {
       const res = await realFetch(input, init);
       if (n === 1) {
         fake.putSubscription({ id: "sub_1", customer: "cus_1", status: "active", priceIds: ["price_team"], metadata: { subject_id: "1" } });
-        await new Promise((r) => setTimeout(r, 300));
+        firstInFlight();
+        await firstHold;
       }
       return res;
     };
@@ -159,8 +174,13 @@ describe.skipIf(!hasPostgres)("against a real Postgres server", () => {
     const ctx: BillingContext = { db, stripe, config: testConfig };
 
     const first = syncSubscription(ctx, "sub_1");
-    await new Promise((r) => setTimeout(r, 50));
+    await firstRetrieveStarted;
     const second = syncSubscription(ctx, "sub_1");
+    // The second sync must be blocked on the advisory lock before the first
+    // is allowed to finish.
+    await waitForLockWaiter(db);
+    expect(retrieves).toBe(1);
+    releaseFirst();
     await Promise.all([first, second]);
 
     const [row] = await db.select().from(schema.billingSubscription);
@@ -199,7 +219,7 @@ describe.skipIf(!hasPostgres)("against a real Postgres server", () => {
         resolvedAt = Date.now();
         return r;
       });
-      await new Promise((r) => setTimeout(r, 200));
+      await waitForLockWaiter(db);
       release();
       await first;
       const result = await second;

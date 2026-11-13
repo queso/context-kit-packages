@@ -68,18 +68,41 @@ describe("resolveEntitlement", () => {
     expect(e.subscription?.status).toBe("past_due");
   });
 
-  test("past_due with no recorded start uses syncedAt as the grace start", () => {
-    const syncedAt = new Date(NOW.getTime() - 2 * DAY);
-    const e = resolveEntitlement(testConfig, "1", [row({ status: "past_due", pastDueSince: null, syncedAt })], NOW);
+  test("past_due with no recorded start uses currentPeriodStart as the grace start, not syncedAt", () => {
+    const currentPeriodStart = new Date(NOW.getTime() - 2 * DAY);
+    // A fresh re-sync must not restart the grace period.
+    const e = resolveEntitlement(
+      testConfig,
+      "1",
+      [row({ status: "past_due", pastDueSince: null, currentPeriodStart, syncedAt: NOW })],
+      NOW
+    );
     expect(e).toMatchObject({ plan: "pro", reason: "grace" });
-    expect(e.subscription?.graceEndsAt).toEqual(new Date(syncedAt.getTime() + 7 * DAY));
+    expect(e.subscription?.graceEndsAt).toEqual(new Date(currentPeriodStart.getTime() + 7 * DAY));
   });
 
-  test("past_due with no recorded start expires when syncedAt is older than the grace period", () => {
-    const syncedAt = new Date(NOW.getTime() - 8 * DAY);
-    const e = resolveEntitlement(testConfig, "1", [row({ status: "past_due", pastDueSince: null, syncedAt })], NOW);
+  test("past_due with no recorded start expires when currentPeriodStart is older than the grace period", () => {
+    const currentPeriodStart = new Date(NOW.getTime() - 8 * DAY);
+    const e = resolveEntitlement(
+      testConfig,
+      "1",
+      [row({ status: "past_due", pastDueSince: null, currentPeriodStart, syncedAt: NOW })],
+      NOW
+    );
     expect(e).toMatchObject({ plan: "free", paid: false, reason: "grace_expired" });
     expect(e.subscription?.graceEndsAt).not.toBeNull();
+  });
+
+  test("past_due with neither pastDueSince nor currentPeriodStart falls back to syncedAt", () => {
+    const syncedAt = new Date(NOW.getTime() - 2 * DAY);
+    const e = resolveEntitlement(
+      testConfig,
+      "1",
+      [row({ status: "past_due", pastDueSince: null, currentPeriodStart: null, syncedAt })],
+      NOW
+    );
+    expect(e).toMatchObject({ plan: "pro", reason: "grace" });
+    expect(e.subscription?.graceEndsAt).toEqual(new Date(syncedAt.getTime() + 7 * DAY));
   });
 
   test.each(["unpaid", "canceled", "incomplete", "incomplete_expired", "paused"])(

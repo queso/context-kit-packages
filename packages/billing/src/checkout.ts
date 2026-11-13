@@ -156,10 +156,11 @@ export async function createCheckoutSession(
 
     const customer = await ensureCustomer(txCtx, input.subjectId, input.customer);
 
-    // An older open session could be completed after this one, or after a
-    // subscription starts, and would bill a second subscription.
-    const open = await ctx.stripe.checkout.sessions.list({ customer, status: "open", limit: 100 });
-    for (const old of open.data) await ctx.stripe.checkout.sessions.expire(old.id);
+    // A Checkout can complete before its subscription is synced locally, so the
+    // local check above is not enough: ask Stripe too.
+    for await (const sub of ctx.stripe.subscriptions.list({ customer, status: "all", limit: 100 })) {
+      if (LIVE_STATUSES.includes(sub.status)) throw new AlreadySubscribedError(input.subjectId, sub.id);
+    }
 
     const params = buildCheckoutParams(ctx.config, {
       subjectId: input.subjectId,
@@ -172,6 +173,13 @@ export async function createCheckoutSession(
     });
     const session = await ctx.stripe.checkout.sessions.create(params);
     if (!session.url) throw new Error("Stripe returned a Checkout Session without a URL");
+
+    // An older open session could be completed after this one, or after a
+    // subscription starts, and would bill a second subscription. Expire them
+    // only once the new session exists, so a failed create leaves the old one.
+    for await (const old of ctx.stripe.checkout.sessions.list({ customer, status: "open", limit: 100 })) {
+      if (old.id !== session.id) await ctx.stripe.checkout.sessions.expire(old.id);
+    }
     return { id: session.id, url: session.url };
   });
 }
@@ -204,6 +212,7 @@ export async function completeCheckout(
   sessionId: string,
   expected: { subjectId: string }
 ): Promise<SyncResult | null> {
+  // livemode is not compared with the key's mode: one database pairs with one Stripe mode (README, "one database per Stripe mode").
   const session = await ctx.stripe.checkout.sessions.retrieve(sessionId);
   if (session.client_reference_id !== expected.subjectId) {
     throw new Error("This Checkout Session belongs to another subject");

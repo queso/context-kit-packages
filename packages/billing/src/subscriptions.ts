@@ -86,8 +86,11 @@ async function firstUnpaidAt(ctx: BillingContext, sub: Stripe.Subscription, now:
  * Writes a subscription object, fetched from the API, into
  * `billing_subscription`. The whole row is replaced, so the result depends only
  * on the object passed in, never on what was stored before.
+ *
+ * Not exported: it must run under syncSubscription's advisory lock, otherwise
+ * an older fetch can overwrite a newer one.
  */
-export async function storeSubscription(
+async function storeSubscription(
   ctx: BillingContext,
   sub: Stripe.Subscription
 ): Promise<SyncResult> {

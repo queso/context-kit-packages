@@ -405,6 +405,28 @@ describe("usage outbox", () => {
         expect((await rowFor("run_1"))?.status).toBe("sent");
       });
 
+      test.each([
+        ["with", "An event already exists with identifier run.2026.."],
+        ["without", "An event already exists with identifier run.2026."],
+      ])("an identifier that itself ends with a period is matched %s Stripe's trailing period", async (_label, message) => {
+        await enqueueUsage(ctx, { sourceId: "run.2026.", subjectId: "100", value: 3, occurredAt: NOW });
+        fake.failNext((r) => r.path === "/v1/billing/meter_events", 400, 1, {
+          error: { type: "invalid_request_error", message },
+        });
+        const summary = await reportPendingUsage(ctx);
+        expect(summary).toMatchObject({ sent: 1, failed: 0 });
+        expect((await rowFor("run.2026."))?.status).toBe("sent");
+      });
+
+      test("a refusal for the identifier minus its final period is not taken as ours", async () => {
+        await enqueueUsage(ctx, { sourceId: "run.2026.", subjectId: "100", value: 3, occurredAt: NOW });
+        fake.failNext((r) => r.path === "/v1/billing/meter_events", 400, 1, {
+          error: { type: "invalid_request_error", message: "An event already exists with identifier run.2025." },
+        });
+        const err = await reportPendingUsage(ctx).catch((e) => e);
+        expect(err).toBeInstanceOf(UsageReportingBlockedError);
+      });
+
       test("a refusal naming a different identifier is not taken as ours", async () => {
         await enqueueUsage(ctx, { sourceId: "run_1", subjectId: "100", value: 3, occurredAt: NOW });
         fake.failNext((r) => r.path === "/v1/billing/meter_events", 400, 1, {
@@ -444,6 +466,37 @@ describe("usage outbox", () => {
         expect(await rowFor("run_yearly")).toMatchObject({ status: "pending", lastError: expect.stringContaining("unsupported_period") });
         expect((await rowFor("run_monthly"))?.status).toBe("sent");
         expect(meterCalls().map((c) => c.params.identifier)).toEqual(["run_monthly"]);
+      });
+
+      test("rows blocked by an unsupported period count an attempt, so they do not starve newer rows", async () => {
+        await ctx.db.insert(billingCustomer).values({ subjectId: "200", stripeCustomerId: "cus_200", livemode: false });
+        await ctx.db.insert(billingSubscription).values({
+          stripeSubscriptionId: "sub_200",
+          subjectId: "200",
+          stripeCustomerId: "cus_200",
+          status: "active",
+          planKey: "pro",
+          overagePriceId: "price_over",
+          billingInterval: "year",
+          billingIntervalCount: 1,
+          currentPeriodStart: PERIOD_START,
+          currentPeriodEnd: new Date("2027-01-01T00:00:00Z"),
+          livemode: false,
+          syncedAt: NOW,
+        });
+        await enqueueUsage(ctx, { sourceId: "run_y1", subjectId: "200", value: 1, occurredAt: NOW });
+        await enqueueUsage(ctx, { sourceId: "run_y2", subjectId: "200", value: 1, occurredAt: NOW });
+        await enqueueUsage(ctx, { sourceId: "run_fresh", subjectId: "100", value: 1, occurredAt: NOW });
+
+        const err = await reportPendingUsage(ctx, { limit: 2 }).catch((e) => e);
+        expect(err).toBeInstanceOf(UsageReportingBlockedError);
+        expect(err.reason).toBe("unsupported_period");
+        expect(await rowFor("run_y1")).toMatchObject({ attempts: 1, firstAttemptAt: null, status: "pending" });
+
+        const second = await reportPendingUsage(ctx, { limit: 2 }).catch((e) => e);
+        expect(meterCalls().map((c) => c.params.identifier)).toEqual(["run_fresh"]);
+        expect((await rowFor("run_fresh"))?.status).toBe("sent");
+        expect(second).toBeInstanceOf(UsageReportingBlockedError);
       });
 
       test.each([
@@ -654,6 +707,49 @@ describe("usage outbox", () => {
         await reportPendingUsage(ctx);
         expect(await rowFor("run_1")).toMatchObject({ status: "sent", leaseId: "newer-reporter", lastError: null });
         (fake as { fetch: typeof fake.fetch }).fetch = realFetch;
+      });
+
+      test("a reporter that lost its lease before the attempt update does not call Stripe", async () => {
+        await enqueueUsage(ctx, { sourceId: "run_1", subjectId: "100", value: 3, occurredAt: NOW });
+        const realDb = ctx.db;
+        const takeOver = () =>
+          realDb.update(billingUsageReport).set({ leaseId: "newer-reporter", leaseExpiresAt: new Date(NOW.getTime() + 60_000) });
+        const delayed = (q: any) =>
+          new Proxy(q, {
+            get(target, prop, receiver) {
+              if (prop === "then") return (res: any, rej: any) => takeOver().then(() => target.then(res, rej));
+              if (prop === "returning")
+                return (...a: unknown[]) => {
+                  const r = target.returning(...a);
+                  return { then: (res: any, rej: any) => takeOver().then(() => r.then(res, rej)) };
+                };
+              return Reflect.get(target, prop, receiver);
+            },
+          });
+        ctx = {
+          ...ctx,
+          db: new Proxy(realDb, {
+            get(target, prop, receiver) {
+              if (prop !== "update") return Reflect.get(target, prop, receiver);
+              return (table: any) => {
+                const b = target.update(table);
+                return {
+                  set: (values: Record<string, unknown>) => {
+                    const q = b.set(values);
+                    if (!("attempts" in values) || "leaseId" in values) return q;
+                    return { where: (...a: unknown[]) => delayed((q as any).where(...a)) };
+                  },
+                };
+              };
+            },
+          }),
+        };
+
+        const summary = await reportPendingUsage(ctx);
+
+        expect(meterCalls()).toHaveLength(0);
+        expect(summary).toMatchObject({ sent: 0, retry: 1 });
+        expect(await rowFor("run_1")).toMatchObject({ status: "pending", leaseId: "newer-reporter" });
       });
     });
 

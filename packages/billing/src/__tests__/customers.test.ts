@@ -74,10 +74,56 @@ describe("ensureCustomer", () => {
     expect(fake.requests.some((r) => r.path === "/v1/customers/search")).toBe(true);
   });
 
-  test("rethrows a create 500 when no customer exists", async () => {
+  test("after a create 500 with nothing found anywhere, creates again under a new idempotency key", async () => {
     fake.failNext((r) => r.method === "POST" && r.path === "/v1/customers", 500);
-    await expect(ensureCustomer(ctx, "17")).rejects.toThrow(/fake failure/);
+    const id = await ensureCustomer(ctx, "17");
+    const creates = customerCreates();
+    expect(creates).toHaveLength(2);
+    expect(creates[0]?.idempotencyKey).toBe("context-kit-billing:customer:17");
+    expect(creates[1]?.idempotencyKey).toMatch(/^context-kit-billing:customer:17:retry:\d+$/);
+    expect(await getCustomerId(ctx.db, "17")).toBe(id);
+    expect(fake.customers.size).toBe(1);
+  });
+
+  test("propagates the error when the second create fails too, storing nothing", async () => {
+    fake.failNext((r) => r.method === "POST" && r.path === "/v1/customers", 500, 2);
+    await expect(ensureCustomer(ctx, "17b")).rejects.toThrow(/fake failure/);
     expect(await ctx.db.select().from(billingCustomer)).toHaveLength(0);
+  });
+
+  test("finds the customer by listing when search lags, without creating again", async () => {
+    fake.putCustomer("cus_lagging", { subject_id: "20" });
+    fake.failNext((r) => r.path === "/v1/customers/search", 200, 1, {
+      object: "search_result",
+      data: [],
+      has_more: false,
+    });
+    fake.failNext((r) => r.method === "POST" && r.path === "/v1/customers", 500);
+    const id = await ensureCustomer(ctx, "20");
+    expect(id).toBe("cus_lagging");
+    expect(customerCreates()).toHaveLength(1);
+    expect(await getCustomerId(ctx.db, "20")).toBe("cus_lagging");
+  });
+
+  test("throws naming the customers when the list scan finds several", async () => {
+    fake.putCustomer("cus_a", { subject_id: "21" });
+    fake.putCustomer("cus_b", { subject_id: "21" });
+    fake.failNext((r) => r.path === "/v1/customers/search", 200, 1, {
+      object: "search_result",
+      data: [],
+      has_more: false,
+    });
+    fake.failNext((r) => r.method === "POST" && r.path === "/v1/customers", 500);
+    await expect(ensureCustomer(ctx, "21")).rejects.toThrow(/cus_a.*cus_b|cus_b.*cus_a/);
+    expect(await ctx.db.select().from(billingCustomer)).toHaveLength(0);
+  });
+
+  test("a retry applies the details when the mapping exists but the first update failed", async () => {
+    fake.failNext((r) => r.method === "POST" && /^\/v1\/customers\/cus_/.test(r.path), 400);
+    await expect(ensureCustomer(ctx, "22", { name: "n", email: "e@example.com" })).rejects.toThrow();
+    const id = await ensureCustomer(ctx, "22", { name: "n", email: "e@example.com" });
+    expect(fake.customers.get(id)).toMatchObject({ name: "n", email: "e@example.com" });
+    expect(customerCreates()).toHaveLength(1);
   });
 
   test("throws naming the customers when the search finds several", async () => {
@@ -97,7 +143,7 @@ describe("ensureCustomer", () => {
 
   test("escapes quotes in the subject id for the search query", async () => {
     fake.failNext((r) => r.method === "POST" && r.path === "/v1/customers", 500);
-    await expect(ensureCustomer(ctx, "o'brien")).rejects.toThrow();
+    await ensureCustomer(ctx, "o'brien");
     const search = fake.requests.find((r) => r.path === "/v1/customers/search");
     expect(search?.params.query).toBe("metadata['subject_id']:'o\\'brien'");
   });
@@ -120,7 +166,7 @@ describe("ensureCustomer", () => {
   });
 
   test("stores nothing when Stripe fails, so the next call retries", async () => {
-    fake.failNext((r) => r.path === "/v1/customers", 500);
+    fake.failNext((r) => r.method === "POST" && r.path === "/v1/customers", 500, 2);
     await expect(ensureCustomer(ctx, "42")).rejects.toThrow();
     expect(await ctx.db.select().from(billingCustomer)).toHaveLength(0);
 

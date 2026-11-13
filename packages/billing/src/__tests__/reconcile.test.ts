@@ -92,6 +92,39 @@ describe("reconcile", () => {
     expect((await ctx.db.select().from(billingCustomer))[0]?.stripeCustomerId).toBe("cus_old");
   });
 
+  test("with repairCustomers, moves an empty mapping to the other customer that holds the live subscription", async () => {
+    await ctx.db.insert(billingCustomer).values({ subjectId: "90", stripeCustomerId: "cus_empty", livemode: false });
+    fake.putCustomer("cus_empty", { subject_id: "90" });
+    fake.putCustomer("cus_paying", { subject_id: "90" });
+    fake.putSubscription({ id: "sub_paid", customer: "cus_paying", status: "active", priceIds: ["price_pro"] });
+
+    const summary = await reconcile(ctx, { repairCustomers: true });
+
+    expect(summary.duplicateSubjects).toBe(1);
+    expect(await ctx.db.select().from(billingCustomer)).toEqual([
+      expect.objectContaining({ subjectId: "90", stripeCustomerId: "cus_paying" }),
+    ]);
+    expect(await ctx.db.select().from(billingSubscription)).toEqual([
+      expect.objectContaining({ stripeSubscriptionId: "sub_paid", subjectId: "90", planKey: "pro" }),
+    ]);
+  });
+
+  test("with repairCustomers and several live customers, keeps the mapping and syncs every subscription", async () => {
+    await ctx.db.insert(billingCustomer).values({ subjectId: "91", stripeCustomerId: "cus_a", livemode: false });
+    fake.putCustomer("cus_a", { subject_id: "91" });
+    fake.putCustomer("cus_b", { subject_id: "91" });
+    fake.putSubscription({ id: "sub_a", customer: "cus_a", status: "active", priceIds: ["price_pro"], metadata: { subject_id: "91" } });
+    fake.putSubscription({ id: "sub_b", customer: "cus_b", status: "active", priceIds: ["price_team"], metadata: { subject_id: "91" } });
+
+    const summary = await reconcile(ctx, { repairCustomers: true });
+
+    expect(summary.duplicateSubjects).toBe(1);
+    expect((await ctx.db.select().from(billingCustomer))[0]?.stripeCustomerId).toBe("cus_a");
+    const subs = await ctx.db.select().from(billingSubscription);
+    expect(subs.map((r) => r.stripeSubscriptionId).sort()).toEqual(["sub_a", "sub_b"]);
+    expect(subs.every((r) => r.subjectId === "91")).toBe(true);
+  });
+
   test("never uses the search API, which is not read-after-write", async () => {
     fake.putCustomer("cus_lost", { subject_id: "77" });
     await reconcile(ctx, { repairCustomers: true });

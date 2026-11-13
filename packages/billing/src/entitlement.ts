@@ -50,9 +50,10 @@ interface Candidate {
 }
 
 function evaluate(config: BillingConfig, row: SubscriptionRow, now: Date): Candidate {
-  // Without a recorded start, the last sync time bounds the grace period so a
+  // Without a recorded start, the period start bounds the grace period. It does
+  // not move on a re-sync, unlike syncedAt, which is the last resort so a
   // past_due row never gets unlimited grace.
-  const graceStart = row.pastDueSince ?? row.syncedAt;
+  const graceStart = row.pastDueSince ?? row.currentPeriodStart ?? row.syncedAt;
   const graceEndsAt =
     row.status === "past_due" ? new Date(graceStart.getTime() + config.gracePeriodDays * DAY_MS) : null;
   const known = row.planKey !== null && row.planKey in config.plans;

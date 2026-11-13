@@ -178,4 +178,15 @@ describe("bootstrapCatalog", () => {
     expect((err as Error).message).toMatch(/mtr_old/);
     expect(fake.requests.filter((r) => r.method === "POST")).toHaveLength(0);
   });
+
+  test("an existing overage price with no meter for the event name fails before creating a meter", async () => {
+    fake.addPrice({ id: "price_over", lookupKey: "test_credit_overage", usageType: "metered" });
+    (fake.prices.get("price_over")!.recurring as Record<string, unknown>).meter = "mtr_other";
+    const err = await bootstrapCatalog(fake.client(), testConfig, catalog).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/price_over/);
+    expect((err as Error).message).toMatch(/mtr_other/);
+    expect(fake.requests.filter((r) => r.method === "POST")).toHaveLength(0);
+    expect(fake.meters.size).toBe(0);
+  });
 });

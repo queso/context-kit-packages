@@ -302,6 +302,9 @@ describe.skipIf(!enabled)("live Stripe sandbox", () => {
     // show up in the process list.
     const cliEnv = { ...process.env, STRIPE_API_KEY: key };
     const secretProc = Bun.spawnSync(["stripe", "listen", "--print-secret"], { stdout: "pipe", stderr: "pipe", env: cliEnv });
+    // stderr does not carry the key, but redact key-shaped strings anyway.
+    const secretStderr = secretProc.stderr.toString().replace(/(sk|rk)_(test|live)_[A-Za-z0-9]+/g, "[redacted]");
+    expect(secretProc.exitCode, `stripe listen --print-secret failed: ${secretStderr.trim()}`).toBe(0);
     const secret = secretProc.stdout.toString().trim();
     expect(secret).toMatch(/^whsec_/);
 

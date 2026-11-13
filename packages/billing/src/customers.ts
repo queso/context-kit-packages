@@ -33,21 +33,30 @@ function errorStatus(err: unknown): number | undefined {
   return typeof status === "number" ? status : undefined;
 }
 
+function duplicatesError(subjectId: string, ids: string[]): Error {
+  return new Error(`Several Stripe customers carry subject_id ${subjectId}: ${ids.join(", ")}. Remove the duplicates.`);
+}
+
 /**
  * Stripe saves the response under an idempotency key, 500s included, so a
- * failed create would replay forever. Before giving up, look for a customer
- * Stripe did create for this subject.
+ * failed create would replay forever. Before giving up on the key, look for a
+ * customer Stripe did create for this subject. Search can lag behind writes, so
+ * an empty search is followed by a scan of the list API, which is
+ * read-after-write consistent. Returns null only when the create provably did
+ * not happen.
  */
-async function findCreatedCustomer(ctx: BillingContext, subjectId: string, original: unknown) {
+async function findCreatedCustomer(ctx: BillingContext, subjectId: string) {
   const escaped = subjectId.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
   const found = await ctx.stripe.customers.search({ query: `metadata['subject_id']:'${escaped}'` });
-  if (found.data.length === 0) throw original;
-  if (found.data.length > 1) {
-    throw new Error(
-      `Several Stripe customers carry subject_id ${subjectId}: ${found.data.map((c) => c.id).join(", ")}. Remove the duplicates.`
-    );
+  let matches = found.data;
+  if (matches.length === 0) {
+    matches = [];
+    for await (const customer of ctx.stripe.customers.list({ limit: 100 })) {
+      if (customer.metadata?.subject_id === subjectId) matches.push(customer);
+    }
   }
-  return found.data[0]!;
+  if (matches.length > 1) throw duplicatesError(subjectId, matches.map((c) => c.id));
+  return matches[0] ?? null;
 }
 
 /**
@@ -61,7 +70,10 @@ async function findCreatedCustomer(ctx: BillingContext, subjectId: string, origi
  * The create sends only stable parameters (the subject metadata). Name and
  * email are applied afterwards with an update, because Stripe rejects or
  * replays a reused key whose parameters changed. An update error propagates
- * after the mapping is stored, so a retry skips the create.
+ * after the mapping is stored; a retry skips the create and applies the update
+ * again. If a create fails with a 5xx or network error and no customer turns
+ * up in search or in the list, the create is repeated under a fresh key,
+ * because Stripe would replay the cached failure for the original one.
  */
 export async function ensureCustomer(
   ctx: BillingContext,
@@ -70,18 +82,31 @@ export async function ensureCustomer(
 ): Promise<string> {
   assertSubjectId(subjectId);
   const existing = await getCustomerId(ctx.db, subjectId);
-  if (existing) return existing;
+  const customerId = existing ?? (await createCustomer(ctx, subjectId));
+  if (details.name || details.email) {
+    await ctx.stripe.customers.update(customerId, {
+      ...(details.name ? { name: details.name } : {}),
+      ...(details.email ? { email: details.email } : {}),
+    });
+  }
+  return customerId;
+}
 
+async function createCustomer(ctx: BillingContext, subjectId: string): Promise<string> {
+  const params = { metadata: { subject_id: subjectId } };
   let customer;
   try {
-    customer = await ctx.stripe.customers.create(
-      { metadata: { subject_id: subjectId } },
-      { idempotencyKey: `context-kit-billing:customer:${subjectId}` }
-    );
+    customer = await ctx.stripe.customers.create(params, {
+      idempotencyKey: `context-kit-billing:customer:${subjectId}`,
+    });
   } catch (err) {
     const status = errorStatus(err);
     if (status !== undefined && status < 500) throw err;
-    customer = await findCreatedCustomer(ctx, subjectId, err);
+    customer =
+      (await findCreatedCustomer(ctx, subjectId)) ??
+      (await ctx.stripe.customers.create(params, {
+        idempotencyKey: `context-kit-billing:customer:${subjectId}:retry:${Date.now()}`,
+      }));
   }
 
   await ctx.db
@@ -90,13 +115,5 @@ export async function ensureCustomer(
     .onConflictDoNothing({ target: billingCustomer.subjectId });
 
   // Re-read: a concurrent call may have inserted first. Both hold the same id.
-  const stored = (await getCustomerId(ctx.db, subjectId)) ?? customer.id;
-
-  if (details.name || details.email) {
-    await ctx.stripe.customers.update(stored, {
-      ...(details.name ? { name: details.name } : {}),
-      ...(details.email ? { email: details.email } : {}),
-    });
-  }
-  return stored;
+  return (await getCustomerId(ctx.db, subjectId)) ?? customer.id;
 }
