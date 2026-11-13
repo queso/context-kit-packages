@@ -98,7 +98,7 @@ describe.skipIf(!enabled)("request shapes accepted by stripe-mock (Stripe's Open
 
   test("subscription retrieve and list with the expansions sync uses", async () => {
     const stripe = client();
-    expect((await stripe.subscriptions.retrieve("sub_123", { expand: ["latest_invoice"] })).object).toBe("subscription");
+    expect((await stripe.subscriptions.retrieve("sub_123", { expand: ["latest_invoice", "customer"] })).object).toBe("subscription");
     const list = await stripe.subscriptions.list({ customer: "cus_123", status: "all", expand: ["data.latest_invoice"], limit: 100 });
     expect(list.object).toBe("list");
   });

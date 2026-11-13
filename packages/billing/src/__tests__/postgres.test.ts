@@ -14,26 +14,30 @@ import type { BillingContext, BillingDb } from "../types";
 /**
  * Concurrency checks that need a real Postgres server: PGlite runs one
  * transaction at a time, so FOR UPDATE SKIP LOCKED is only exercised here.
- * setup() drops the billing tables, so the suite runs only when
- * BILLING_TEST_DATABASE_URL is set to a postgres URL. That variable is a
- * dedicated opt-in, deliberately separate from an application's DATABASE_URL.
- * Without it the suite skips; CI sets REQUIRE_POSTGRES so a missing variable
- * fails the job.
+ * setup() drops and recreates the billing tables, so the suite runs only when
+ * BILLING_TEST_DATABASE_URL is a postgres URL (a dedicated variable, separate
+ * from an application's DATABASE_URL) AND BILLING_TEST_ALLOW_DROP=1 (an explicit
+ * destructive opt-in). Otherwise it skips; CI sets REQUIRE_POSTGRES so a missing
+ * variable fails the job.
  */
 
 const url = process.env.BILLING_TEST_DATABASE_URL ?? "";
-const hasPostgres = /^postgres(ql)?:/.test(url);
+const hasUrl = /^postgres(ql)?:/.test(url);
+const allowDrop = process.env.BILLING_TEST_ALLOW_DROP === "1";
+const hasPostgres = hasUrl && allowDrop;
+
+const missing: string[] = [];
+if (!hasUrl) missing.push("BILLING_TEST_DATABASE_URL (a postgres:// or postgresql:// URL)");
+if (!allowDrop) missing.push("BILLING_TEST_ALLOW_DROP=1");
 
 if (process.env.REQUIRE_POSTGRES && !hasPostgres) {
-  // The URL is not printed: it may carry credentials and this ends up in CI logs.
-  throw new Error(
-    "REQUIRE_POSTGRES is set but BILLING_TEST_DATABASE_URL is missing or is not a postgres:// or postgresql:// URL"
-  );
+  // The URL is never printed: it may carry credentials and this ends up in CI logs.
+  throw new Error(`REQUIRE_POSTGRES is set but the billing Postgres tests are missing: ${missing.join(", ")}`);
 }
 
 if (!hasPostgres) {
   console.warn(
-    "Skipping billing Postgres tests: BILLING_TEST_DATABASE_URL is not set to a postgres:// or postgresql:// URL (the suite drops the billing tables)"
+    `Skipping billing Postgres tests (the suite drops and recreates the billing tables). Missing: ${missing.join(", ")}`
   );
 }
 

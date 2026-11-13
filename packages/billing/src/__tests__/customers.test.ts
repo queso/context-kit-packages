@@ -85,6 +85,59 @@ describe("ensureCustomer", () => {
     expect(fake.customers.size).toBe(1);
   });
 
+  test("after a cached create 500 with no customer anywhere, creates under a new key and stores it", async () => {
+    fake.failAndCache((r) => r.method === "POST" && r.path === "/v1/customers", 500);
+    const id = await ensureCustomer(ctx, "17c");
+    const creates = customerCreates();
+    expect(creates).toHaveLength(2);
+    expect(creates[0]?.idempotencyKey).toBe("context-kit-billing:customer:17c");
+    expect(creates[1]?.idempotencyKey).toMatch(/^context-kit-billing:customer:17c:retry:\d+$/);
+    expect(fake.customers.size).toBe(1);
+    expect(await getCustomerId(ctx.db, "17c")).toBe(id);
+  });
+
+  test("after a network error with no customer anywhere, rethrows and creates nothing else", async () => {
+    fake.failNetwork((r) => r.method === "POST" && r.path === "/v1/customers");
+    await expect(ensureCustomer(ctx, "17d")).rejects.toThrow();
+    expect(customerCreates()).toHaveLength(1);
+    expect(fake.customers.size).toBe(0);
+    expect(await ctx.db.select().from(billingCustomer)).toHaveLength(0);
+
+    // The next call retries with the same key, which is safe if the first create is still in flight.
+    const id = await ensureCustomer(ctx, "17d");
+    const creates = customerCreates();
+    expect(creates).toHaveLength(2);
+    expect(creates[1]?.idempotencyKey).toBe("context-kit-billing:customer:17d");
+    expect(await getCustomerId(ctx.db, "17d")).toBe(id);
+  });
+
+  test("after a network error where Stripe did create the customer, finds and stores it", async () => {
+    fake.failNetwork((r) => r.method === "POST" && r.path === "/v1/customers", true);
+    const id = await ensureCustomer(ctx, "17e");
+    expect(customerCreates()).toHaveLength(1);
+    expect([...fake.customers.keys()]).toEqual([id]);
+    expect(await getCustomerId(ctx.db, "17e")).toBe(id);
+  });
+
+  test("two concurrent calls after a cached 500 end with one customer and one mapping", async () => {
+    fake.failAndCache((r) => r.method === "POST" && r.path === "/v1/customers", 500);
+    // Distinct retry keys per call, so only the lock can prevent two creates.
+    const realNow = Date.now;
+    let tick = realNow();
+    Date.now = () => ++tick;
+    try {
+      const [a, b] = await Promise.all([ensureCustomer(ctx, "17f"), ensureCustomer(ctx, "17f")]);
+      expect(a).toBe(b);
+    } finally {
+      Date.now = realNow;
+    }
+    expect(fake.customers.size).toBe(1);
+    expect(await ctx.db.select().from(billingCustomer)).toHaveLength(1);
+    // The second caller waits for the first and finds its mapping: the cached
+    // failure and the one retry are the only creates.
+    expect(customerCreates()).toHaveLength(2);
+  });
+
   test("propagates the error when the second create fails too, storing nothing", async () => {
     fake.failNext((r) => r.method === "POST" && r.path === "/v1/customers", 500, 2);
     await expect(ensureCustomer(ctx, "17b")).rejects.toThrow(/fake failure/);
@@ -188,5 +241,36 @@ describe("getCustomerId", () => {
   test("returns the mapped customer", async () => {
     const id = await ensureCustomer(ctx, "9");
     expect(await getCustomerId(ctx.db, "9")).toBe(id);
+  });
+});
+
+describe("FakeStripe idempotency", () => {
+  const isCreate = (r: { method: string; path: string }) => r.method === "POST" && r.path === "/v1/customers";
+
+  test("a saved response is replayed even when a failNext matcher matches", async () => {
+    const first = await ctx.stripe.customers.create({ metadata: { subject_id: "i1" } }, { idempotencyKey: "k1" });
+    fake.failNext(isCreate, 500);
+    const replay = await ctx.stripe.customers.create({ metadata: { subject_id: "i1" } }, { idempotencyKey: "k1" });
+    expect(replay.id).toBe(first.id);
+    // The failure was not spent on the replay: it still fails the next new request.
+    await expect(ctx.stripe.customers.create({ metadata: {} }, { idempotencyKey: "k2" })).rejects.toThrow(/fake failure/);
+  });
+
+  test("failAndCache saves the failure under the key, so the same key replays it", async () => {
+    fake.failAndCache(isCreate, 500);
+    await expect(ctx.stripe.customers.create({ metadata: {} }, { idempotencyKey: "k3" })).rejects.toThrow(/fake failure/);
+    // Nothing is armed any more, yet the same key still fails.
+    await expect(ctx.stripe.customers.create({ metadata: {} }, { idempotencyKey: "k3" })).rejects.toThrow(/fake failure/);
+    expect(fake.customers.size).toBe(0);
+    // A new key is a new request.
+    const ok = await ctx.stripe.customers.create({ metadata: {} }, { idempotencyKey: "k4" });
+    expect(ok.id).toMatch(/^cus_/);
+  });
+
+  test("a plain failNext failure is not saved under the key", async () => {
+    fake.failNext(isCreate, 500);
+    await expect(ctx.stripe.customers.create({ metadata: {} }, { idempotencyKey: "k5" })).rejects.toThrow();
+    const ok = await ctx.stripe.customers.create({ metadata: {} }, { idempotencyKey: "k5" });
+    expect(ok.id).toMatch(/^cus_/);
   });
 });

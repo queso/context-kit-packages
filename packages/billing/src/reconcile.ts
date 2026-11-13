@@ -14,8 +14,10 @@ export interface ReconcileSummary {
 }
 
 async function hasLiveSubscription(ctx: BillingContext, customerId: string): Promise<boolean> {
-  const subs = await ctx.stripe.subscriptions.list({ customer: customerId, status: "all", limit: 100 });
-  return subs.data.some((s) => s.status !== "canceled" && s.status !== "incomplete_expired");
+  for await (const s of ctx.stripe.subscriptions.list({ customer: customerId, status: "all", limit: 100 })) {
+    if (s.status !== "canceled" && s.status !== "incomplete_expired") return true;
+  }
+  return false;
 }
 
 /** Among customers sharing a subject: one with a live subscription, else the oldest. */
@@ -81,6 +83,8 @@ export async function reconcile(
       const live: Stripe.Customer[] = [];
       for (const c of others) if (await hasLiveSubscription(ctx, c.id)) live.push(c);
       if (live.length === 1) {
+        // The old customer keeps being synced so its canceled subscriptions are not left stale.
+        extraCustomerIds.add(mappedId);
         await ctx.db
           .update(billingCustomer)
           .set({ stripeCustomerId: live[0]!.id, livemode: live[0]!.livemode })

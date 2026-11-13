@@ -97,6 +97,10 @@ export class FakeStripe {
     body: Json;
     times: number;
     afterHandling: boolean;
+    /** Save the failure as the idempotency key's response, as Stripe does for 500s. */
+    cache: boolean;
+    /** The client sees a dropped connection (no HTTP status) instead of a response. */
+    network?: boolean;
   }[] = [];
 
   /**
@@ -129,7 +133,29 @@ export class FakeStripe {
     times = 1,
     body: Json = { error: { type: "api_error", message: "fake failure" } }
   ): void {
-    this.failures.push({ match, status, body, times, afterHandling: false });
+    this.failures.push({ match, status, body, times, afterHandling: false, cache: false });
+  }
+
+  /**
+   * Like failNext for one request, but the failure is saved as the response for
+   * the request's idempotency key, so a later POST with the same key replays it.
+   * Stripe does this for every first result, 500 errors included.
+   */
+  failAndCache(
+    match: (r: RecordedRequest) => boolean,
+    status = 500,
+    body: Json = { error: { type: "api_error", message: "fake failure" } }
+  ): void {
+    this.failures.push({ match, status, body, times: 1, afterHandling: false, cache: true });
+  }
+
+  /**
+   * The next matching request ends in a dropped connection: stripe-node raises a
+   * connection error with no statusCode. With `afterHandling`, Stripe processed
+   * the request first (a timeout after the work was done).
+   */
+  failNetwork(match: (r: RecordedRequest) => boolean, afterHandling = false): void {
+    this.failures.push({ match, status: 0, body: {}, times: 1, afterHandling, cache: false, network: true });
   }
 
   /**
@@ -143,6 +169,7 @@ export class FakeStripe {
       body: { error: { type: "api_error", message: "response lost" } },
       times: 1,
       afterHandling: true,
+      cache: false,
     });
   }
 
@@ -272,23 +299,28 @@ export class FakeStripe {
     };
     this.requests.push(req);
 
-    const failure = this.failures.find((f) => f.times > 0 && f.match(req));
-    // Consumed as soon as it matches, so an idempotent replay below cannot leave
-    // it armed for a later, unrelated request.
-    if (failure) failure.times--;
-    if (failure && !failure.afterHandling) {
-      return json(failure.status, failure.body);
-    }
-
-    // Stripe replays the saved response for a repeated idempotency key.
+    // Stripe replays the saved response for a repeated idempotency key. This
+    // comes first: an injected failure never overrides a replay, and is left
+    // armed for the next request that actually reaches handling.
     const idemKey = req.idempotencyKey ? `${method} ${url.pathname} ${req.idempotencyKey}` : null;
     if (idemKey && method === "POST") {
       const saved = this.idempotent.get(idemKey);
-      if (saved) return failure?.afterHandling ? json(failure.status, failure.body) : json(saved.status, saved.body);
+      if (saved) return json(saved.status, saved.body);
+    }
+
+    const failure = this.failures.find((f) => f.times > 0 && f.match(req));
+    if (failure) failure.times--;
+    if (failure?.network && !failure.afterHandling) throw new TypeError("fake network error");
+    if (failure && !failure.afterHandling) {
+      if (failure.cache && idemKey && method === "POST") {
+        this.idempotent.set(idemKey, { status: failure.status, body: failure.body });
+      }
+      return json(failure.status, failure.body);
     }
     const [status, body] = this.route(req);
     if (idemKey && method === "POST") this.idempotent.set(idemKey, { status, body });
     if (failure?.afterHandling) {
+      if (failure.network) throw new TypeError("fake network error");
       return json(failure.status, failure.body);
     }
     return json(status, body);
@@ -350,6 +382,8 @@ export class FakeStripe {
       if (!expand.includes("latest_invoice") && out.latest_invoice) {
         out.latest_invoice = (out.latest_invoice as Json).id;
       }
+      const customer = this.customers.get(String(out.customer));
+      if (expand.includes("customer") && customer) out.customer = clone(customer);
       return [200, out];
     }
     if (method === "GET" && path === "/v1/subscriptions") {
@@ -370,7 +404,16 @@ export class FakeStripe {
           }
           return out;
         });
-      return [200, { object: "list", data, has_more: false, url: path }];
+      // Honors limit and starting_after only when a limit is sent, so callers
+      // that omit it still get everything.
+      let page = data;
+      let hasMore = false;
+      if (params.limit) {
+        const start = params.starting_after ? data.findIndex((s) => s.id === params.starting_after) + 1 : 0;
+        page = data.slice(start, start + Number(params.limit));
+        hasMore = start + page.length < data.length;
+      }
+      return [200, { object: "list", data: page, has_more: hasMore, url: path }];
     }
     if (method === "GET" && path === "/v1/invoices") {
       // Stripe lists newest first.

@@ -216,6 +216,50 @@ describe("syncSubscription", () => {
     expect(await rows()).toHaveLength(0);
   });
 
+  test("an unmapped customer's subject_id metadata attributes a subscription that has none of its own", async () => {
+    fake.putCustomer("cus_c", { subject_id: "cm1" });
+    fake.putSubscription({ id: "sub_c", customer: "cus_c", status: "active", priceIds: ["price_pro"] });
+    expect(await syncSubscription(ctx, "sub_c")).toMatchObject({ outcome: "synced", subjectId: "cm1" });
+    expect(await rows()).toEqual([expect.objectContaining({ stripeSubscriptionId: "sub_c", subjectId: "cm1", stripeCustomerId: "cus_c" })]);
+  });
+
+  test("retrieves the subscription with the customer expanded", async () => {
+    fake.putCustomer("cus_c", { subject_id: "cm1" });
+    fake.putSubscription({ id: "sub_c", customer: "cus_c", status: "active", priceIds: ["price_pro"] });
+    await syncSubscription(ctx, "sub_c");
+    const get = fake.requests.find((r) => r.method === "GET" && r.path === "/v1/subscriptions/sub_c");
+    expect(get?.params.expand).toEqual(["latest_invoice", "customer"]);
+  });
+
+  test("subscription and customer metadata that disagree, with no mapping, are refused", async () => {
+    fake.putCustomer("cus_c", { subject_id: "cm1" });
+    fake.putSubscription({ id: "sub_c", customer: "cus_c", status: "active", priceIds: ["price_pro"], metadata: { subject_id: "cm2" } });
+    expect(await syncSubscription(ctx, "sub_c")).toEqual({ outcome: "subject_mismatch", subscriptionId: "sub_c" });
+    expect(await rows()).toHaveLength(0);
+  });
+
+  test("customer metadata that disagrees with the stored mapping is refused", async () => {
+    await ctx.db.insert(billingCustomer).values({ subjectId: "real", stripeCustomerId: "cus_c", livemode: false });
+    fake.putCustomer("cus_c", { subject_id: "other" });
+    fake.putSubscription({ id: "sub_c", customer: "cus_c", status: "active", priceIds: ["price_pro"] });
+    expect(await syncSubscription(ctx, "sub_c")).toEqual({ outcome: "subject_mismatch", subscriptionId: "sub_c" });
+    expect(await rows()).toHaveLength(0);
+  });
+
+  test("customer metadata that agrees with the stored mapping is accepted", async () => {
+    await ctx.db.insert(billingCustomer).values({ subjectId: "real", stripeCustomerId: "cus_c", livemode: false });
+    fake.putCustomer("cus_c", { subject_id: "real" });
+    fake.putSubscription({ id: "sub_c", customer: "cus_c", status: "active", priceIds: ["price_pro"] });
+    expect(await syncSubscription(ctx, "sub_c")).toMatchObject({ outcome: "synced", subjectId: "real" });
+  });
+
+  test("a deleted customer contributes no subject, leaving the subscription unknown", async () => {
+    fake.putCustomer("cus_gone", { subject_id: "cm1" });
+    Object.assign(fake.customers.get("cus_gone")!, { deleted: true, metadata: undefined });
+    fake.putSubscription({ id: "sub_c", customer: "cus_gone", status: "canceled", priceIds: ["price_pro"] });
+    expect(await syncSubscription(ctx, "sub_c")).toEqual({ outcome: "unknown_subject", subscriptionId: "sub_c" });
+  });
+
   test("clears past_due_since once the subscription is active again", async () => {
     fake.putSubscription({
       id: "sub_7",
@@ -271,11 +315,11 @@ describe("syncSubscription", () => {
     });
   });
 
-  test("asks Stripe for the latest invoice in the same request", async () => {
+  test("asks Stripe for the latest invoice and customer in the same request", async () => {
     fake.putSubscription({ id: "sub_10", customer: "cus_10", status: "active", priceIds: ["price_pro"], metadata: { subject_id: "1000" } });
     await syncSubscription(ctx, "sub_10");
     const req = fake.requests.find((r) => r.path === "/v1/subscriptions/sub_10");
-    expect(req?.params.expand).toEqual(["latest_invoice"]);
+    expect(req?.params.expand).toEqual(["latest_invoice", "customer"]);
   });
 });
 

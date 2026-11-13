@@ -1,8 +1,11 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { billingCustomer } from "./schema/postgres.js";
 import type { BillingContext, BillingDb } from "./types.js";
 
 const MAX_SUBJECT_ID_LENGTH = 200;
+
+/** First key of the two-key advisory lock, so billing locks cannot collide with an app's own ("bill"). */
+const LOCK_NAMESPACE = 0x62696c6c;
 
 export function assertSubjectId(subjectId: string): void {
   if (
@@ -71,9 +74,22 @@ async function findCreatedCustomer(ctx: BillingContext, subjectId: string) {
  * email are applied afterwards with an update, because Stripe rejects or
  * replays a reused key whose parameters changed. An update error propagates
  * after the mapping is stored; a retry skips the create and applies the update
- * again. If a create fails with a 5xx or network error and no customer turns
- * up in search or in the list, the create is repeated under a fresh key,
- * because Stripe would replay the cached failure for the original one.
+ * again.
+ *
+ * Everything from "no mapping found" to storing the mapping runs in a
+ * transaction holding an advisory lock keyed on the subject, so concurrent
+ * callers take turns and the later one finds the mapping. The lock is held
+ * across the Stripe calls (a create, a search and a list scan; bounded by the
+ * client's timeout and retries).
+ *
+ * When a create fails, what happens next depends on what the client saw:
+ * - A 5xx response: Stripe answered and saved the failure under the key, so it
+ *   would replay forever. Search, then scan the list for a customer Stripe did
+ *   create. Only if both find nothing is the create repeated under a fresh key.
+ * - No status (network error or timeout): the create may still be completing,
+ *   so an empty search cannot rule it out. If a customer is found it is stored;
+ *   otherwise the original error is rethrown and the next call retries with
+ *   the same key, as Stripe advises for network failures.
  */
 export async function ensureCustomer(
   ctx: BillingContext,
@@ -82,7 +98,11 @@ export async function ensureCustomer(
 ): Promise<string> {
   assertSubjectId(subjectId);
   const existing = await getCustomerId(ctx.db, subjectId);
-  const customerId = existing ?? (await createCustomer(ctx, subjectId));
+  const customerId = existing ?? (await ctx.db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(${LOCK_NAMESPACE}, hashtext(${"customer:" + subjectId}))`);
+    // Another caller may have stored the mapping while this one waited.
+    return (await getCustomerId(tx, subjectId)) ?? (await createCustomer({ ...ctx, db: tx }, subjectId));
+  }));
   if (details.name || details.email) {
     await ctx.stripe.customers.update(customerId, {
       ...(details.name ? { name: details.name } : {}),
@@ -102,11 +122,16 @@ async function createCustomer(ctx: BillingContext, subjectId: string): Promise<s
   } catch (err) {
     const status = errorStatus(err);
     if (status !== undefined && status < 500) throw err;
-    customer =
-      (await findCreatedCustomer(ctx, subjectId)) ??
-      (await ctx.stripe.customers.create(params, {
+    const found = await findCreatedCustomer(ctx, subjectId);
+    if (found) {
+      customer = found;
+    } else if (status === undefined) {
+      throw err;
+    } else {
+      customer = await ctx.stripe.customers.create(params, {
         idempotencyKey: `context-kit-billing:customer:${subjectId}:retry:${Date.now()}`,
-      }));
+      });
+    }
   }
 
   await ctx.db

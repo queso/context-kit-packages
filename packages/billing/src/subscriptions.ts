@@ -29,10 +29,14 @@ function planKeyForPrice(ctx: BillingContext, price: Stripe.Price): string | nul
 
 /**
  * The subject a subscription belongs to. The stored customer mapping is the
- * checked path and wins; `metadata.subject_id` (set by this package's
- * Checkout) is only a fallback for a customer not mapped yet. When both exist
- * and disagree, something outside this package edited one of them, so the
- * subscription is not attributed to either.
+ * checked path and wins. `metadata.subject_id` on the subscription (set by this
+ * package's Checkout) and on the customer (set by ensureCustomer) are fallbacks
+ * for a customer not mapped yet. If the mapping exists and either metadata
+ * disagrees with it, or there is no mapping and the two metadata sources
+ * disagree, something outside this package edited one of them, so the
+ * subscription is not attributed to any. `sub.customer` is read as an expanded
+ * object when the caller expanded it; a string or a deleted customer carries no
+ * metadata.
  */
 async function resolveSubject(
   ctx: BillingContext,
@@ -45,9 +49,16 @@ async function resolveSubject(
         .from(billingCustomer)
         .where(eq(billingCustomer.stripeCustomerId, customerId))
     : [];
-  const fromMetadata = sub.metadata?.subject_id || undefined;
-  if (row && fromMetadata && row.subjectId !== fromMetadata) return { problem: "subject_mismatch" };
-  const subjectId = row?.subjectId ?? fromMetadata;
+  const fromSubscription = sub.metadata?.subject_id || undefined;
+  const customer = typeof sub.customer === "object" && sub.customer && !("deleted" in sub.customer && sub.customer.deleted)
+    ? (sub.customer as Stripe.Customer)
+    : null;
+  const fromCustomer = customer?.metadata?.subject_id || undefined;
+  const claimed = [fromSubscription, fromCustomer].filter((v): v is string => !!v);
+  if (row ? claimed.some((v) => v !== row.subjectId) : claimed.length === 2 && claimed[0] !== claimed[1]) {
+    return { problem: "subject_mismatch" };
+  }
+  const subjectId = row?.subjectId ?? claimed[0];
   return subjectId ? { subjectId } : { problem: "unknown_subject" };
 }
 
@@ -160,7 +171,7 @@ export async function syncSubscription(
   return ctx.db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(${LOCK_NAMESPACE}, hashtext(${subscriptionId}))`);
     const sub = await ctx.stripe.subscriptions.retrieve(subscriptionId, {
-      expand: ["latest_invoice"],
+      expand: ["latest_invoice", "customer"],
     });
     return storeSubscription({ ...ctx, db: tx }, sub);
   });

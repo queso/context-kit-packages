@@ -125,6 +125,63 @@ describe("reconcile", () => {
     expect(subs.every((r) => r.subjectId === "91")).toBe(true);
   });
 
+  test("syncs a duplicate customer's subscription that has no metadata of its own, using the customer's tag", async () => {
+    await ctx.db.insert(billingCustomer).values({ subjectId: "92", stripeCustomerId: "cus_a", livemode: false });
+    fake.putCustomer("cus_a", { subject_id: "92" });
+    fake.putCustomer("cus_b", { subject_id: "92" });
+    fake.putSubscription({ id: "sub_a", customer: "cus_a", status: "active", priceIds: ["price_pro"] });
+    fake.putSubscription({ id: "sub_b", customer: "cus_b", status: "active", priceIds: ["price_team"] });
+
+    const summary = await reconcile(ctx, { repairCustomers: true });
+
+    expect(summary.unknownSubject).toBe(0);
+    const subs = await ctx.db.select().from(billingSubscription);
+    expect(subs.map((r) => [r.stripeSubscriptionId, r.subjectId]).sort()).toEqual([["sub_a", "92"], ["sub_b", "92"]]);
+  });
+
+  test("when it moves a mapping, it also syncs the previously mapped customer so its canceled subscriptions are not stale", async () => {
+    await ctx.db.insert(billingCustomer).values({ subjectId: "93", stripeCustomerId: "cus_empty", livemode: false });
+    fake.putCustomer("cus_empty", { subject_id: "93" });
+    fake.putCustomer("cus_paying", { subject_id: "93" });
+    fake.putSubscription({ id: "sub_old", customer: "cus_empty", status: "canceled", priceIds: ["price_pro"] });
+    fake.putSubscription({ id: "sub_new", customer: "cus_paying", status: "active", priceIds: ["price_pro"] });
+    await ctx.db.insert(billingSubscription).values({
+      stripeSubscriptionId: "sub_old",
+      subjectId: "93",
+      stripeCustomerId: "cus_empty",
+      status: "active",
+      planKey: "pro",
+      livemode: false,
+      syncedAt: new Date(0),
+    });
+
+    await reconcile(ctx, { repairCustomers: true });
+
+    expect((await ctx.db.select().from(billingCustomer))[0]?.stripeCustomerId).toBe("cus_paying");
+    const subs = await ctx.db.select().from(billingSubscription);
+    expect(subs.find((r) => r.stripeSubscriptionId === "sub_old")?.status).toBe("canceled");
+    expect(subs.find((r) => r.stripeSubscriptionId === "sub_new")?.status).toBe("active");
+  });
+
+  test("finds a live subscription that is beyond the first page of a customer's subscriptions", async () => {
+    fake.putCustomer("cus_old", { subject_id: "94" });
+    fake.putCustomer("cus_busy", { subject_id: "94" });
+    fake.customers.get("cus_old")!.created = 100;
+    fake.customers.get("cus_busy")!.created = 300;
+    for (let i = 0; i < 100; i++) {
+      fake.putSubscription({ id: `sub_dead${i}`, customer: "cus_busy", status: "canceled", priceIds: ["price_pro"] });
+    }
+    fake.putSubscription({ id: "sub_live", customer: "cus_busy", status: "active", priceIds: ["price_pro"] });
+
+    await reconcile(ctx, { repairCustomers: true });
+
+    expect((await ctx.db.select().from(billingCustomer))[0]?.stripeCustomerId).toBe("cus_busy");
+    const pages = fake.requests.filter(
+      (r) => r.path === "/v1/subscriptions" && r.params.customer === "cus_busy" && r.params.starting_after !== undefined
+    );
+    expect(pages.length).toBeGreaterThan(0);
+  });
+
   test("never uses the search API, which is not read-after-write", async () => {
     fake.putCustomer("cus_lost", { subject_id: "77" });
     await reconcile(ctx, { repairCustomers: true });
