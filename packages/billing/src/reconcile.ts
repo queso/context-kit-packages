@@ -1,8 +1,8 @@
 import { and, eq } from "drizzle-orm";
 import type Stripe from "stripe";
 import { billingLock } from "./locks.js";
-import { billingCustomer } from "./schema/postgres.js";
-import { syncCustomerSubscriptions } from "./subscriptions.js";
+import { billingCustomer, billingSubscription } from "./schema/postgres.js";
+import { syncCustomerSubscriptions, syncSubscription } from "./subscriptions.js";
 import type { BillingContext } from "./types.js";
 
 export interface ReconcileSummary {
@@ -31,6 +31,33 @@ async function chooseCustomer(ctx: BillingContext, candidates: Stripe.Customer[]
     if (await hasLiveSubscription(ctx, customer.id)) return customer;
   }
   return oldestFirst[0]!;
+}
+
+function isResourceMissing(err: unknown): boolean {
+  const e = err as { statusCode?: number; code?: string };
+  return e?.statusCode === 404 && e?.code === "resource_missing";
+}
+
+/**
+ * Local rows of a customer that Stripe did not list (the subscription or its
+ * customer was deleted, for example with a test clock) are re-synced by id. If
+ * Stripe answers 404 resource_missing, the row is deleted; any other failure
+ * propagates and the row stays.
+ */
+async function removeVanishedSubscriptions(ctx: BillingContext, customerId: string, listed: Set<string>): Promise<void> {
+  const local = await ctx.db
+    .select({ id: billingSubscription.stripeSubscriptionId })
+    .from(billingSubscription)
+    .where(eq(billingSubscription.stripeCustomerId, customerId));
+  for (const { id } of local) {
+    if (listed.has(id)) continue;
+    try {
+      await syncSubscription(ctx, id);
+    } catch (err) {
+      if (!isResourceMissing(err)) throw err;
+      await ctx.db.delete(billingSubscription).where(eq(billingSubscription.stripeSubscriptionId, id));
+    }
+  }
 }
 
 /**
@@ -105,10 +132,12 @@ export async function reconcile(
   const ids = new Set([...customers.map((c) => c.id), ...extraCustomerIds]);
   for (const id of ids) {
     summary.customers++;
-    for (const result of await syncCustomerSubscriptions(ctx, id)) {
+    const results = await syncCustomerSubscriptions(ctx, id);
+    for (const result of results) {
       if (result.outcome === "synced") summary.subscriptions++;
       else summary.unknownSubject++;
     }
+    await removeVanishedSubscriptions(ctx, id, new Set(results.map((r) => r.subscriptionId)));
   }
   return summary;
 }

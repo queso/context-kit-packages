@@ -222,6 +222,18 @@ describe("event processing", () => {
     expect(fake.requests.filter((r) => r.path.startsWith("/v1/subscriptions"))).toHaveLength(0);
   });
 
+  test.each([
+    ["customer.subscription.updated", {}],
+    ["invoice.paid", {}],
+    ["checkout.session.completed", {}],
+  ])("a %s event with no object id is processed as ignored and records missing_object_id", async (type, object) => {
+    const res = await handle(await signedRequest(event(type, object)));
+    expect(res.status).toBe(200);
+    const [ev] = await ctx.db.select().from(billingWebhookEvent);
+    expect(ev?.processedAt).toBeInstanceOf(Date);
+    expect(ev?.lastError).toBe("missing_object_id");
+  });
+
   test("an event type the package does not handle is acknowledged and recorded", async () => {
     const payload = event("customer.created", { id: "cus_x", object: "customer" });
     expect((await handle(await signedRequest(payload))).status).toBe(200);

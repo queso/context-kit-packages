@@ -116,8 +116,8 @@ async function storeSubscription(
   const metered = items.filter((i) => i.price.recurring?.usage_type === "metered");
   const overageItem = items.find((i) => i.price.lookup_key === ctx.config.overage.priceLookupKey)
     ?? (metered.length === 1 ? metered[0] : undefined);
-  const baseItem = items.find((i) => i !== overageItem && i.price.recurring?.usage_type !== "metered")
-    ?? items.find((i) => i !== overageItem);
+  // Only a licensed item can be the base. With none, there is no plan.
+  const baseItem = items.find((i) => i !== overageItem && i.price.recurring?.usage_type !== "metered");
 
   const now = ctx.now?.() ?? new Date();
   // Only past_due has a grace period; unpaid is on free limits by design (#7).

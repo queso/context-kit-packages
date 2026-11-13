@@ -223,6 +223,23 @@ describe("usage outbox", () => {
       expect(meterCalls()).toHaveLength(0);
     });
 
+    test("a paused subscription bills nothing new: usage after its period end is not sent", async () => {
+      await ctx.db
+        .update(billingSubscription)
+        .set({ status: "paused", currentPeriodStart: new Date("2025-12-01T00:00:00Z"), currentPeriodEnd: PERIOD_START });
+      await enqueueUsage(ctx, { sourceId: "run_paused", subjectId: "100", value: 3, occurredAt: new Date("2026-01-05T00:00:00Z") });
+      expect((await reportPendingUsage(ctx)).failed).toBe(1);
+      expect(await rowFor("run_paused")).toMatchObject({ status: "failed", lastError: "no_active_subscription" });
+      expect(meterCalls()).toHaveLength(0);
+    });
+
+    test("writing a row off as late clears an earlier transient error", async () => {
+      await enqueueUsage(ctx, { sourceId: "run_old", subjectId: "100", value: 3, occurredAt: new Date("2025-12-31T22:59:59Z") });
+      await ctx.db.update(billingUsageReport).set({ lastError: "socket hang up" }).where(eq(billingUsageReport.sourceId, "run_old"));
+      expect((await reportPendingUsage(ctx)).late).toBe(1);
+      expect(await rowFor("run_old")).toMatchObject({ status: "late", lastError: null });
+    });
+
     test("usage from the previous period is still sent while its invoice is in the grace window", async () => {
       clock = new Date("2026-01-01T00:30:00Z");
       await enqueueUsage(ctx, { sourceId: "run_edge", subjectId: "100", value: 3, occurredAt: new Date("2025-12-31T23:59:00Z") });

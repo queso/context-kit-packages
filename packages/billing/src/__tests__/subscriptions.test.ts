@@ -75,6 +75,20 @@ describe("syncSubscription", () => {
     expect((await rows())[0]).toMatchObject({ basePriceId: "price_pro", overagePriceId: null });
   });
 
+  test("with only metered items there is no base item: no plan, no base price", async () => {
+    fake.addPrice({ id: "price_addon_a", lookupKey: "addon_a", usageType: "metered" });
+    fake.addPrice({ id: "price_addon_b", lookupKey: "addon_b", usageType: "metered" });
+    fake.putSubscription({
+      id: "sub_metered",
+      customer: "cus_1",
+      status: "active",
+      priceIds: ["price_addon_a", "price_addon_b"],
+      metadata: { subject_id: "100" },
+    });
+    await syncSubscription(ctx, "sub_metered");
+    expect((await rows())[0]).toMatchObject({ planKey: null, basePriceId: null, overagePriceId: null });
+  });
+
   test("uses the only metered item as overage when it has another lookup key", async () => {
     fake.addPrice({ id: "price_grandfathered", lookupKey: "old_overage", usageType: "metered" });
     fake.putSubscription({

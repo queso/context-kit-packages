@@ -15,8 +15,8 @@ const STRIPE_MAX_EVENT_AGE_MS = 35 * DAY_MS;
 const RESEND_WINDOW_MS = 20 * HOUR_MS;
 /** Stripe's maximum `identifier` length. */
 const MAX_SOURCE_ID_LENGTH = 100;
-/** Statuses after which a subscription bills nothing new. */
-const ENDED_STATUSES = new Set(["canceled", "incomplete_expired"]);
+/** Statuses after which a subscription bills nothing new. A paused subscription creates no invoices. */
+const ENDED_STATUSES = new Set(["canceled", "incomplete_expired", "paused"]);
 
 function assertNonNegativeInteger(name: string, n: number): void {
   if (!Number.isInteger(n) || n < 0) throw new Error(`${name} must be a non-negative integer, got ${n}`);
@@ -366,7 +366,7 @@ async function reportOne(ctx: BillingContext, row: Row, leaseId: string, now: Da
   if ((fromPreviousPeriod && !previousInvoiceOpen) || olderThanPreviousPeriod || tooOldForStripe) {
     // Stripe would accept it into meter summaries but never bill it, so it is
     // written off here where it is visible.
-    await finish({ status: "late" });
+    await finish({ status: "late", lastError: null });
     return { kind: "late" };
   }
 

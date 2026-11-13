@@ -48,6 +48,42 @@ describe("reconcile", () => {
     expect(rows.find((r) => r.stripeSubscriptionId === "sub_2")?.status).toBe("canceled");
   });
 
+  test("deletes a local subscription row that Stripe no longer has", async () => {
+    await ctx.db.insert(billingCustomer).values({ subjectId: "1", stripeCustomerId: "cus_1", livemode: false });
+    fake.putSubscription({ id: "sub_real", customer: "cus_1", status: "active", priceIds: ["price_pro"] });
+    await ctx.db.insert(billingSubscription).values({
+      stripeSubscriptionId: "sub_ghost",
+      subjectId: "1",
+      stripeCustomerId: "cus_1",
+      status: "active",
+      planKey: "pro",
+      livemode: false,
+      syncedAt: new Date(0),
+    });
+
+    const summary = await reconcile(ctx);
+
+    expect(summary).toEqual({ customers: 1, subscriptions: 1, unknownSubject: 0, repairedCustomers: 0, duplicateSubjects: 0 });
+    const rows = await ctx.db.select().from(billingSubscription);
+    expect(rows.map((r) => r.stripeSubscriptionId)).toEqual(["sub_real"]);
+  });
+
+  test("keeps a local row when the lookup fails for a reason other than the subscription being gone", async () => {
+    await ctx.db.insert(billingCustomer).values({ subjectId: "1", stripeCustomerId: "cus_1", livemode: false });
+    await ctx.db.insert(billingSubscription).values({
+      stripeSubscriptionId: "sub_ghost",
+      subjectId: "1",
+      stripeCustomerId: "cus_1",
+      status: "active",
+      livemode: false,
+      syncedAt: new Date(0),
+    });
+    fake.failNext((r) => r.path === "/v1/subscriptions/sub_ghost", 500);
+
+    await expect(reconcile(ctx)).rejects.toBeDefined();
+    expect(await ctx.db.select().from(billingSubscription)).toHaveLength(1);
+  });
+
   test("with repairCustomers, restores a lost mapping from the customer's subject_id metadata", async () => {
     fake.putCustomer("cus_lost", { subject_id: "77" });
     fake.putCustomer("cus_foreign", {});

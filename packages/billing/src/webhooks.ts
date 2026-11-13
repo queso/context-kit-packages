@@ -71,6 +71,10 @@ async function handleEvent(ctx: BillingContext, event: Stripe.Event): Promise<Sy
   }
 
   if (INVOICE_EVENTS.has(event.type)) {
+    // In the pinned API version (2026-10-28.endive, stripe-node 23.1.0) Invoice
+    // has no flat `subscription` field. The subscription is at
+    // `parent.subscription_details.subscription` (stripe-node type
+    // `Invoice.Parent.SubscriptionDetails`), so there is no fallback to add.
     const invoice = event.data.object as Stripe.Invoice;
     const subscriptionId = idOf(invoice.parent?.subscription_details?.subscription);
     return subscriptionId ? syncSubscription(ctx, subscriptionId) : null;
@@ -97,6 +101,16 @@ export async function processEvent(ctx: BillingContext, event: Stripe.Event): Pr
     .onConflictDoUpdate({ target: billingWebhookEvent.stripeEventId, set: { type: sql`excluded.type` } })
     .returning({ processedAt: billingWebhookEvent.processedAt });
   if (stored?.processedAt) return "duplicate";
+
+  const recognized = SUBSCRIPTION_EVENTS.has(event.type) || CHECKOUT_EVENTS.has(event.type) || INVOICE_EVENTS.has(event.type);
+  if (recognized && !objectId(event)) {
+    // A retry cannot add the missing id, so mark it processed and record why.
+    await ctx.db
+      .update(billingWebhookEvent)
+      .set({ processedAt: ctx.now?.() ?? new Date(), lastError: "missing_object_id" })
+      .where(eq(billingWebhookEvent.stripeEventId, event.id));
+    return "ignored";
+  }
 
   let result: SyncResult | null;
   try {
