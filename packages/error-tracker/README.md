@@ -183,7 +183,7 @@ The `ErrorBoundary` returned by `createErrorTracker` has config pre-bound, so yo
 
 ## Server Errors
 
-The browser reporter cannot see an error thrown on the server. Two functions record those, in the same table and with the same fingerprint and occurrence counter, with `source` set to `server`. Create them once:
+The browser reporter cannot see an error thrown on the server. Two functions record those in the same table, with the same occurrence counter and `source` set to `server`. Server errors use their own fingerprint (see [Fingerprints and deploys](#fingerprints-and-deploys)). Create them once:
 
 ```ts
 // lib/errors.ts
@@ -240,7 +240,12 @@ All three context fields are optional. A query string or fragment in `route` is 
 
 For a server error: the error's name and message (stored together as `Name: message`), its stack, the route pattern, the HTTP method and the tag. `onRequestError` takes the route pattern from Next's `context.routePath` and the tag from `context.routeType`. It never reads `request.path`, which holds the concrete URL and its query string, or `request.headers`. Request bodies, headers, cookies and environment variables are never stored. `url` and `user_agent` stay null.
 
-The error's own message and stack are stored as they are. If your code puts a secret into an error message, it is stored.
+The error's own message and stack are cleaned before they are stored:
+
+- **Drizzle query errors.** A failed query throws an error whose message is `Failed query: <statement>` followed by `params: <every bound value>`, which would put row values such as emails and customer ids into the table. The parameter list is dropped from the message and the stack, and the root cause is appended, so the stored message reads `Failed query: insert into ... [cause: duplicate key value violates unique constraint "users_email_key"]`. The same failing statement with different values is one row.
+- **Credential-shaped strings** are replaced with `[redacted]` in the message, the stack, a caller-supplied `route` and the `tag`: `Bearer <token>`, JWTs, and keys with the prefixes `sk_`, `rk_`, `pk_`, `whsec_`, `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_` and `github_pat_` (16 or more characters after the prefix, at least one a digit). The list is `REDACTION_PATTERNS`, exported from `@context-kit/error-tracker/server`, and `maskSecrets(text)` applies it. Masking runs before fingerprinting, so one error carrying two different tokens is one row.
+
+Masking is a net, not a guarantee. A secret in any other shape, such as a password in a connection string, a provider's key with a different prefix, or a value your own code interpolates into a message, is stored as it appears. Do not rely on it in place of keeping secrets out of error messages.
 
 `environment` is the `environment` option to `createServerErrorReporter`, falling back to `NODE_ENV`, then `development`.
 
@@ -248,16 +253,30 @@ The error's own message and stack are stored as they are. If your code puts a se
 
 Both functions return a promise that always resolves. Reporting never throws into your code.
 
-- A failed write logs one line to `console.error` and the report is lost. The line carries the database error's root cause, such as `connect ECONNREFUSED`, and not the statement or its parameters.
-- Each report waits at most `timeoutMs` (default 2000) for the database. After that it logs one line and stops waiting. The driver may still complete the write later, because Drizzle has no portable way to cancel a query once it is sent.
+Each report waits at most `timeoutMs` (default 2000) for the database. A write that fails or does not answer in time counts as a failed write, and that report is lost.
 
-Next.js awaits `onRequestError` before sending a route handler's error response, so a slow database delays that response by up to `timeoutMs`. Server Component render errors were not held up this way in testing.
+A breaker keeps a database outage from slowing every failing request:
+
+- After 3 consecutive failed writes, the breaker opens. For the next 30 seconds every report returns at once without touching the database, and the report is lost.
+- After the 30 seconds, the next report tries one write; reports that arrive while it runs are skipped. If it succeeds, the breaker closes and reporting resumes. If it fails, the breaker stays open for another 30 seconds.
+- Both numbers are configurable: `breaker: { failures: 3, cooldownMs: 30_000 }`.
+
+Three things are logged to `console.error`, each as one line: the first failed write of a streak, the moment the breaker opens, and the moment it closes (with the number of reports skipped). Nothing is logged in between. The failure line carries the database error's root cause, such as `connect ECONNREFUSED`, not the statement or its parameters.
 
 For `reportServerError`, `await` it if the platform may freeze the process once the response is sent (serverless functions), or pass the promise to Next's `after()`.
 
+### Limits
+
+- **A write that timed out can still land later.** The reporter stops waiting after `timeoutMs`, but it cannot cancel a query the driver has already sent. If the database recovers, that occurrence is counted after all.
+- **A slow database can delay a route handler's error response by up to `timeoutMs`.** Next.js waits for `onRequestError` before it sends a route handler's 500. In testing, a Server Component's error response was not held up. Once the breaker is open, reports return at once and add no delay.
+
 ### Fingerprints and deploys
 
-Server stacks point at the compiled chunks in `.next/server`, whose file names and line numbers change with each build. A repeat of the same error within one deploy increments the counter, but after a new deploy the same error starts a new row. Source map resolution applies to browser stacks only. On Next.js 16.4.6, `experimental.serverSourceMaps` with `NODE_OPTIONS=--enable-source-maps` did not change the stack `onRequestError` receives.
+A server error's fingerprint is built from the error name, the message (after cleaning), the route pattern and the function names of the top three stack frames. File paths, chunk names, lines and columns are left out, because a production build hashes chunk names and shifts positions on every deploy. Browser errors keep their own fingerprint, and a server row never merges with a browser row.
+
+Frames without a function name contribute nothing. When none of the top three frames has one, the fingerprint is the name, message and route alone, so two different errors with the same message on the same route would share a row.
+
+In a production build the function names are minified (`t`, `c`). In testing on Next.js 16.4.6, the same error stayed on its row across a rebuild that changed other files and across a move to another directory. A rebuild that changed the file containing the throwing function renamed the minified function, and the error started a new row. The same applies to an error class from a library bundled into the build that takes its `name` from its class: postgres-js's `PostgresError` arrived named `ei`. For a Drizzle query error only the cause's message is kept, not its class name, for this reason. Resolving server stacks against source maps would remove that limit; it is tracked in [#13](https://github.com/queso/context-kit-packages/issues/13).
 
 ## API Reference
 
@@ -364,7 +383,7 @@ Each entry in `errors` is a Drizzle row, so its keys are the TypeScript property
 
 ## Deduplication & Fingerprinting
 
-Errors are deduplicated using a SHA-256 fingerprint computed from the error message and the first three stack frames (resolved frames preferred over minified):
+Browser errors are deduplicated using a SHA-256 fingerprint computed from the error message and the first three stack frames (resolved frames preferred over minified). Server errors use a different fingerprint, described in [Fingerprints and deploys](#fingerprints-and-deploys):
 
 ```
 SHA-256( message | file:line:col:fn | file:line:col:fn | file:line:col:fn )

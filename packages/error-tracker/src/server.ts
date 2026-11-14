@@ -5,7 +5,9 @@ export {
 } from "./server/ingestion.js";
 export { createQueryHandler, type QueryConfig } from "./server/query.js";
 export { createRateLimiter } from "./server/rate-limiter.js";
+export { maskSecrets, REDACTION_PATTERNS } from "./server/redact.js";
 export {
+  computeServerFingerprint,
   createServerErrorReporter,
   type RequestErrorContext,
   type RequestErrorRequest,

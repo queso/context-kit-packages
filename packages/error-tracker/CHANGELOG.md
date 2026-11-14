@@ -14,10 +14,14 @@ The `client_error` table gains four columns and an index. After upgrading, run `
 
 ### Added
 
-- `createServerErrorReporter({ db, dialect, environment?, timeoutMs? })` in `@context-kit/error-tracker/server`, returning `onRequestError` for Next.js `instrumentation.ts` (Next.js 15 and later) and `reportServerError(error, { route?, method?, tag? })` for errors the app catches itself
-- Server errors go into `client_error` with `source` set to `server`, through the same fingerprint function and the same upsert, so repeats increment `occurrences` and a resolved error that recurs is reopened
+- `createServerErrorReporter({ db, dialect, environment?, timeoutMs?, breaker? })` in `@context-kit/error-tracker/server`, returning `onRequestError` for Next.js `instrumentation.ts` (Next.js 15 and later) and `reportServerError(error, { route?, method?, tag? })` for errors the app catches itself
+- Server errors go into `client_error` with `source` set to `server`, through the same upsert as browser reports, so repeats increment `occurrences` and a resolved error that recurs is reopened
+- Server errors have their own fingerprint, `computeServerFingerprint(name, message, route, frames)`: the error name, the message, the route pattern and the function names of the top three frames. File paths, chunk names, lines and columns are ignored, so a deploy that rebuilds and renames chunks keeps the same error on its row. Frames without a function name contribute nothing. The browser fingerprint is unchanged
 - A server row stores the error's name and message as `Name: message`, its stack, the route pattern (Next's `routePath`, never the concrete path or its query string), the HTTP method, and a tag (Next's `routeType` from `onRequestError`, or the caller's tag). Request headers, cookies, bodies and environment values are never read or stored. `route` is capped at 512 characters, `tag` at 128, and a query string or fragment in a caller-supplied `route` is dropped
-- Reporting never throws into the caller. Each report waits at most `timeoutMs` (default 2000) for the database, then logs one line and stops waiting. A failed write logs one line with the database error's root cause and the report is dropped
+- A Drizzle query error is stored as its statement plus its root cause's message (`Failed query: <sql> [cause: ...]`), with the bound parameters dropped from the message and the stack. The cause's class name is left out because a production bundle minifies it
+- Credential-shaped strings are masked as `[redacted]` in a server error's message, stack, route and tag before it is fingerprinted and stored: `Bearer` tokens, JWTs, and keys prefixed `sk_`, `rk_`, `pk_`, `whsec_`, `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_` or `github_pat_`. The patterns are exported as `REDACTION_PATTERNS`, and `maskSecrets(text)` applies them. This is a net, not a guarantee
+- Reporting never throws into the caller. Each report waits at most `timeoutMs` (default 2000) for the database; a failed or timed-out write loses that report
+- A breaker: after 3 consecutive failed writes, reports are skipped for 30 seconds and return at once, then one write is tried and a success resumes reporting. Configurable with `breaker: { failures, cooldownMs }`. Only the first failure of a streak, the breaker opening and the breaker closing are logged, one line each, and a failure line carries the database error's root cause, never the statement or its parameters
 - `source`, `route`, `method` and `tag` columns in both schema modules, and the `client_error_source_idx` index
 - Query endpoint `source` filter (`client` or `server`); any other value returns 400
 - `error-tracker tail --source client|server`, and a Source column in `tail` output
@@ -32,8 +36,9 @@ The `client_error` table gains four columns and an index. After upgrading, run `
 
 ### Known limitations
 
-- Server stacks reference build-hashed chunks in `.next/server`, so a server error's fingerprint changes with each deploy. Repeats within one deploy are counted on one row
-- A write abandoned at `timeoutMs` may still complete later, because a query handed to the driver cannot be cancelled portably
+- Production function names are minified, so an edit to the file containing the throwing function can rename it and start a new row for the same error. The same holds for an error class from a bundled library that takes its `name` from its class. Resolving server stacks against source maps is tracked in #13
+- A write that timed out can still land later, because a query handed to the driver cannot be cancelled portably
+- A slow database can delay a route handler's error response by up to `timeoutMs`, since Next.js waits for `onRequestError` before sending it
 
 ## [0.1.0] - 2026-09-11
 

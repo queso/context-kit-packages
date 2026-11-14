@@ -5,6 +5,7 @@ import {
   beforeEach,
   describe,
   expect,
+  setSystemTime,
   test,
 } from "bun:test";
 import { createServer, type Server, type Socket } from "node:net";
@@ -15,10 +16,14 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import type { Instrumentation } from "next/dist/server/instrumentation/types";
 import postgres from "postgres";
 import { computeFingerprint } from "../server/ingestion";
+import { DrizzleQueryError, sql } from "drizzle-orm";
 import { parseFrames } from "../server/parse-stack";
 import {
+  computeServerFingerprint,
   createIngestionHandler,
   createServerErrorReporter,
+  maskSecrets,
+  REDACTION_PATTERNS,
   type ServerErrorReporterConfig,
 } from "../server";
 import {
@@ -28,6 +33,7 @@ import {
   readOnlyClientError,
   resetClientErrors,
   sqliteConfig,
+  testDb,
 } from "./helpers";
 
 const SECRET = "sk_live_DO_NOT_STORE_7f3a9c";
@@ -228,7 +234,7 @@ describe("onRequestError", () => {
     expect(row.occurrences).toBe(2);
   });
 
-  test("fingerprints with the same function browser reports use", async () => {
+  test("fingerprints with the server fingerprint, not the browser one", async () => {
     const reporter = createServerErrorReporter(sqliteConfig());
     const error = new Error("boom");
     const { request, context } = nextRequestArgs();
@@ -237,6 +243,14 @@ describe("onRequestError", () => {
 
     const row = await readOnlyClientError();
     expect(row.fingerprint).toBe(
+      computeServerFingerprint(
+        "Error",
+        "boom",
+        "/api/billing/webhook",
+        parseFrames(error.stack!)
+      )
+    );
+    expect(row.fingerprint).not.toBe(
       computeFingerprint("Error: boom", parseFrames(error.stack!))
     );
   });
@@ -431,7 +445,9 @@ describe("a database that is down", () => {
       reporter.reportServerError(new Error("lost too"))
     ).resolves.toBeUndefined();
 
-    expect(log.lines).toHaveLength(2);
+    // The second failure in a row is not logged: only the first failure of a
+    // streak, the breaker opening and the breaker closing are.
+    expect(log.lines).toHaveLength(1);
     for (const line of log.lines) {
       expect(line).toStartWith(
         "[error-tracker] failed to record server error: Error: connect ECONNREFUSED"
@@ -565,6 +581,483 @@ describe("a database that hangs", () => {
       expect(log.lines[0]).toContain("no answer from the database within 20 ms");
     } finally {
       process.off("unhandledRejection", onUnhandled);
+    }
+  });
+});
+
+interface Frame {
+  fn?: string;
+  file: string;
+  line: number;
+  column: number;
+}
+
+/** A V8 stack for `message` whose frames sit in the given chunk files. */
+function stackIn(message: string, frames: Frame[]): string {
+  return [
+    `Error: ${message}`,
+    ...frames.map(({ fn, file, line, column }) =>
+      fn
+        ? `    at ${fn} (${file}:${line}:${column})`
+        : `    at ${file}:${line}:${column}`
+    ),
+  ].join("\n");
+}
+
+/** An Error carrying exactly `stack`. */
+function errorWithStack(message: string, stack: string, name = "Error"): Error {
+  const error = new Error(message);
+  error.name = name;
+  error.stack = stack;
+  return error;
+}
+
+const BUILD_A: Frame[] = [
+  { fn: "t", file: "/srv/app/.next/server/chunks/[root-of-the-server]__0uc8_0l0xgs3p._.js", line: 1, column: 240 },
+  { fn: "AsyncLocalStorage.run", file: "node:internal/async_local_storage/async_context_frame", line: 59, column: 14 },
+  { fn: "r0.renderToResponse", file: "/srv/app/node_modules/next/dist/compiled/next-server/app-route-turbo.runtime.prod.js", line: 5, column: 3711 },
+];
+
+/** The same frames after a redeploy: new chunk hash, new directory, new positions. */
+const BUILD_B: Frame[] = [
+  { fn: "t", file: "/var/task/.next/server/chunks/[root-of-the-server]__9zz1_7qq2kk1x._.js", line: 3, column: 1022 },
+  { fn: "AsyncLocalStorage.run", file: "node:internal/async_local_storage/async_context_frame", line: 61, column: 9 },
+  { fn: "r0.renderToResponse", file: "/var/task/node_modules/next/dist/compiled/next-server/app-route-turbo.runtime.prod.js", line: 5, column: 3790 },
+];
+
+describe("server fingerprint", () => {
+  const fp = (
+    frames: Frame[],
+    overrides: { name?: string; message?: string; route?: string | null } = {}
+  ) =>
+    computeServerFingerprint(
+      overrides.name ?? "Error",
+      overrides.message ?? "webhook signature mismatch",
+      overrides.route === undefined ? "/api/webhooks/github" : overrides.route,
+      parseFrames(stackIn("x", frames))
+    );
+
+  test("ignores chunk hashes, paths, lines and columns", () => {
+    expect(fp(BUILD_A)).toBe(fp(BUILD_B));
+  });
+
+  test("changes with a top frame's function name", () => {
+    const renamed = BUILD_A.map((f, i) => (i === 0 ? { ...f, fn: "verify" } : f));
+    expect(fp(renamed)).not.toBe(fp(BUILD_A));
+  });
+
+  test("changes with the route, the message and the error name", () => {
+    expect(fp(BUILD_A, { route: "/api/webhooks/stripe" })).not.toBe(fp(BUILD_A));
+    expect(fp(BUILD_A, { message: "other" })).not.toBe(fp(BUILD_A));
+    expect(fp(BUILD_A, { name: "TypeError" })).not.toBe(fp(BUILD_A));
+  });
+
+  test("uses only the top three frames", () => {
+    const deeper = [...BUILD_A, { fn: "extra", file: "/x.js", line: 1, column: 1 }];
+    expect(fp(deeper)).toBe(fp(BUILD_A));
+  });
+
+  test("frames without function names add nothing, leaving name, message and route", () => {
+    const anonymousA = BUILD_A.map(({ fn: _fn, ...rest }) => rest);
+    const anonymousB = BUILD_B.map(({ fn: _fn, ...rest }) => rest);
+    expect(fp(anonymousA)).toBe(fp(anonymousB));
+    expect(fp(anonymousA)).toBe(fp([]));
+    expect(fp(anonymousA, { route: "/other" })).not.toBe(fp(anonymousA));
+  });
+
+  test("a missing route fingerprints apart from any route", () => {
+    expect(fp(BUILD_A, { route: null })).not.toBe(fp(BUILD_A));
+  });
+
+  test("the same error from two builds lands on one row", async () => {
+    const reporter = createServerErrorReporter(sqliteConfig());
+    const message = "webhook signature mismatch";
+    await reporter.reportServerError(errorWithStack(message, stackIn(message, BUILD_A)), {
+      route: "/api/webhooks/github",
+    });
+    await reporter.reportServerError(errorWithStack(message, stackIn(message, BUILD_B)), {
+      route: "/api/webhooks/github",
+    });
+
+    const row = await readOnlyClientError();
+    expect(row.occurrences).toBe(2);
+  });
+});
+
+/**
+ * A made-up key of the given prefix. Assembled at runtime so the source holds
+ * no literal that secret scanners (GitHub push protection) take for a real key.
+ */
+function fakeKey(prefix: string, body = "FAKE0000fake1111FAKE2222"): string {
+  return [prefix, body].join("_");
+}
+
+describe("maskSecrets", () => {
+  const KEYS = [
+    fakeKey("sk_live"),
+    fakeKey("sk_test"),
+    fakeKey("rk_live"),
+    fakeKey("pk_test"),
+    fakeKey("whsec"),
+    fakeKey("ghp"),
+    fakeKey("gho"),
+    fakeKey("ghu"),
+    fakeKey("ghs"),
+    fakeKey("ghr"),
+    fakeKey("github_pat", "FAKE0000fake1111_FAKE2222fake3333"),
+  ];
+
+  for (const key of KEYS) {
+    test(`masks ${key.split("_")[0]}_ keys`, () => {
+      const masked = maskSecrets(`Invalid API key provided: ${key}.`);
+      expect(masked).toBe("Invalid API key provided: [redacted].");
+    });
+  }
+
+  test("masks a bearer credential whatever its shape", () => {
+    expect(maskSecrets("sent Authorization: Bearer abc.DEF-123_~+/= then failed")).toBe(
+      "sent Authorization: Bearer [redacted] then failed"
+    );
+    expect(maskSecrets("bearer opaque-token-value")).toBe("bearer [redacted]");
+  });
+
+  test("masks a JWT", () => {
+    const jwt =
+      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
+    expect(maskSecrets(`token ${jwt} expired`)).toBe("token [redacted] expired");
+  });
+
+  test("leaves identifiers that only look like a prefix alone", () => {
+    for (const text of [
+      "task_list_items",
+      "risk_score",
+      'constraint "pk_user_roles_unique" failed',
+      "sk_short1",
+      "column github_pat_count",
+    ]) {
+      expect(maskSecrets(text)).toBe(text);
+    }
+  });
+
+  test("is driven by the exported REDACTION_PATTERNS list", () => {
+    expect(REDACTION_PATTERNS.length).toBeGreaterThanOrEqual(3);
+    for (const pattern of REDACTION_PATTERNS) {
+      expect(pattern.flags).toContain("g");
+    }
+  });
+});
+
+describe("masking stored server errors", () => {
+  test("a credential quoted back in an upstream error is masked in message and stack", async () => {
+    const reporter = createServerErrorReporter(sqliteConfig());
+    const error = new Error(
+      `Invalid API key provided: ${fakeKey("sk_test")}`
+    );
+    await reporter.reportServerError(error, { tag: "stripe" });
+
+    const row = await readOnlyClientError();
+    expect(row.message).toBe("Error: Invalid API key provided: [redacted]");
+    expect(row.stack).toStartWith("Error: Invalid API key provided: [redacted]\n");
+    expect(JSON.stringify(row)).not.toContain("sk_test_");
+  });
+
+  test("a token in a caller-supplied tag or route is masked", async () => {
+    const reporter = createServerErrorReporter(sqliteConfig());
+    await reporter.reportServerError(new Error("x"), {
+      tag: `job ${fakeKey("ghp")}`,
+      route: `/api/hook/${fakeKey("whsec")}`,
+    });
+    const row = await readOnlyClientError();
+    expect(row.tag).toBe("job [redacted]");
+    expect(row.route).toBe("/api/hook/[redacted]");
+  });
+
+  test("one error carrying two different tokens is one row", async () => {
+    const reporter = createServerErrorReporter(sqliteConfig());
+    for (const key of [
+      fakeKey("sk_test"),
+      fakeKey("sk_test", "FAKE9999fake8888FAKE7777"),
+    ]) {
+      const error = new Error(`Invalid API key provided: ${key}`);
+      // Same throw site, so the frames match and only the token differs.
+      error.stack = `Error: Invalid API key provided: ${key}\n    at charge (/srv/app/.next/server/chunks/a.js:1:1)`;
+      await reporter.reportServerError(error, { route: "/api/billing" });
+    }
+    const row = await readOnlyClientError();
+    expect(row.occurrences).toBe(2);
+  });
+});
+
+describe("Drizzle query errors", () => {
+  const QUERY = 'insert into "users" ("email", "stripe_customer_id") values ($1, $2)';
+  const queryError = (params: unknown[]) => {
+    const error = new DrizzleQueryError(
+      QUERY,
+      params,
+      new Error('duplicate key value violates unique constraint "users_email_key"')
+    );
+    error.stack = `Error: ${error.message}\n    at insertUser (/srv/app/.next/server/chunks/a.js:1:1)`;
+    return error;
+  };
+
+  test("stores the statement and the root cause, not the parameters", async () => {
+    const reporter = createServerErrorReporter(sqliteConfig());
+    await reporter.reportServerError(
+      queryError(["alice@example.com", "cus_Q1w2e3r4t5y6"]),
+      { route: "/api/signup" }
+    );
+
+    const row = await readOnlyClientError();
+    expect(row.message).toBe(
+      `Error: Failed query: ${QUERY} [cause: duplicate key value violates unique constraint "users_email_key"]`
+    );
+    expect(row.stack).toBe(
+      `Error: Failed query: ${QUERY} [cause: duplicate key value violates unique constraint "users_email_key"]\n    at insertUser (/srv/app/.next/server/chunks/a.js:1:1)`
+    );
+    const stored = JSON.stringify(row);
+    expect(stored).not.toContain("alice@example.com");
+    expect(stored).not.toContain("cus_Q1w2e3r4t5y6");
+    expect(stored).not.toContain("params:");
+  });
+
+  test("the cause's class name is left out, since bundling minifies it", async () => {
+    // postgres-js names its errors after the class, which a production
+    // bundle renames.
+    class ei extends Error {
+      override name = this.constructor.name;
+    }
+    const minified = new DrizzleQueryError(QUERY, [1], new ei("relation \"users\" does not exist"));
+    minified.name = "Error";
+    const reporter = createServerErrorReporter(sqliteConfig());
+    await reporter.reportServerError(minified);
+    expect((await readOnlyClientError()).message).toBe(
+      `Error: Failed query: ${QUERY} [cause: relation "users" does not exist]`
+    );
+  });
+
+  test("the same failed statement with different parameters is one row", async () => {
+    const reporter = createServerErrorReporter(sqliteConfig());
+    await reporter.reportServerError(queryError(["a@example.com", "cus_1"]));
+    await reporter.reportServerError(queryError(["b@example.com", "cus_2"]));
+    expect((await readOnlyClientError()).occurrences).toBe(2);
+  });
+
+  test("parameters spanning several lines are dropped from the stack too", async () => {
+    const reporter = createServerErrorReporter(sqliteConfig());
+    const error = new DrizzleQueryError(QUERY, ["line one\nline two SECRET_PARAM", 2]);
+    error.stack = `Error: ${error.message}\n    at insertUser (/srv/app/a.js:1:1)`;
+    await reporter.reportServerError(error);
+
+    const row = await readOnlyClientError();
+    expect(row.message).toBe(`Error: Failed query: ${QUERY}`);
+    expect(row.stack).toBe(`Error: Failed query: ${QUERY}\n    at insertUser (/srv/app/a.js:1:1)`);
+  });
+
+  test("a real query failure through Drizzle stores no bound values", async () => {
+    let thrown: unknown;
+    try {
+      await testDb.run(
+        sql`select * from no_such_table where email = ${"carol@example.com"}`
+      );
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain("carol@example.com");
+
+    const reporter = createServerErrorReporter(sqliteConfig());
+    await reporter.reportServerError(thrown);
+
+    const row = await readOnlyClientError();
+    expect(row.message).toStartWith(
+      "Error: Failed query: select * from no_such_table where email = ? [cause: "
+    );
+    expect(row.message).toContain("no such table");
+    expect(JSON.stringify(row)).not.toContain("carol@example.com");
+  });
+});
+
+describe("circuit breaker", () => {
+  const START = new Date("2026-11-14T12:00:00.000Z");
+
+  beforeEach(() => {
+    setSystemTime(START);
+  });
+
+  afterEach(() => {
+    setSystemTime();
+  });
+
+  const advance = (ms: number) => setSystemTime(new Date(Date.now() + ms));
+
+  /** A fake db whose writes fail while `down` is set, counting every attempt. */
+  function flakyDb() {
+    const state = { down: true, attempts: 0 };
+    return {
+      state,
+      db: fakeDb(() => {
+        state.attempts += 1;
+        return state.down
+          ? Promise.reject(new Error("connect ECONNREFUSED 10.0.0.5:5432"))
+          : Promise.resolve();
+      }),
+    };
+  }
+
+  test("after 3 failures the 4th report returns at once without touching the database", async () => {
+    const { db, state } = flakyDb();
+    const reporter = createServerErrorReporter({ db, dialect: "sqlite" });
+
+    for (let i = 0; i < 3; i++) await reporter.reportServerError(new Error("x"));
+    expect(state.attempts).toBe(3);
+
+    const started = performance.now();
+    await reporter.reportServerError(new Error("x"));
+    expect(performance.now() - started).toBeLessThan(20);
+    expect(state.attempts).toBe(3);
+
+    expect(log.lines).toEqual([
+      "[error-tracker] failed to record server error: Error: connect ECONNREFUSED 10.0.0.5:5432",
+      "[error-tracker] 3 consecutive writes failed; skipping server error reports for 30000 ms",
+    ]);
+  });
+
+  test("timed-out writes count as failures, and an open breaker does not wait", async () => {
+    let attempts = 0;
+    const reporter = createServerErrorReporter({
+      db: fakeDb(() => {
+        attempts += 1;
+        return new Promise(() => {});
+      }),
+      dialect: "sqlite",
+      timeoutMs: 20,
+    });
+
+    for (let i = 0; i < 3; i++) await reporter.reportServerError(new Error("x"));
+    const started = performance.now();
+    await reporter.reportServerError(new Error("x"));
+    expect(performance.now() - started).toBeLessThan(15);
+    expect(attempts).toBe(3);
+    expect(log.lines).toHaveLength(2);
+    expect(log.lines[1]).toContain("skipping server error reports");
+  });
+
+  test("tries one write after the window; a failure reopens it without logging", async () => {
+    const { db, state } = flakyDb();
+    const reporter = createServerErrorReporter({ db, dialect: "sqlite" });
+    for (let i = 0; i < 3; i++) await reporter.reportServerError(new Error("x"));
+
+    advance(29_999);
+    await reporter.reportServerError(new Error("x"));
+    expect(state.attempts).toBe(3);
+
+    advance(1);
+    await reporter.reportServerError(new Error("x"));
+    expect(state.attempts).toBe(4);
+
+    // Reopened: the next report inside the new window is skipped.
+    await reporter.reportServerError(new Error("x"));
+    expect(state.attempts).toBe(4);
+    expect(log.lines).toHaveLength(2);
+  });
+
+  test("a successful trial write closes the breaker and logs it once", async () => {
+    const { db, state } = flakyDb();
+    const reporter = createServerErrorReporter({ db, dialect: "sqlite" });
+    for (let i = 0; i < 3; i++) await reporter.reportServerError(new Error("x"));
+    await reporter.reportServerError(new Error("skipped"));
+    await reporter.reportServerError(new Error("skipped"));
+
+    state.down = false;
+    advance(30_000);
+    await reporter.reportServerError(new Error("x"));
+    expect(state.attempts).toBe(4);
+    expect(log.lines[2]).toBe(
+      "[error-tracker] database writes succeeded again; resuming server error reports (2 skipped)"
+    );
+
+    // Closed: every report writes again.
+    await reporter.reportServerError(new Error("x"));
+    expect(state.attempts).toBe(5);
+    expect(log.lines).toHaveLength(3);
+  });
+
+  test("only one trial write runs at a time; reports during it are skipped", async () => {
+    let attempts = 0;
+    let release: (() => void) | undefined;
+    let down = true;
+    const reporter = createServerErrorReporter({
+      db: fakeDb(() => {
+        attempts += 1;
+        if (down) return Promise.reject(new Error("down"));
+        return new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }),
+      dialect: "sqlite",
+    });
+    for (let i = 0; i < 3; i++) await reporter.reportServerError(new Error("x"));
+
+    down = false;
+    advance(30_000);
+    const trial = reporter.reportServerError(new Error("trial"));
+    await reporter.reportServerError(new Error("during trial"));
+    expect(attempts).toBe(4);
+
+    release?.();
+    await trial;
+    await reporter.reportServerError(new Error("after"));
+    expect(attempts).toBe(5);
+  });
+
+  test("a success resets the count, so failures must be consecutive", async () => {
+    const { db, state } = flakyDb();
+    const reporter = createServerErrorReporter({ db, dialect: "sqlite" });
+
+    await reporter.reportServerError(new Error("x"));
+    await reporter.reportServerError(new Error("x"));
+    state.down = false;
+    await reporter.reportServerError(new Error("x"));
+    state.down = true;
+    await reporter.reportServerError(new Error("x"));
+    await reporter.reportServerError(new Error("x"));
+
+    expect(state.attempts).toBe(5);
+    // Two streaks, each logging its first failure; neither reached 3.
+    expect(log.lines).toHaveLength(2);
+    expect(log.lines.every((line) => line.includes("failed to record"))).toBe(true);
+  });
+
+  test("the threshold and the window are configurable", async () => {
+    const { db, state } = flakyDb();
+    const reporter = createServerErrorReporter({
+      db,
+      dialect: "sqlite",
+      breaker: { failures: 1, cooldownMs: 1_000 },
+    });
+
+    await reporter.reportServerError(new Error("x"));
+    await reporter.reportServerError(new Error("x"));
+    expect(state.attempts).toBe(1);
+    expect(log.lines[1]).toBe(
+      "[error-tracker] 1 consecutive writes failed; skipping server error reports for 1000 ms"
+    );
+
+    advance(1_000);
+    await reporter.reportServerError(new Error("x"));
+    expect(state.attempts).toBe(2);
+  });
+
+  test("rejects a threshold or window that is not positive", () => {
+    for (const breaker of [
+      { failures: 0 },
+      { failures: 1.5 },
+      { cooldownMs: 0 },
+      { cooldownMs: Number.NaN },
+    ]) {
+      expect(() =>
+        createServerErrorReporter({ ...sqliteConfig(), breaker })
+      ).toThrow(/breaker/);
     }
   });
 });

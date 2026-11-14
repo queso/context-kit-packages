@@ -181,7 +181,8 @@ describe("postgres dialect", () => {
           { path: "/api/x?token=secret", method: "POST", headers: {} },
           { routePath: "/api/x", routeType: "route" }
         );
-        await reporter.reportServerError(error, { tag: "job" });
+        // Same route, so the same fingerprint: the route is part of it.
+        await reporter.reportServerError(error, { tag: "job", route: "/api/x" });
 
         const rows = await rowsFor();
         expect(rows).toHaveLength(1);
