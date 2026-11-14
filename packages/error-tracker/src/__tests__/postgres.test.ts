@@ -257,8 +257,13 @@ describe("postgres dialect", () => {
         expect(row?.source).toBe("client");
         expect(row?.route).toBeNull();
       } finally {
-        await scoped.end({ timeout: 5 });
-        await admin.execute(sql.raw(`DROP SCHEMA "${namespace}" CASCADE`));
+        // The schema is dropped even if closing the scoped connection fails,
+        // so a rerun against a shared database starts clean.
+        try {
+          await scoped.end({ timeout: 5 });
+        } finally {
+          await admin.execute(sql.raw(`DROP SCHEMA "${namespace}" CASCADE`));
+        }
       }
     }
   );
