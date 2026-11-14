@@ -18,6 +18,7 @@ import postgres from "postgres";
 import { computeFingerprint } from "../server/ingestion";
 import { DrizzleQueryError, sql } from "drizzle-orm";
 import { parseFrames } from "../server/parse-stack";
+import { createBreaker } from "../server/server-reporter";
 import {
   computeServerFingerprint,
   createIngestionHandler,
@@ -335,10 +336,37 @@ describe("reportServerError", () => {
   test("records a thrown non-Error value", async () => {
     const reporter = createServerErrorReporter(sqliteConfig());
     await reporter.reportServerError("plain string thrown");
-    await reporter.reportServerError({ code: 42 });
+    await reporter.reportServerError(42);
 
     const messages = (await readClientErrors()).map((row) => row.message).sort();
-    expect(messages).toEqual(['Error: plain string thrown', 'Error: {"code":42}']);
+    expect(messages).toEqual(["Error: 42", "Error: plain string thrown"]);
+  });
+
+  test("a thrown plain object is stored by its keys, never its values", async () => {
+    const reporter = createServerErrorReporter(sqliteConfig());
+    await reporter.reportServerError({
+      code: 502,
+      request: { headers: { authorization: `Bearer ${SECRET}` } },
+      body: { password: SECRET },
+    });
+
+    const row = await readOnlyClientError();
+    expect(row.message).toBe(
+      "Error: non-Error object thrown with keys: code, request, body"
+    );
+    expect(JSON.stringify(row)).not.toContain(SECRET);
+    expect(JSON.stringify(row)).not.toContain("502");
+  });
+
+  test("a thrown array or null is described by its type", async () => {
+    const reporter = createServerErrorReporter(sqliteConfig());
+    await reporter.reportServerError([SECRET]);
+    await reporter.reportServerError(null);
+    const messages = (await readClientErrors()).map((row) => row.message).sort();
+    expect(messages).toEqual([
+      "Error: non-Error array thrown",
+      "Error: null thrown",
+    ]);
   });
 
   test("survives an error whose properties throw when read", async () => {
@@ -1026,6 +1054,29 @@ describe("circuit breaker", () => {
     // Two streaks, each logging its first failure; neither reached 3.
     expect(log.lines).toHaveLength(2);
     expect(log.lines.every((line) => line.includes("failed to record"))).toBe(true);
+  });
+
+  test("a report that never reached the database neither counts toward the breaker nor spends the trial", () => {
+    // `report` calls `abandoned` when its own code throws before writing, so
+    // a bug in the reporter cannot pass for a database outage.
+    const breaker = createBreaker(3, 30_000);
+
+    for (let i = 0; i < 5; i++) {
+      expect(breaker.admit()).toBe("write");
+      breaker.abandoned("write");
+    }
+    expect(breaker.admit()).toBe("write");
+
+    for (let i = 0; i < 3; i++) breaker.failed("write", "down");
+    expect(breaker.admit()).toBe("skip");
+
+    advance(30_000);
+    expect(breaker.admit()).toBe("trial");
+    breaker.abandoned("trial");
+    // The slot is free again and the window has not restarted.
+    expect(breaker.admit()).toBe("trial");
+    breaker.succeeded("trial");
+    expect(breaker.admit()).toBe("write");
   });
 
   test("the threshold and the window are configurable", async () => {

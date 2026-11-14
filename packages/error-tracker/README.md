@@ -238,7 +238,7 @@ All three context fields are optional. A query string or fragment in `route` is 
 
 ### What is stored
 
-For a server error: the error's name and message (stored together as `Name: message`), its stack, the route pattern, the HTTP method and the tag. `onRequestError` takes the route pattern from Next's `context.routePath` and the tag from `context.routeType`. It never reads `request.path`, which holds the concrete URL and its query string, or `request.headers`. Request bodies, headers, cookies and environment variables are never stored. `url` and `user_agent` stay null.
+For a server error: the error's name and message (stored together as `Name: message`), its stack, the route pattern, the HTTP method and the tag. `onRequestError` takes the route pattern from Next's `context.routePath` and the tag from `context.routeType`. It never reads `request.path`, which holds the concrete URL and its query string, or `request.headers`. Request bodies, headers, cookies and environment variables are never stored. `url` and `user_agent` stay null. A thrown value that is not an Error is not serialized: a string or number is stored as it is, and an object is described by its top-level keys only (`non-Error object thrown with keys: code, request`), so throwing a request or response object cannot store its headers.
 
 The error's own message and stack are cleaned before they are stored:
 

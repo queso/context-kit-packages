@@ -113,16 +113,32 @@ function safeRead(value: unknown, key: string): unknown {
   return typeof value === "object" && value !== null ? read(value, key) : undefined;
 }
 
+const MAX_DESCRIBED_KEYS = 10;
+
+/**
+ * Text for a thrown value that is not an Error. A string or other primitive
+ * is used as it is. An object is described by its top-level keys only, never
+ * serialized: code that throws `{ request, response }` would otherwise put
+ * headers and bodies into the row.
+ */
 function describeValue(value: unknown): string {
   if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value) ?? String(value);
-  } catch {
+  if (value === null) return "null thrown";
+  if (typeof value === "object") {
     try {
-      return String(value);
+      if (Array.isArray(value)) return "non-Error array thrown";
+      const keys = Object.keys(value).slice(0, MAX_DESCRIBED_KEYS);
+      return keys.length > 0
+        ? `non-Error object thrown with keys: ${keys.join(", ")}`
+        : "non-Error object thrown";
     } catch {
-      return "unserializable thrown value";
+      return "non-Error object thrown";
     }
+  }
+  try {
+    return String(value);
+  } catch {
+    return "unserializable thrown value";
   }
 }
 
@@ -271,7 +287,7 @@ type Admission = "write" | "trial" | "skip";
  * Logs exactly three kinds of line: the first failure of a streak, the
  * moment it opens, and the moment it closes.
  */
-function createBreaker(failures: number, cooldownMs: number) {
+export function createBreaker(failures: number, cooldownMs: number) {
   let streak = 0;
   let openUntil: number | null = null;
   let trialRunning = false;
@@ -297,6 +313,15 @@ function createBreaker(failures: number, cooldownMs: number) {
         `database writes succeeded again; resuming server error reports (${skipped} skipped)`
       );
       skipped = 0;
+    },
+
+    /**
+     * The report threw in this package's own code before it wrote anything.
+     * That says nothing about the database, so the streak is untouched and a
+     * trial slot is handed back for the next report.
+     */
+    abandoned(admission: Admission): void {
+      if (admission === "trial") trialRunning = false;
     },
 
     failed(admission: Admission, detail: string): void {
@@ -431,7 +456,10 @@ export function createServerErrorReporter(
       if (failure === null) breaker.succeeded(admission);
       else breaker.failed(admission, failure);
     } catch (unexpected) {
-      if (admission !== "skip") breaker.failed(admission, oneLine(unexpected));
+      // `write` never rejects, so this is this package's own code failing,
+      // not the database.
+      breaker.abandoned(admission);
+      log(`failed to record server error: ${oneLine(unexpected)}`);
     }
   }
 
