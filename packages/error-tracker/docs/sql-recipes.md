@@ -38,6 +38,18 @@ ORDER BY last_seen_at DESC
 LIMIT 20;
 ```
 
+### Server errors by route
+
+Both dialects. `source` is `client` for browser reports and `server` for errors recorded by `onRequestError` or `reportServerError`:
+
+```sql
+SELECT route, method, tag, message, occurrences, last_seen_at
+FROM client_error
+WHERE source = 'server' AND resolved_at IS NULL
+ORDER BY last_seen_at DESC
+LIMIT 20;
+```
+
 ### Errors seen since a deployment
 
 There is one row per fingerprint for the life of the table, so `created_at` is the first time an error was ever seen. An error that existed months ago and recurred this morning keeps its original `created_at`. Filter on `last_seen_at` to find what is happening now, and on `created_at` to find what is new.

@@ -142,6 +142,25 @@ src/
 
 The `bin` field maps the `error-tracker` binary to the same `dist/cli.js`.
 
+## Server Reporter (`src/server/server-reporter.ts`)
+
+`createServerErrorReporter({ db, dialect })` returns `onRequestError`, for Next's `instrumentation.ts`, and `reportServerError`, for code that catches its own errors. Both build the same `OccurrenceValues` the ingestion handler builds and write through the same `store.recordOccurrence` upsert, so server rows share the occurrence counter and the reopen-on-recurrence behaviour. The differences are `source: "server"`, the `route`, `method` and `tag` columns, and the fingerprint.
+
+```
+error ─► breaker admits? (no: return at once)
+      ─► describe (name, message, stack; tolerant of throwing getters)
+      ─► drop Drizzle params, mask secrets (src/server/redact.ts), cap lengths
+      ─► strip query string from route, validate method
+      ─► computeServerFingerprint ─► race(store.recordOccurrence, timeoutMs)
+      ─► tell the breaker ─► resolve
+```
+
+`computeServerFingerprint` hashes the error name, the cleaned message, the route pattern and the function names of the top three frames. It leaves out file paths, chunk names, lines and columns, which a production build changes on every deploy.
+
+The reporter reads only `context.routePath`, `context.routeType` and `request.method` from Next's arguments. `request.path` and `request.headers` are never touched, so a query string, a cookie or an authorization header cannot reach the row.
+
+The returned promise always resolves. A write that rejects or outlives `timeoutMs` counts as a failure; a late write is left to the driver and its eventual rejection is absorbed so it never becomes an unhandled rejection. Failures feed a breaker: after `breaker.failures` in a row (3) it skips writes for `breaker.cooldownMs` (30 s), then lets one trial write through. It logs the first failure of a streak (the root cause only, since Drizzle's wrapper error lists the parameters), the opening and the closing.
+
 ## Design Decisions
 
 **Why not Sentry/GlitchTip?** Context-kit apps already have a database. Writing errors to it removes the external service dependency, works offline, and gives AI coding tools direct SQL access.
@@ -151,6 +170,14 @@ The `bin` field maps the `error-tracker` binary to the same `dist/cli.js`.
 **Why ship a schema module per dialect instead of one copy-paste model?** The consumer re-exports the module from `db/schema/<dialect>.ts` and runs `bun run db:generate`, so drizzle-kit produces the migration and the app owns the history. A schema change in a later version arrives as a reviewable diff migration rather than a docs instruction to edit a model by hand.
 
 **Why fire-and-forget?** Error reporting must never degrade the user experience. The `fetch` is not awaited, and any failure (network down, server error) is caught and dropped.
+
+**Why one table for browser and server errors?** The fingerprint, counter, resolve and reopen logic, the query API and the CLI already exist for `client_error`. A `source` column with a `client` default is an additive migration and leaves every 0.1.0 row valid, where a second table would duplicate all of it.
+
+**Why a separate fingerprint for server errors?** The browser fingerprint includes file, line and column, which `resolvedStack` keeps stable across builds. Server stacks have no such resolution yet, and their chunk names and positions change on every deploy, so the server fingerprint keeps only what survives a rebuild: name, message, route and function names.
+
+**Why a breaker?** Next.js waits for `onRequestError` before sending a route handler's error response. Without a breaker, every failing request during a database outage would wait the full timeout and add a log line.
+
+**Why a bounded wait instead of fire-and-forget on the server?** On a serverless platform the process may be frozen as soon as the response is sent, so an unawaited write can be lost. Awaiting with a time limit keeps the write likely to land while capping how long a broken database can delay a response.
 
 **Why SHA-256 fingerprinting?** Deterministic, fast, and collision-resistant enough for error grouping. Using the top 3 resolved frames (not raw frames) keeps fingerprints stable across builds.
 

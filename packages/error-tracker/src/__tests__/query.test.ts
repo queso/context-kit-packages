@@ -192,6 +192,10 @@ describe("query handler response shape", () => {
       environment: "production",
       url: "https://example.com/dashboard",
       userAgent: "Mozilla/5.0",
+      source: "client",
+      route: null,
+      method: null,
+      tag: null,
       resolvedAt: resolvedAt.toISOString(),
       createdAt: seeded.createdAt.toISOString(),
       updatedAt: seeded.updatedAt.toISOString(),
@@ -232,6 +236,7 @@ describe("query handler filters", () => {
         fingerprint: "fp-staging-open",
         environment: "staging",
         lastSeenAt: new Date("2026-02-01T00:00:00Z"),
+        source: "server",
       },
     ]);
   });
@@ -287,6 +292,27 @@ describe("query handler filters", () => {
     const body = await query({ env: "production", resolved: "false" });
     expect(fingerprints(body)).toEqual(["fp-prod-open"]);
     expect(body.total).toBe(1);
+  });
+
+  test("source=server returns only server errors", async () => {
+    const body = await query({ source: "server" });
+    expect(fingerprints(body)).toEqual(["fp-staging-open"]);
+    expect(body.total).toBe(1);
+  });
+
+  test("source=client returns only browser errors, including rows that never set a source", async () => {
+    const body = await query({ source: "client" });
+    expect(fingerprints(body)).toEqual(["fp-prod-open", "fp-prod-resolved"]);
+    expect(body.total).toBe(2);
+  });
+
+  test("each row carries its source", async () => {
+    const body = await query();
+    expect(body.errors.map((row) => row.source)).toEqual([
+      "client",
+      "client",
+      "server",
+    ]);
   });
 });
 
@@ -349,6 +375,14 @@ describe("query handler parameter validation", () => {
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({
       error: "since must be an ISO 8601 date",
+    });
+  });
+
+  test("returns 400 when source is neither client nor server", async () => {
+    const res = await handler(queryRequest({ source: "edge" }));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: 'source must be "client" or "server"',
     });
   });
 });

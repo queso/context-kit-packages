@@ -24,6 +24,13 @@ import type { DatabaseConfig } from "../types.js";
  */
 export type ClientErrorRecord = ClientError;
 
+/** Where an error was raised: the browser or the app's server. */
+export type ErrorSource = "client" | "server";
+
+export function isErrorSource(value: unknown): value is ErrorSource {
+  return value === "client" || value === "server";
+}
+
 /** The fields an incoming report contributes to the `client_error` row. */
 export interface OccurrenceValues {
   message: string;
@@ -34,6 +41,11 @@ export interface OccurrenceValues {
   environment: string;
   url: string | null;
   userAgent: string | null;
+  source: ErrorSource;
+  /** Server errors only; null for browser reports. */
+  route: string | null;
+  method: string | null;
+  tag: string | null;
   /** Timestamp applied to `lastSeenAt`/`createdAt`/`updatedAt`. */
   now: Date;
 }
@@ -44,6 +56,7 @@ export interface ListFilters {
   fingerprint?: string;
   /** `true` matches resolved rows, `false` unresolved ones. */
   resolved?: boolean;
+  source?: ErrorSource;
 }
 
 export interface ListOptions {
@@ -61,8 +74,11 @@ export interface ErrorStore {
   /** Inserts the row, or increments and reopens the existing fingerprint. */
   recordOccurrence(values: OccurrenceValues): Promise<void>;
   list(options: ListOptions): Promise<ListResult>;
-  /** Resolves an open error; returns how many rows changed (0 or 1). */
-  resolve(fingerprint: string): Promise<number>;
+  /**
+   * Resolves an open error; returns how many rows changed (0 or 1). With a
+   * `source`, only an error from that source is resolved.
+   */
+  resolve(fingerprint: string, source?: ErrorSource): Promise<number>;
 }
 
 type ClientErrorTable = typeof sqliteClientError | typeof postgresClientError;
@@ -84,6 +100,10 @@ function insertValues(values: OccurrenceValues) {
     environment: values.environment,
     url: values.url,
     userAgent: values.userAgent,
+    source: values.source,
+    route: values.route,
+    method: values.method,
+    tag: values.tag,
     lastSeenAt: values.now,
     createdAt: values.now,
     updatedAt: values.now,
@@ -123,8 +143,24 @@ function buildWhere(table: ClientErrorTable, filters: ListFilters = {}) {
   } else if (filters.resolved === false) {
     conditions.push(isNull(table.resolvedAt));
   }
+  if (filters.source) {
+    conditions.push(eq(table.source, filters.source));
+  }
 
   return conditions.length > 0 ? and(...conditions) : undefined;
+}
+
+/** The open row for `fingerprint`, narrowed to `source` when one is given. */
+function resolvableWhere(
+  table: ClientErrorTable,
+  fingerprint: string,
+  source: ErrorSource | undefined
+) {
+  return and(
+    eq(table.fingerprint, fingerprint),
+    isNull(table.resolvedAt),
+    source ? eq(table.source, source) : undefined
+  );
 }
 
 function createSQLiteStore(db: SQLiteDatabase): ErrorStore {
@@ -158,14 +194,12 @@ function createSQLiteStore(db: SQLiteDatabase): ErrorStore {
       return { errors, total: totals[0]?.value ?? 0 };
     },
 
-    async resolve(fingerprint) {
+    async resolve(fingerprint, source) {
       const now = new Date();
       const updated = await db
         .update(table)
         .set({ resolvedAt: now, updatedAt: now })
-        .where(
-          and(eq(table.fingerprint, fingerprint), isNull(table.resolvedAt))
-        )
+        .where(resolvableWhere(table, fingerprint, source))
         .returning({ id: table.id });
       return updated.length;
     },
@@ -201,14 +235,12 @@ function createPostgresStore(db: PostgresDatabase): ErrorStore {
       return { errors, total: totals[0]?.value ?? 0 };
     },
 
-    async resolve(fingerprint) {
+    async resolve(fingerprint, source) {
       const now = new Date();
       const updated = await db
         .update(table)
         .set({ resolvedAt: now, updatedAt: now })
-        .where(
-          and(eq(table.fingerprint, fingerprint), isNull(table.resolvedAt))
-        )
+        .where(resolvableWhere(table, fingerprint, source))
         .returning({ id: table.id });
       return updated.length;
     },

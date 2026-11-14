@@ -14,6 +14,7 @@ import {
   CliConfigError,
   CliUsageError,
   NotFoundError,
+  parseResolveArgs,
   parseTailArgs,
   runMain,
   runResolve,
@@ -164,6 +165,44 @@ describe("runTail", () => {
     );
     expect(out).toContain("fp-stage");
     expect(out).not.toContain("fp-prod");
+  });
+
+  test("prints only the requested source", async () => {
+    await seedClientErrors([
+      { fingerprint: "fp-browser", source: "client" },
+      { fingerprint: "fp-backend", source: "server" },
+    ]);
+
+    const server = await runCli(() =>
+      runTail({ db: testDb, dialect: DIALECT, source: "server" })
+    );
+    expect(server.out).toContain("fp-backend");
+    expect(server.out).not.toContain("fp-browser");
+
+    const client = await runCli(() =>
+      runTail({ db: testDb, dialect: DIALECT, source: "client" })
+    );
+    expect(client.out).toContain("fp-browser");
+    expect(client.out).not.toContain("fp-backend");
+  });
+
+  test("prints each error's source", async () => {
+    await seedClientError({ fingerprint: "fp-backend", source: "server" });
+    const { out } = await runCli(() =>
+      runTail({ db: testDb, dialect: DIALECT })
+    );
+    expect(out).toContain("Source");
+    expect(out).toMatch(/fp-backend\s+server\s/);
+  });
+
+  test("rejects a source other than client or server with a catchable CliUsageError", async () => {
+    await expect(
+      runTail({
+        db: testDb,
+        dialect: DIALECT,
+        source: "edge" as "server",
+      })
+    ).rejects.toBeInstanceOf(CliUsageError);
   });
 
   test("prints only errors last seen at or after `since`", async () => {
@@ -334,6 +373,48 @@ describe("parseTailArgs", () => {
   });
 });
 
+describe("source flags", () => {
+  test("parseTailArgs accepts --source client and --source server", () => {
+    expect(parseTailArgs(["--source", "server"]).source).toBe("server");
+    expect(parseTailArgs(["--source", "client"]).source).toBe("client");
+    expect(parseTailArgs([]).source).toBeUndefined();
+  });
+
+  test("parseTailArgs rejects any other --source value, or a missing one", () => {
+    expect(() => parseTailArgs(["--source", "edge"])).toThrow(CliUsageError);
+    expect(() => parseTailArgs(["--source"])).toThrow(CliUsageError);
+    expect(() => parseTailArgs(["--source", "--env", "x"])).toThrow(
+      '--source expects "client" or "server"'
+    );
+  });
+
+  test("parseResolveArgs takes a fingerprint and an optional --source", () => {
+    expect(parseResolveArgs(["fp-1"])).toEqual({ fingerprint: "fp-1" });
+    expect(parseResolveArgs(["fp-1", "--source", "server"])).toEqual({
+      fingerprint: "fp-1",
+      source: "server",
+    });
+    expect(parseResolveArgs(["--source", "client", "fp-1"])).toEqual({
+      fingerprint: "fp-1",
+      source: "client",
+    });
+  });
+
+  test("parseResolveArgs rejects a missing fingerprint, a second one, or a bad flag", () => {
+    expect(() => parseResolveArgs([])).toThrow(CliUsageError);
+    expect(() => parseResolveArgs(["--source", "server"])).toThrow(
+      CliUsageError
+    );
+    expect(() => parseResolveArgs(["fp-1", "fp-2"])).toThrow(CliUsageError);
+    expect(() => parseResolveArgs(["fp-1", "--source", "edge"])).toThrow(
+      CliUsageError
+    );
+    expect(() => parseResolveArgs(["fp-1", "--env", "x"])).toThrow(
+      "Unknown option: --env"
+    );
+  });
+});
+
 describe("captureConsole", () => {
   test("rethrows an error that is not the stubbed process.exit", async () => {
     const boom = new Error("boom");
@@ -373,6 +454,33 @@ describe("runResolve", () => {
     const resolved = await findClientError("fp-to-resolve");
     expect(resolved?.resolvedAt?.getTime()).toBeGreaterThanOrEqual(before);
     expect((await findClientError("fp-untouched"))?.resolvedAt).toBeNull();
+  });
+
+  test("with a source, resolves only an error from that source", async () => {
+    await seedClientError({ fingerprint: "fp-browser", source: "client" });
+
+    await expect(
+      runResolve({
+        db: testDb,
+        dialect: DIALECT,
+        fingerprint: "fp-browser",
+        source: "server",
+      })
+    ).rejects.toBeInstanceOf(NotFoundError);
+    expect((await findClientError("fp-browser"))?.resolvedAt).toBeNull();
+
+    const { codes } = await runCli(() =>
+      runResolve({
+        db: testDb,
+        dialect: DIALECT,
+        fingerprint: "fp-browser",
+        source: "client",
+      })
+    );
+    expect(codes).toEqual([]);
+    expect((await findClientError("fp-browser"))?.resolvedAt).toBeInstanceOf(
+      Date
+    );
   });
 
   test("throws a catchable NotFoundError when no error carries that fingerprint", async () => {
@@ -585,6 +693,17 @@ describe("runMain", () => {
     expect(codes).toEqual([1]);
     expect(out).toContain("Error: Unknown option: --limmit");
     expect(out).toContain("Usage: error-tracker <tail|resolve> [options]");
+  });
+
+  test("prints a usage error and exits 1 for resolve without a fingerprint or with a bad --source", async () => {
+    for (const args of [[], ["fp-1", "--source", "edge"]]) {
+      const { out, codes } = await runCli(() =>
+        runMain(["node", "error-tracker", "resolve", ...args])
+      );
+      expect(codes).toEqual([1]);
+      expect(out).toContain("Error: ");
+      expect(out).toContain("resolve  <fingerprint> --source client|server");
+    }
   });
 
   test("prints Error: <message> and exits 1 when DATABASE_URL is unset", async () => {
