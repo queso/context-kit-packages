@@ -142,6 +142,20 @@ src/
 
 The `bin` field maps the `error-tracker` binary to the same `dist/cli.js`.
 
+## Server Reporter (`src/server/server-reporter.ts`)
+
+`createServerErrorReporter({ db, dialect })` returns `onRequestError`, for Next's `instrumentation.ts`, and `reportServerError`, for code that catches its own errors. Both build the same `OccurrenceValues` the ingestion handler builds and write through the same `store.recordOccurrence` upsert, so server rows share the fingerprint function, the occurrence counter and the reopen-on-recurrence behaviour. The difference is `source: "server"` plus the `route`, `method` and `tag` columns.
+
+```
+error ─► describe (name, message, stack; tolerant of throwing getters)
+      ─► cap lengths, strip query string from route, validate method
+      ─► fingerprint ─► race(store.recordOccurrence, timeoutMs) ─► resolve
+```
+
+The reporter reads only `context.routePath`, `context.routeType` and `request.method` from Next's arguments. `request.path` and `request.headers` are never touched, so a query string, a cookie or an authorization header cannot reach the row.
+
+The returned promise always resolves. A rejected write logs one line naming the root cause (Drizzle's wrapper error lists the statement's parameters, which are the reported error itself, so it is not logged). A write that outlives `timeoutMs` logs one line and is left to the driver; its eventual rejection is absorbed so it never becomes an unhandled rejection.
+
 ## Design Decisions
 
 **Why not Sentry/GlitchTip?** Context-kit apps already have a database. Writing errors to it removes the external service dependency, works offline, and gives AI coding tools direct SQL access.
@@ -151,6 +165,10 @@ The `bin` field maps the `error-tracker` binary to the same `dist/cli.js`.
 **Why ship a schema module per dialect instead of one copy-paste model?** The consumer re-exports the module from `db/schema/<dialect>.ts` and runs `bun run db:generate`, so drizzle-kit produces the migration and the app owns the history. A schema change in a later version arrives as a reviewable diff migration rather than a docs instruction to edit a model by hand.
 
 **Why fire-and-forget?** Error reporting must never degrade the user experience. The `fetch` is not awaited, and any failure (network down, server error) is caught and dropped.
+
+**Why one table for browser and server errors?** The fingerprint, counter, resolve and reopen logic, the query API and the CLI already exist for `client_error`. A `source` column with a `client` default is an additive migration and leaves every 0.1.0 row valid, where a second table would duplicate all of it.
+
+**Why a bounded wait instead of fire-and-forget on the server?** On a serverless platform the process may be frozen as soon as the response is sent, so an unawaited write can be lost. Awaiting with a time limit keeps the write likely to land while capping how long a broken database can delay a response.
 
 **Why SHA-256 fingerprinting?** Deterministic, fast, and collision-resistant enough for error grouping. Using the top 3 resolved frames (not raw frames) keeps fingerprints stable across builds.
 

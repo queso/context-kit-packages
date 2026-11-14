@@ -1,6 +1,6 @@
 import type { DatabaseConfig } from "../types.js";
 import { tokenMatches, warnIfUnauthenticated } from "./auth.js";
-import { createStore, type ListFilters } from "./store.js";
+import { createStore, isErrorSource, type ListFilters } from "./store.js";
 
 export interface QueryConfig extends DatabaseConfig {
   secretHeaderName?: string;
@@ -87,6 +87,17 @@ export function createQueryHandler(config: QueryConfig) {
       filters.resolved = false;
     } else if (resolved === "true") {
       filters.resolved = true;
+    }
+
+    const source = params.get("source");
+    if (source) {
+      if (!isErrorSource(source)) {
+        return Response.json(
+          { error: 'source must be "client" or "server"' },
+          { status: 400 }
+        );
+      }
+      filters.source = source;
     }
 
     const { errors, total } = await store.list({ filters, limit, offset });

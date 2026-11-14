@@ -1,6 +1,6 @@
 {
   "name": "@context-kit/error-tracker",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Error tracking for context-kit projects, stored in the app's own database via Drizzle",
   "license": "MIT",
   "type": "module",

@@ -1,6 +1,6 @@
 # @context-kit/error-tracker
 
-Client-side error tracking for Next.js App Router apps. Captures React render crashes, unhandled promise rejections, and `window.onerror` events, then stores them in your app's own database through your Drizzle instance. SQLite and PostgreSQL are both supported. No external service required.
+Error tracking for Next.js App Router apps. Captures React render crashes, unhandled promise rejections, and `window.onerror` events in the browser, and errors thrown in route handlers, Server Functions and Server Components on the server, then stores them in your app's own database through your Drizzle instance. SQLite and PostgreSQL are both supported. No external service required.
 
 ## Features
 
@@ -15,6 +15,7 @@ Client-side error tracking for Next.js App Router apps. Captures React render cr
 - **Console Patching** - Optionally capture `console.error` calls (opt-in)
 - **Deduplication** - One row per fingerprint, with an occurrence counter the database increments
 - **CLI** - `npx error-tracker tail` and `npx error-tracker resolve <fingerprint>`
+- **Server Errors** - `onRequestError` for `instrumentation.ts` and `reportServerError()` for errors your code catches itself, written to the same table with `source` set to `server`
 
 ## Installation
 
@@ -72,12 +73,16 @@ Table name is `client_error`, column names are `snake_case`.
 | `environment` | text, not null | The client-reported `environment` from the payload, when it is a non-empty string (truncated to 64 characters); falls back to the server's `NODE_ENV` at ingestion time (`development` when unset) |
 | `url` | text, nullable | Page URL the error happened on |
 | `user_agent` | text, nullable | Reporting browser's user agent |
+| `source` | text, not null | `client` (browser) or `server`. Defaults to `client`, so rows written before 0.2.0 read as `client` |
+| `route` | text, nullable | Server errors: the route pattern, such as `/api/items/[id]`, never the concrete URL |
+| `method` | text, nullable | Server errors: the HTTP method |
+| `tag` | text, nullable | Server errors: the Next.js route type (`render`, `route`, `action`, `proxy`) from `onRequestError`, or the caller's tag from `reportServerError` |
 | `resolved_at` | timestamp, nullable | Null while the error is open |
 | `created_at` | timestamp, not null | First time this fingerprint was seen |
 | `updated_at` | timestamp, not null | Last write to the row |
 | `last_seen_at` | timestamp, not null | Most recent occurrence |
 
-Indexes: `client_error_last_seen_at_idx` on `last_seen_at`, `client_error_environment_idx` on `environment`. Queries in this package sort by `last_seen_at` and filter by `environment`, and the CLI does the same.
+Indexes: `client_error_last_seen_at_idx` on `last_seen_at`, `client_error_environment_idx` on `environment`, `client_error_source_idx` on `source`. Queries in this package sort by `last_seen_at` and filter by `environment` and `source`, and the CLI does the same.
 
 Rows read back through Drizzle use the TypeScript property names, so JSON responses from the query endpoint keep camelCase keys (`lastSeenAt`, `resolvedAt`, `componentStack`, `resolvedStack`, `userAgent`).
 
@@ -176,6 +181,84 @@ The `ErrorBoundary` returned by `createErrorTracker` has config pre-bound, so yo
 </ErrorBoundary>
 ```
 
+## Server Errors
+
+The browser reporter cannot see an error thrown on the server. Two functions record those, in the same table and with the same fingerprint and occurrence counter, with `source` set to `server`. Create them once:
+
+```ts
+// lib/errors.ts
+import { createServerErrorReporter } from "@context-kit/error-tracker/server";
+import { db, getDialect } from "@/db";
+
+export const { onRequestError, reportServerError } = createServerErrorReporter({
+  db,
+  dialect: getDialect(),
+});
+```
+
+### Errors Next.js catches: `onRequestError`
+
+Export it from `instrumentation.ts` at the project root (or in `src/`). Next.js calls it for an uncaught error in a Server Component render, a route handler, a Server Function or the proxy. Import the reporter inside the Node.js branch so the Edge build never loads your database driver:
+
+```ts
+// instrumentation.ts
+import type { Instrumentation } from "next";
+
+export const onRequestError: Instrumentation.onRequestError = async (...args) => {
+  if (process.env.NEXT_RUNTIME !== "nodejs") return;
+  const { onRequestError } = await import("./lib/errors");
+  await onRequestError(...args);
+};
+```
+
+`onRequestError` was added in Next.js 15. The signature was checked against Next.js 16.1.6 and 16.4.6.
+
+### Errors your code catches: `reportServerError`
+
+A webhook receiver that must answer 200 even when processing fails, or a background job, catches its own errors. Report them directly:
+
+```ts
+import { reportServerError } from "@/lib/errors";
+
+export async function POST(request: Request) {
+  try {
+    await handleWebhook(await request.json());
+  } catch (error) {
+    await reportServerError(error, {
+      tag: "stripe-webhook",
+      route: "/api/billing/webhook",
+      method: "POST",
+    });
+  }
+  return new Response(null, { status: 200 });
+}
+```
+
+All three context fields are optional. A query string or fragment in `route` is dropped, and a `method` that is not a plain HTTP token is not stored.
+
+### What is stored
+
+For a server error: the error's name and message (stored together as `Name: message`), its stack, the route pattern, the HTTP method and the tag. `onRequestError` takes the route pattern from Next's `context.routePath` and the tag from `context.routeType`. It never reads `request.path`, which holds the concrete URL and its query string, or `request.headers`. Request bodies, headers, cookies and environment variables are never stored. `url` and `user_agent` stay null.
+
+The error's own message and stack are stored as they are. If your code puts a secret into an error message, it is stored.
+
+`environment` is the `environment` option to `createServerErrorReporter`, falling back to `NODE_ENV`, then `development`.
+
+### Failure and timing
+
+Both functions return a promise that always resolves. Reporting never throws into your code.
+
+- A failed write logs one line to `console.error` and the report is lost. The line carries the database error's root cause, such as `connect ECONNREFUSED`, and not the statement or its parameters.
+- Each report waits at most `timeoutMs` (default 2000) for the database. After that it logs one line and stops waiting. The driver may still complete the write later, because Drizzle has no portable way to cancel a query once it is sent.
+
+Next.js awaits `onRequestError` before sending a route handler's error response, so a slow database delays that response by up to `timeoutMs`. Server Component render errors were not held up this way in testing.
+
+For `reportServerError`, `await` it if the platform may freeze the process once the response is sent (serverless functions), or pass the promise to Next's `after()`.
+
+### Fingerprints and deploys
+
+Server stacks point at the compiled chunks in `.next/server`, whose file names and line numbers change with each build. A repeat of the same error within one deploy increments the counter, but after a new deploy the same error starts a new row. Source map resolution applies to browser stacks only. On Next.js 16.4.6, `experimental.serverSourceMaps` with `NODE_OPTIONS=--enable-source-maps` did not change the stack `onRequestError` receives.
+
 ## API Reference
 
 ### `createErrorTracker(options?)`
@@ -273,6 +356,7 @@ Query parameters:
 - `since` - ISO timestamp; return errors with `lastSeenAt >= since`. A value that does not parse as a valid date returns 400.
 - `fingerprint` - Filter by exact fingerprint
 - `resolved` - `"true"` or `"false"`; filter by resolution status
+- `source` - `"client"` or `"server"`; filter by where the error was raised. Any other value returns 400.
 - `limit` - Results per page. Falls back to 50 when missing, non-numeric, or below 1. Capped at 200.
 - `offset` - Number of results to skip. Falls back to 0 when non-numeric or negative.
 
@@ -333,17 +417,19 @@ npx error-tracker tail
 npx error-tracker tail --limit 50
 npx error-tracker tail --env production
 npx error-tracker tail --since 2026-01-01T00:00:00Z
+npx error-tracker tail --source server
 ```
 
-`tail` lists unresolved errors, most recently seen first.
+`tail` lists unresolved errors, most recently seen first, with each error's source. `--source` takes `client` or `server`.
 
 ### Mark an error resolved
 
 ```bash
 npx error-tracker resolve <fingerprint>
+npx error-tracker resolve <fingerprint> --source server
 ```
 
-Exits 1 if the fingerprint is unknown or the error is already resolved.
+Exits 1 if the fingerprint is unknown or the error is already resolved. With `--source`, it also exits 1 when the error came from the other source.
 
 ### Programmatic use
 
@@ -353,7 +439,7 @@ Both commands are also exported from `@context-kit/error-tracker/cli`, for scrip
 import { runTail, runResolve } from "@context-kit/error-tracker/cli";
 import { db, getDialect } from "@/db";
 
-await runTail({ db, dialect: getDialect(), limit: 20, env: "production" });
+await runTail({ db, dialect: getDialect(), limit: 20, env: "production", source: "server" });
 await runResolve({ db, dialect: getDialect(), fingerprint: "abc123..." });
 ```
 
@@ -421,7 +507,7 @@ const handlers = createErrorHandlers({
 | Import Path | Contents | Use In |
 |-------------|----------|--------|
 | `@context-kit/error-tracker` | `createErrorTracker`, `ErrorBoundary`, client types | Client Components (`"use client"`) |
-| `@context-kit/error-tracker/server` | `createErrorHandlers`, `createIngestionHandler`, `createQueryHandler`, `createRateLimiter`, `resolveStack` | Route Handlers |
+| `@context-kit/error-tracker/server` | `createErrorHandlers`, `createIngestionHandler`, `createQueryHandler`, `createRateLimiter`, `resolveStack`, `createServerErrorReporter` | Route Handlers, `instrumentation.ts` |
 | `@context-kit/error-tracker/cli` | `runTail`, `runResolve` | Scripts, tooling |
 | `@context-kit/error-tracker/schema/sqlite` | `clientError` table and its row types | `db/schema/sqlite.ts` |
 | `@context-kit/error-tracker/schema/postgres` | `clientError` table and its row types | `db/schema/postgres.ts` |

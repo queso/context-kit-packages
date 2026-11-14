@@ -5,6 +5,15 @@ export {
 } from "./server/ingestion.js";
 export { createQueryHandler, type QueryConfig } from "./server/query.js";
 export { createRateLimiter } from "./server/rate-limiter.js";
+export {
+  createServerErrorReporter,
+  type RequestErrorContext,
+  type RequestErrorRequest,
+  type ServerErrorContext,
+  type ServerErrorReporter,
+  type ServerErrorReporterConfig,
+} from "./server/server-reporter.js";
+export type { ErrorSource } from "./server/store.js";
 export { resolveStack } from "./server/source-map-resolver.js";
 export type { DatabaseConfig, ErrorTrackerDialect } from "./types.js";
 

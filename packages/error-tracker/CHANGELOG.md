@@ -4,6 +4,37 @@ All notable changes to `@context-kit/error-tracker` will be documented in this f
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.0] - 2026-11-14
+
+Records server-side errors.
+
+### Migration required
+
+The `client_error` table gains four columns and an index. After upgrading, run `bun run db:generate` and review and commit the migration it writes, then `bun run db:migrate`. The change is additive on both SQLite and Postgres: `source` is `text not null default 'client'`, so existing rows read as `client`; `route`, `method` and `tag` are nullable text; `client_error_source_idx` indexes `source`. Until the migration is applied, ingestion fails, because the package now writes the new columns.
+
+### Added
+
+- `createServerErrorReporter({ db, dialect, environment?, timeoutMs? })` in `@context-kit/error-tracker/server`, returning `onRequestError` for Next.js `instrumentation.ts` (Next.js 15 and later) and `reportServerError(error, { route?, method?, tag? })` for errors the app catches itself
+- Server errors go into `client_error` with `source` set to `server`, through the same fingerprint function and the same upsert, so repeats increment `occurrences` and a resolved error that recurs is reopened
+- A server row stores the error's name and message as `Name: message`, its stack, the route pattern (Next's `routePath`, never the concrete path or its query string), the HTTP method, and a tag (Next's `routeType` from `onRequestError`, or the caller's tag). Request headers, cookies, bodies and environment values are never read or stored. `route` is capped at 512 characters, `tag` at 128, and a query string or fragment in a caller-supplied `route` is dropped
+- Reporting never throws into the caller. Each report waits at most `timeoutMs` (default 2000) for the database, then logs one line and stops waiting. A failed write logs one line with the database error's root cause and the report is dropped
+- `source`, `route`, `method` and `tag` columns in both schema modules, and the `client_error_source_idx` index
+- Query endpoint `source` filter (`client` or `server`); any other value returns 400
+- `error-tracker tail --source client|server`, and a Source column in `tail` output
+- `error-tracker resolve <fingerprint> --source client|server`, which resolves only an error from that source
+- `runTail` and `runResolve` accept `source`; `parseResolveArgs` is exported alongside `parseTailArgs`
+- `ErrorSource`, `ServerErrorReporter`, `ServerErrorReporterConfig`, `ServerErrorContext`, `RequestErrorRequest` and `RequestErrorContext` type exports
+
+### Changed
+
+- Query endpoint rows carry `source`, `route`, `method` and `tag`
+- `error-tracker resolve` with a missing fingerprint now prints `Error: resolve expects one fingerprint` and the usage text, and an unexpected extra argument is a usage error
+
+### Known limitations
+
+- Server stacks reference build-hashed chunks in `.next/server`, so a server error's fingerprint changes with each deploy. Repeats within one deploy are counted on one row
+- A write abandoned at `timeoutMs` may still complete later, because a query handed to the driver cannot be cancelled portably
+
 ## [0.1.0] - 2026-09-11
 
 First release. Client-side error tracking for Next.js App Router apps, stored in the app's own database through its Drizzle instance.

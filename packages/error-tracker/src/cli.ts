@@ -3,7 +3,12 @@
 import { pathToFileURL } from "node:url";
 import type { ErrorTrackerDialect } from "./types.js";
 import { connectFromDatabaseUrl } from "./server/connect.js";
-import { createStore, type ErrorStore } from "./server/store.js";
+import {
+  createStore,
+  type ErrorSource,
+  type ErrorStore,
+  isErrorSource,
+} from "./server/store.js";
 
 export interface DatabaseOptions {
   /** The app's Drizzle instance. Omit to connect from DATABASE_URL. */
@@ -16,11 +21,15 @@ export interface TailOptions extends DatabaseOptions {
   limit?: number;
   env?: string;
   since?: Date;
+  /** Only errors from the browser ("client") or the server. */
+  source?: ErrorSource;
   exitOnComplete?: boolean;
 }
 
 export interface ResolveOptions extends DatabaseOptions {
   fingerprint: string;
+  /** Resolve only when the error came from this source. */
+  source?: ErrorSource;
   exitOnComplete?: boolean;
 }
 
@@ -77,6 +86,9 @@ export async function runTail(options: TailOptions): Promise<void> {
   if (options.since !== undefined && Number.isNaN(options.since.getTime())) {
     throw new CliUsageError(SINCE_USAGE_ERROR);
   }
+  if (options.source !== undefined && !isErrorSource(options.source)) {
+    throw new CliUsageError(SOURCE_USAGE_ERROR);
+  }
 
   const session = await openSession(options);
 
@@ -86,6 +98,7 @@ export async function runTail(options: TailOptions): Promise<void> {
         resolved: false,
         environment: options.env,
         since: options.since,
+        source: options.source,
       },
       limit,
     });
@@ -96,11 +109,12 @@ export async function runTail(options: TailOptions): Promise<void> {
       console.log(`\nRecent errors (${errors.length}):\n`);
       console.log(
         padRight("Fingerprint", 20) +
+          padRight("Source", 8) +
           padRight("Occurrences", 12) +
           padRight("Last Seen", 26) +
           "Message"
       );
-      console.log("-".repeat(90));
+      console.log("-".repeat(98));
 
       for (const err of errors) {
         const lastSeen =
@@ -110,6 +124,7 @@ export async function runTail(options: TailOptions): Promise<void> {
         const msg = String(err.message ?? "").slice(0, 50);
         console.log(
           padRight(String(err.fingerprint ?? "").slice(0, 18), 20) +
+            padRight(String(err.source ?? "client"), 8) +
             padRight(String(err.occurrences ?? 0), 12) +
             padRight(lastSeen, 26) +
             msg
@@ -127,10 +142,17 @@ export async function runTail(options: TailOptions): Promise<void> {
 }
 
 export async function runResolve(options: ResolveOptions): Promise<void> {
+  if (options.source !== undefined && !isErrorSource(options.source)) {
+    throw new CliUsageError(SOURCE_USAGE_ERROR);
+  }
+
   const session = await openSession(options);
 
   try {
-    const updated = await session.store.resolve(options.fingerprint);
+    const updated = await session.store.resolve(
+      options.fingerprint,
+      options.source
+    );
 
     // The store only touches rows that are still open, so resolving an unknown
     // or already-resolved fingerprint changes nothing and is reported as
@@ -141,8 +163,9 @@ export async function runResolve(options: ResolveOptions): Promise<void> {
     // turned into a process.exit: that killed a programmatic caller's
     // process on any store error instead of giving it a catchable rejection.
     if (updated === 0) {
+      const from = options.source ? ` from ${options.source}` : "";
       throw new NotFoundError(
-        `no unresolved error with fingerprint ${options.fingerprint}`
+        `no unresolved error${from} with fingerprint ${options.fingerprint}`
       );
     }
 
@@ -166,13 +189,17 @@ function padRight(str: string, width: number): string {
 
 function printUsage(): void {
   console.error("Usage: error-tracker <tail|resolve> [options]");
-  console.error("  tail     --limit N --env ENV --since DATE");
-  console.error("  resolve  <fingerprint>");
+  console.error(
+    "  tail     --limit N --env ENV --since DATE --source client|server"
+  );
+  console.error("  resolve  <fingerprint> --source client|server");
 }
 
 const LIMIT_USAGE_ERROR = "--limit expects a positive integer";
 const ENV_USAGE_ERROR = "--env expects a value";
 const SINCE_USAGE_ERROR = "--since expects a valid date";
+const SOURCE_USAGE_ERROR = '--source expects "client" or "server"';
+const FINGERPRINT_USAGE_ERROR = "resolve expects one fingerprint";
 
 /** Thrown by `parseTailArgs` on any invalid or missing flag value. */
 export class CliUsageError extends Error {}
@@ -190,6 +217,18 @@ export interface TailArgs {
   limit: number;
   env?: string;
   since?: Date;
+  source?: ErrorSource;
+}
+
+export interface ResolveArgs {
+  fingerprint: string;
+  source?: ErrorSource;
+}
+
+/** Reads a `--source` value, which must be present and be a known source. */
+function parseSource(value: string | undefined): ErrorSource {
+  if (!isErrorSource(value)) throw new CliUsageError(SOURCE_USAGE_ERROR);
+  return value;
 }
 
 /**
@@ -202,6 +241,7 @@ export function parseTailArgs(args: string[]): TailArgs {
   let limit = 20;
   let env: string | undefined;
   let since: Date | undefined;
+  let source: ErrorSource | undefined;
 
   for (let i = 0; i < args.length; i++) {
     const flag = args[i];
@@ -228,6 +268,9 @@ export function parseTailArgs(args: string[]): TailArgs {
       }
       since = parsed;
       i++;
+    } else if (flag === "--source") {
+      source = parseSource(value);
+      i++;
     } else if (flag.startsWith("--")) {
       throw new CliUsageError(`Unknown option: ${flag}`);
     } else {
@@ -237,7 +280,32 @@ export function parseTailArgs(args: string[]): TailArgs {
     }
   }
 
-  return { limit, env, since };
+  return { limit, env, since, source };
+}
+
+/** Parses `resolve` arguments: one fingerprint and an optional `--source`. */
+export function parseResolveArgs(args: string[]): ResolveArgs {
+  let fingerprint: string | undefined;
+  let source: ErrorSource | undefined;
+
+  for (let i = 0; i < args.length; i++) {
+    const token = args[i];
+    if (token === "--source") {
+      source = parseSource(args[i + 1]);
+      i++;
+    } else if (token.startsWith("--")) {
+      throw new CliUsageError(`Unknown option: ${token}`);
+    } else if (fingerprint === undefined) {
+      fingerprint = token;
+    } else {
+      throw new CliUsageError(FINGERPRINT_USAGE_ERROR);
+    }
+  }
+
+  if (fingerprint === undefined) {
+    throw new CliUsageError(FINGERPRINT_USAGE_ERROR);
+  }
+  return { fingerprint, source };
 }
 
 /**
@@ -291,14 +359,11 @@ export async function runMain(argv: string[]): Promise<void> {
       await runTail({ ...parsed, exitOnComplete: true });
     });
   } else if (command === "resolve") {
-    const fingerprint = args[1];
-    if (!fingerprint) {
-      console.error("Usage: error-tracker resolve <fingerprint>");
-      process.exit(1);
-      return;
-    }
     await runCommand(
-      () => runResolve({ fingerprint, exitOnComplete: true }),
+      async () => {
+        const parsed = parseResolveArgs(args.slice(1));
+        await runResolve({ ...parsed, exitOnComplete: true });
+      },
       "Failed to resolve error"
     );
   } else {
