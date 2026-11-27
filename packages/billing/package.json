@@ -1,0 +1,45 @@
+{
+  "name": "@context-kit/billing",
+  "version": "0.1.0",
+  "description": "Stripe billing for context-kit projects: subscriptions, metered overage, webhooks and plan gating, stored in the app's own Postgres database via Drizzle",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./schema/postgres": {
+      "types": "./dist/schema/postgres.d.ts",
+      "import": "./dist/schema/postgres.js",
+      "default": "./dist/schema/postgres.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "test:live": "BILLING_LIVE=1 bun test src/__live__"
+  },
+  "dependencies": {
+    "stripe": "23.1.0"
+  },
+  "peerDependencies": {
+    "drizzle-orm": ">=0.41.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.12",
+    "@types/bun": "^1.3.9",
+    "drizzle-kit": "^0.31.10",
+    "drizzle-orm": "^0.45.2",
+    "postgres": "^3.4.9",
+    "tsup": "^8.4.0",
+    "typescript": "^5.7.0"
+  }
+}
