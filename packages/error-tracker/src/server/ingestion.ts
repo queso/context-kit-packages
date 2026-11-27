@@ -202,6 +202,10 @@ export function createIngestionHandler(config: IngestionConfig) {
       environment,
       url,
       userAgent,
+      source: "client",
+      route: null,
+      method: null,
+      tag: null,
       now: new Date(),
     });
 

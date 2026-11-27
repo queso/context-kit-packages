@@ -4,7 +4,12 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { runResolve } from "../cli";
 import * as schema from "../schema/postgres";
-import { createIngestionHandler, createQueryHandler } from "../server";
+import {
+  createIngestionHandler,
+  createQueryHandler,
+  createServerErrorReporter,
+} from "../server";
+import * as postgres010 from "./fixtures/schema-0.1.0-postgres";
 import {
   captureConsole,
   errorRequest,
@@ -35,41 +40,50 @@ afterAll(async () => {
   await client?.end({ timeout: 5 });
 });
 
+/**
+ * Connects and creates only this package's table. drizzle-kit's pushSchema
+ * diffs the whole database against the schema it is given, so with another
+ * package's tables present (the auth tests run first in CI's Postgres job) it
+ * asks whether to drop them and fails without a TTY. Generating the migration
+ * from an empty snapshot yields just the CREATE statements for
+ * `client_error`; IF NOT EXISTS keeps reruns idempotent.
+ */
+async function connect() {
+  client ??= postgres(url, { max: 1, onnotice: () => {} });
+  const db = drizzle(client, { schema });
+  const { generateDrizzleJson, generateMigration } = await import(
+    "drizzle-kit/api"
+  );
+  const statements = await generateMigration(
+    generateDrizzleJson({}),
+    generateDrizzleJson(schema)
+  );
+  for (const statement of statements) {
+    await db.execute(
+      sql.raw(
+        statement
+          .replace(/^CREATE TABLE /, "CREATE TABLE IF NOT EXISTS ")
+          .replace(/^CREATE INDEX /, "CREATE INDEX IF NOT EXISTS ")
+      )
+    );
+  }
+  return db;
+}
+
+/** A message no other run or test shares, so rows can be found and cleaned up. */
+function uniqueMessage(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 describe("postgres dialect", () => {
   test.skipIf(!hasPostgres)(
     "reports, resolves and reopens an error against Postgres",
     async () => {
-      client = postgres(url, { max: 1 });
-      const db = drizzle(client, { schema });
-
-      // Create only this package's table. drizzle-kit's pushSchema diffs the
-      // whole database against the schema it is given, so with another
-      // package's tables present (the auth tests run first in CI's Postgres
-      // job) it asks whether to drop them and fails without a TTY. Generating
-      // the migration from an empty snapshot yields just the CREATE statements
-      // for `client_error`; IF NOT EXISTS keeps reruns idempotent.
-      const { generateDrizzleJson, generateMigration } = await import(
-        "drizzle-kit/api"
-      );
-      const statements = await generateMigration(
-        generateDrizzleJson({}),
-        generateDrizzleJson(schema)
-      );
-      for (const statement of statements) {
-        await db.execute(
-          sql.raw(
-            statement
-              .replace(/^CREATE TABLE /, "CREATE TABLE IF NOT EXISTS ")
-              .replace(/^CREATE INDEX /, "CREATE INDEX IF NOT EXISTS ")
-          )
-        );
-      }
+      const db = await connect();
 
       // A run-specific message keeps this test's rows apart from anything else
       // in a shared database.
-      const message = `TypeError: pg-${Date.now()}-${Math.random()
-        .toString(36)
-        .slice(2)}`;
+      const message = uniqueMessage("TypeError: pg");
       const stack = `${message}\n  at Component (app.js:1:100)`;
       const body = {
         message,
@@ -144,6 +158,112 @@ describe("postgres dialect", () => {
         await db
           .delete(schema.clientError)
           .where(eq(schema.clientError.message, message));
+      }
+    }
+  );
+
+  test.skipIf(!hasPostgres)(
+    "records server errors against Postgres with source server and a counter",
+    async () => {
+      const db = await connect();
+      const reporter = createServerErrorReporter({ db, dialect: "postgres" });
+      const message = uniqueMessage("pg-server");
+      const error = new Error(message);
+      const rowsFor = () =>
+        db
+          .select()
+          .from(schema.clientError)
+          .where(eq(schema.clientError.message, `Error: ${message}`));
+
+      try {
+        await reporter.onRequestError(
+          error,
+          { path: "/api/x?token=secret", method: "POST", headers: {} },
+          { routePath: "/api/x", routeType: "route" }
+        );
+        // Same route, so the same fingerprint: the route is part of it.
+        await reporter.reportServerError(error, { tag: "job", route: "/api/x" });
+
+        const rows = await rowsFor();
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.source).toBe("server");
+        expect(rows[0]?.route).toBe("/api/x");
+        expect(rows[0]?.method).toBe("POST");
+        expect(rows[0]?.tag).toBe("route");
+        expect(rows[0]?.occurrences).toBe(2);
+
+        const GET = createQueryHandler({ db, dialect: "postgres" });
+        const response = await GET(
+          queryRequest({ source: "server", fingerprint: rows[0]!.fingerprint })
+        );
+        const body = (await response.json()) as { total: number };
+        expect(body.total).toBe(1);
+      } finally {
+        await db
+          .delete(schema.clientError)
+          .where(eq(schema.clientError.message, `Error: ${message}`));
+      }
+    }
+  );
+
+  test.skipIf(!hasPostgres)(
+    "upgrading a 0.1.0 table is additive and existing rows read as client",
+    async () => {
+      // A schema of its own, so the 0.1.0 table never meets the current one
+      // in `public`.
+      const namespace = `et_upgrade_${Date.now()}_${Math.random()
+        .toString(36)
+        .slice(2, 8)}`;
+      const admin = await connect();
+      await admin.execute(sql.raw(`CREATE SCHEMA "${namespace}"`));
+      const scoped = postgres(url, {
+        max: 1,
+        onnotice: () => {},
+        connection: { search_path: namespace },
+      });
+      try {
+        const db = drizzle(scoped);
+        const { generateDrizzleJson, generateMigration } = await import(
+          "drizzle-kit/api"
+        );
+        const run = async (statements: string[]) => {
+          // drizzle-kit qualifies nothing for the default schema, so the
+          // search_path decides where these land.
+          for (const statement of statements) await db.execute(sql.raw(statement));
+        };
+
+        await run(
+          await generateMigration(
+            generateDrizzleJson({}),
+            generateDrizzleJson(postgres010)
+          )
+        );
+        await db.insert(postgres010.clientError).values({
+          message: "written by 0.1.0",
+          fingerprint: "fp-old",
+          environment: "production",
+          lastSeenAt: new Date(),
+        });
+
+        await run(
+          await generateMigration(
+            generateDrizzleJson(postgres010),
+            generateDrizzleJson(schema)
+          )
+        );
+
+        const [row] = await db.select().from(schema.clientError);
+        expect(row?.message).toBe("written by 0.1.0");
+        expect(row?.source).toBe("client");
+        expect(row?.route).toBeNull();
+      } finally {
+        // The schema is dropped even if closing the scoped connection fails,
+        // so a rerun against a shared database starts clean.
+        try {
+          await scoped.end({ timeout: 5 });
+        } finally {
+          await admin.execute(sql.raw(`DROP SCHEMA "${namespace}" CASCADE`));
+        }
       }
     }
   );

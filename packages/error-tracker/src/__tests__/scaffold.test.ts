@@ -24,7 +24,7 @@ const pkg = JSON.parse(pkgSource) as {
 describe("@context-kit/error-tracker package identity", () => {
   test("is the scoped ESM package consumers install", () => {
     expect(pkg.name).toBe("@context-kit/error-tracker");
-    expect(pkg.version).toBe("0.1.0");
+    expect(pkg.version).toBe("0.2.0");
     expect(pkg.type).toBe("module");
   });
 

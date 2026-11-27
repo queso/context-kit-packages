@@ -33,6 +33,19 @@ export const clientError = pgTable(
     environment: text("environment").notNull(),
     url: text("url"),
     userAgent: text("user_agent"),
+    /**
+     * Where the error was raised: "client" (the browser) or "server". Rows
+     * written before 0.2.0 take the default and read as "client".
+     */
+    source: text("source", { enum: ["client", "server"] })
+      .default("client")
+      .notNull(),
+    /** Server errors only: the route pattern, e.g. `/api/items/[id]`. */
+    route: text("route"),
+    /** Server errors only: the HTTP method. */
+    method: text("method"),
+    /** Server errors only: the route type or a caller-supplied label. */
+    tag: text("tag"),
     /** Null while the error is open; cleared again when it recurs. */
     resolvedAt: timestamp("resolved_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -45,6 +58,7 @@ export const clientError = pgTable(
   (table) => [
     index("client_error_last_seen_at_idx").on(table.lastSeenAt),
     index("client_error_environment_idx").on(table.environment),
+    index("client_error_source_idx").on(table.source),
   ]
 );
 

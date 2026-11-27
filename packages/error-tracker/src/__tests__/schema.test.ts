@@ -135,6 +135,10 @@ describe("schema parity between dialects", () => {
         environment: "environment",
         url: "url",
         userAgent: "user_agent",
+        source: "source",
+        route: "route",
+        method: "method",
+        tag: "tag",
         resolvedAt: "resolved_at",
         createdAt: "created_at",
         updatedAt: "updated_at",
@@ -168,6 +172,11 @@ describe("schema parity between dialects", () => {
           columns: ["last_seen_at"],
           unique: false,
         },
+        {
+          name: "client_error_source_idx",
+          columns: ["source"],
+          unique: false,
+        },
       ]);
     }
   });
@@ -198,6 +207,25 @@ describe("schema parity between dialects", () => {
       }
       // `id` defaults through a JS function rather than a SQL clause.
       expect(columns.id.defaultFn).toBeInstanceOf(Function);
+    }
+  });
+
+  test("source is not null and defaults to client in both dialects, so rows written before it existed read as client", () => {
+    for (const schema of [sqliteSchema, postgresSchema]) {
+      const columns = getTableColumns(schema.clientError);
+      expect(columns.source.notNull).toBe(true);
+      expect(columns.source.default).toBe("client");
+      expect(columns.source.enumValues).toEqual(["client", "server"]);
+    }
+  });
+
+  test("the server-only columns are nullable in both dialects", () => {
+    for (const schema of [sqliteSchema, postgresSchema]) {
+      const columns = getTableColumns(schema.clientError);
+      for (const key of ["route", "method", "tag"] as const) {
+        expect(columns[key].notNull).toBe(false);
+        expect(columns[key].default).toBeUndefined();
+      }
     }
   });
 });
