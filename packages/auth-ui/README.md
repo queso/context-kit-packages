@@ -4,13 +4,24 @@ Pre-built authentication UI components for Next.js App Router, powered by [Bette
 
 ## Installation
 
-```bash
-bun add @context-kit/auth-ui
-# or
-pnpm add @context-kit/auth-ui
-# or
-npm install @context-kit/auth-ui
+`@context-kit/auth-ui` needs `@context-kit/auth` as a peer, and neither package is on npm yet. Bun looks peers up on the npm registry even when a tarball of the peer is installed, so first point `@context-kit/auth` at its tarball with `overrides` in your `package.json`:
+
+```json
+{
+  "overrides": {
+    "@context-kit/auth": "https://github.com/queso/context-kit-packages/releases/download/auth-v0.2.0/context-kit-auth-0.2.0.tgz"
+  }
+}
 ```
+
+Then install both tarballs:
+
+```bash
+bun add https://github.com/queso/context-kit-packages/releases/download/auth-v0.2.0/context-kit-auth-0.2.0.tgz \
+  https://github.com/queso/context-kit-packages/releases/download/auth-ui-v0.1.0/context-kit-auth-ui-0.1.0.tgz
+```
+
+Each release attaches a tarball to a [GitHub release](https://github.com/queso/context-kit-packages/releases). `bun add @context-kit/auth-ui` does not work until the packages are on npm. To install a different version, change both version numbers in each URL.
 
 ### Peer Dependencies
 
