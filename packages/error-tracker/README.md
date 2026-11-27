@@ -6,7 +6,7 @@ Client-side error tracking for Next.js App Router apps. Captures React render cr
 
 - **Error Boundary** - React component that catches render errors and reports them
 - **Global Error Listeners** - Captures `window.onerror` and `unhandledrejection` events
-- **Fire-and-Forget Reporter** - Non-blocking error reporting with loop prevention, bounded by a 5 second request timeout where the browser supports `AbortSignal.timeout`
+- **Fire-and-Forget Reporter** - Non-blocking error reporting with loop prevention, bounded by a 5 second request timeout where the browser supports `AbortSignal.timeout`. Requests use `keepalive`, so a report sent during navigation or tab close can keep going after the page is gone. Delivery is best-effort: a timeout or a failed retry still loses the report
 - **Server Ingestion** - Route handler that validates, fingerprints, and upserts errors
 - **Drizzle Schema Modules** - One `client_error` table, shipped for SQLite and Postgres, re-exported from your own schema file
 - **Source Map Resolution** - Resolves minified stack traces on the server using build-time source maps
